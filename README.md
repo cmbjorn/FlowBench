@@ -6,7 +6,7 @@
 
 ## Overview
 
-This tool calculates pressure drops across complex, multi-directional piping networks carrying multiphase mixtures. Designed for hydrogen electrolyzer applications where gas streams (H₂/O₂ with water vapor) flow alongside dense liquid phases (30 wt% aqueous KOH).
+This tool calculates pressure drops across complex, multi-directional piping networks carrying multiphase mixtures of gas (H₂/O₂ with water vapor) and dense liquid phases (30 wt% aqueous KOH).
 
 ### Key Capabilities
 
@@ -57,7 +57,7 @@ The browser opens automatically at `http://localhost:8501`.
 
 ### 1. Set Process Boundaries
 - Inlet pressure (1–100 bara) and temperature (5–95°C)
-- Or load one of the built-in presets (H₂ side / O₂ side electrolyzer)
+- Or load one of the built-in presets (H₂ side / O₂ side)
 
 ### 2. Define Flow Rates
 - H₂ mass flow (kg/h), O₂ mass flow (kg/h), KOH lye volume flow (m³/h)
