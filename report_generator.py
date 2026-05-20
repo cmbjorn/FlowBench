@@ -123,8 +123,46 @@ def generate_report(
 
     doc.add_paragraph()
 
-    # ── 1. Process Conditions ────────────────────────────────────────────────
-    doc.add_heading("1. Process Conditions", level=1)
+    # ── 1. Method ────────────────────────────────────────────────────────────
+    doc.add_heading("1. Method", level=1)
+
+    _method_paras = [
+        (
+            "Pressure drop is calculated using the Beggs & Brill (1973) empirical "
+            "correlation for two-phase gas–liquid flow in horizontal and inclined pipes. "
+            "The pipeline is divided into user-defined segments; gas density and void "
+            "fraction are re-evaluated at each segment inlet pressure (pressure marching) "
+            "to capture the effect of gas compressibility along the route."
+        ),
+        (
+            "Gas mixture density is computed from the ideal-gas law with a "
+            "mole-fraction-weighted molecular weight. Dynamic viscosity of each pure gas "
+            "species is obtained from CoolProp (REFPROP-quality equations of state); "
+            "mixture viscosity uses linear mole-fraction weighting. Where the liquid phase "
+            "is aqueous, water-vapour partial pressure is added to the gas via Dalton's Law "
+            "using CoolProp saturation data."
+        ),
+        (
+            "Friction factors and minor-loss equivalent lengths follow Crane TP-410. "
+            "Erosion velocity is checked per API RP 14E (C = 100, continuous service). "
+            "The homogeneous void-fraction model is used: α = (x/ρ_g) / (x/ρ_g + (1−x)/ρ_l)."
+        ),
+        (
+            "Key open-source packages: fluids (two-phase correlations, friction factors) · "
+            "CoolProp (thermodynamic and transport properties) · "
+            "python-docx (this report)."
+        ),
+    ]
+    for _txt in _method_paras:
+        _p = doc.add_paragraph(_txt)
+        _p.paragraph_format.space_after = Pt(4)
+        if _p.runs:
+            _p.runs[0].font.size = Pt(9)
+
+    doc.add_paragraph()
+
+    # ── 2. Process Conditions ────────────────────────────────────────────────
+    doc.add_heading("2. Process Conditions", level=1)
     _cond_rows = [
         ("Inlet Pressure",     f"{P_bara:.2f} bara"),
         ("Temperature",        f"{T_C:.1f} °C"),
@@ -139,8 +177,8 @@ def generate_report(
     _kv_table(doc, _cond_rows)
     doc.add_paragraph()
 
-    # ── 2. Phase Thermodynamics ──────────────────────────────────────────────
-    doc.add_heading("2. Phase Thermodynamics", level=1)
+    # ── 3. Phase Thermodynamics ──────────────────────────────────────────────
+    doc.add_heading("3. Phase Thermodynamics", level=1)
     _thermo_rows = [
         ("Gas Density ρ_g",               f"{props['rho_g']:.4f} kg/m³"),
         ("Gas Mixture MW",                f"{props['MW_mix_gmol']:.3f} g/mol"),
@@ -160,8 +198,8 @@ def generate_report(
     _kv_table(doc, _thermo_rows)
     doc.add_paragraph()
 
-    # ── 3. Segment Analysis ──────────────────────────────────────────────────
-    doc.add_heading("3. Segment Analysis", level=1)
+    # ── 4. Segment Analysis ──────────────────────────────────────────────────
+    doc.add_heading("4. Segment Analysis", level=1)
 
     # Subset of columns that fits A4 portrait (6.47" available between margins)
     _COLS   = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)", "Regime",
@@ -192,8 +230,8 @@ def generate_report(
 
     doc.add_paragraph()
 
-    # ── 4. System Totals ─────────────────────────────────────────────────────
-    doc.add_heading("4. System Totals", level=1)
+    # ── 5. System Totals ─────────────────────────────────────────────────────
+    doc.add_heading("5. System Totals", level=1)
     _kv_table(doc, [
         ("Total Pressure Drop ΔP",                f"{total_dp_kpa:.4f} kPa"),
         ("Total Pressure Drop ΔP",                f"{total_dp_kpa / 100:.6f} bar"),
@@ -202,13 +240,13 @@ def generate_report(
         ("Effective Length (incl. fittings)",          f"{cumulative_distance:.2f} m"),
     ])
 
-    # ── 5. Visualisations ────────────────────────────────────────────────────
+    # ── 6. Visualisations ────────────────────────────────────────────────────
     if fig_sch is not None or fig_prof is not None:
         try:
             import plotly.io as pio
 
             doc.add_page_break()
-            doc.add_heading("5. Visualisations", level=1)
+            doc.add_heading("6. Visualisations", level=1)
 
             if fig_sch is not None:
                 doc.add_heading("Pipeline Schematic", level=2)
@@ -230,11 +268,12 @@ def generate_report(
 
     # ── Disclaimer ───────────────────────────────────────────────────────────
     doc.add_paragraph()
+    _gas_str = " / ".join(gas_flows_kgh.keys())
     note = doc.add_paragraph(
-        "Disclaimer: Results are based on the Beggs & Brill (1973) correlation applied to "
-        "H₂/O₂/KOH systems. This correlation was originally developed for oil/gas "
-        "systems; application to alkaline electrolysis duty should be treated as an engineering "
-        "estimate. Validate against experimental data before use in safety-critical design."
+        f"Disclaimer: Results are based on the Beggs & Brill (1973) correlation, originally "
+        f"developed for oil/gas systems. Application to {_gas_str} / {liquid_type} duty "
+        f"carries an estimated uncertainty of ±20–30 %. Treat as an engineering estimate "
+        f"and validate against plant data before use in safety-critical design."
     )
     if note.runs:
         note.runs[0].font.size      = Pt(8)
