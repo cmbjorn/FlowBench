@@ -181,6 +181,18 @@ with col_in:
             "gas_flows": {"N₂": 20.0},
             "liquid_type": "Water", "lye": 2.0,
         },
+        # Gas-only presets: liquid = Water (trace), so Dalton's law adds H₂O vapour
+        # at saturation. x_gas → ~0.999; Beggs & Brill converges to single-phase gas result.
+        "H₂ + H₂O (sat.) — 80 °C, 16 bara": {
+            "P": 16.0, "T": 80.0,
+            "gas_flows": {"H₂": 100.0},
+            "liquid_type": "Water", "lye": 0.001,
+        },
+        "O₂ + H₂O (sat.) — 80 °C, 16 bara": {
+            "P": 16.0, "T": 80.0,
+            "gas_flows": {"O₂": 50.0},
+            "liquid_type": "Water", "lye": 0.001,
+        },
     }
 
     with st.container(border=True):

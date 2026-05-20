@@ -323,8 +323,8 @@ def validate_input_bounds(P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h):
         warnings.append(f"⚠️ Temperature {T_C:.1f}°C outside validated range [5–95°C]")
     if total_gas < 0.05:
         warnings.append(f"⚠️ Total gas flow {total_gas:.3f} kg/h is very low")
-    if q_lye_m3h < 0.1:
-        warnings.append(f"⚠️ Liquid volume flow {q_lye_m3h:.2f} m³/h is very low")
+    if 0 < q_lye_m3h < 1e-4:
+        warnings.append(f"⚠️ Liquid volume flow {q_lye_m3h:.4f} m³/h is extremely low — verify intent")
     if LIQUID_AQUEOUS.get(liquid_type, False):
         try:
             P_sat = CP.PropsSI('P', 'T', T_C + 273.15, 'Q', 1, 'Water')
