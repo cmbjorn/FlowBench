@@ -74,7 +74,10 @@ def _kv_table(doc, rows_data, col_widths=(2.5, 3.5)):
 
 
 def generate_report(
-    P_bara, T_C, m_H2, m_O2, q_lye,
+    P_bara, T_C,
+    gas_flows_kgh,        # dict {species: kg/h}
+    liquid_type,          # str
+    q_lye,
     props,
     grid_records,
     segments,
@@ -108,9 +111,10 @@ def generate_report(
         sub.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
         sub.runs[0].font.size = Pt(10)
 
+    _gas_label = " + ".join(gas_flows_kgh.keys())
     desc = doc.add_paragraph(
-        "Beggs & Brill (1973) correlation  ·  "
-        "H₂ / O₂ / 30 wt% KOH  ·  SS316 Schedule  ·  Steady-state"
+        f"Beggs & Brill (1973) correlation  ·  "
+        f"{_gas_label} / {liquid_type}  ·  Steady-state"
     )
     desc.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if desc.runs:
@@ -121,29 +125,39 @@ def generate_report(
 
     # ── 1. Process Conditions ────────────────────────────────────────────────
     doc.add_heading("1. Process Conditions", level=1)
-    _kv_table(doc, [
-        ("Inlet Pressure",      f"{P_bara:.2f} bara"),
-        ("Temperature",         f"{T_C:.1f} °C"),
-        ("H₂ Mass Flow",   f"{m_H2:.3f} kg/h"),
-        ("O₂ Mass Flow",   f"{m_O2:.3f} kg/h"),
-        ("KOH Lye Flow",        f"{q_lye:.3f} m³/h"),
-        ("Number of Segments",  str(len(segments))),
-    ])
+    _cond_rows = [
+        ("Inlet Pressure",     f"{P_bara:.2f} bara"),
+        ("Temperature",        f"{T_C:.1f} °C"),
+    ]
+    for _sp, _flow in gas_flows_kgh.items():
+        _cond_rows.append((f"{_sp} Mass Flow", f"{_flow:.3f} kg/h"))
+    _cond_rows += [
+        ("Liquid Type",        liquid_type),
+        ("Liquid Volume Flow", f"{q_lye:.3f} m³/h"),
+        ("Number of Segments", str(len(segments))),
+    ]
+    _kv_table(doc, _cond_rows)
     doc.add_paragraph()
 
     # ── 2. Phase Thermodynamics ──────────────────────────────────────────────
     doc.add_heading("2. Phase Thermodynamics", level=1)
-    _kv_table(doc, [
+    _thermo_rows = [
         ("Gas Density ρ_g",               f"{props['rho_g']:.4f} kg/m³"),
+        ("Gas Mixture MW",                f"{props['MW_mix_gmol']:.3f} g/mol"),
+        ("Liquid Type",                   props.get("liquid_type", liquid_type)),
         ("Liquid Density ρ_l",            f"{props['rho_l']:.2f} kg/m³"),
         ("Liquid Dynamic Viscosity μ_l",  f"{props['mu_l']*1e3:.4f} mPa·s"),
         ("Gas Dynamic Viscosity μ_g",     f"{props['mu_g']*1e6:.2f} µPa·s"),
         ("Surface Tension σ",             f"{props['sigma']*1e3:.3f} mN/m"),
-        ("Mass Quality x",                     f"{props['x_gas']*100:.4f} %"),
+        ("Mass Quality x",                f"{props['x_gas']*100:.4f} %"),
         ("Void Fraction α (homogeneous)", f"{props['alpha']*100:.2f} %"),
-        ("H₂O Saturation Pressure",       f"{props['P_sat_H2O_pa']/1e5:.4f} bara"),
-        ("H₂O Vapour Flow",               f"{props['m_vapor_h2o_kgh']:.4f} kg/h"),
-    ])
+    ]
+    if props.get("P_sat_H2O_pa", 0) > 0:
+        _thermo_rows += [
+            ("H₂O Saturation Pressure", f"{props['P_sat_H2O_pa']/1e5:.4f} bara"),
+            ("H₂O Vapour Flow",         f"{props['m_vapor_h2o_kgh']:.4f} kg/h"),
+        ]
+    _kv_table(doc, _thermo_rows)
     doc.add_paragraph()
 
     # ── 3. Segment Analysis ──────────────────────────────────────────────────

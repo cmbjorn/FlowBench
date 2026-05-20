@@ -40,8 +40,8 @@ hr { margin: 0.5rem 0 !important; }
 
 st.title("Multiphase Pipe Hydraulic Engine")
 st.caption(
-    "Two-phase pressure drop · H₂ / O₂ / 30 wt% KOH · "
-    "Beggs & Brill (1973) · SS316 · Steady-state"
+    "Two-phase pressure drop · Beggs & Brill (1973) · "
+    "Generic gas + liquid · Steady-state"
 )
 
 # ============================================================================
@@ -56,25 +56,24 @@ with st.sidebar:
         (gas + liquid) with dynamic water vapor saturation and temperature effects.
 
         **Correlation:** Beggs & Brill (1973) — horizontal and inclined pipes
-        **Liquid:** 30 wt% aqueous KOH, temperature-dependent ρ, μ, σ
-        **Gas:** H₂ + O₂ + H₂O vapor, ideal gas
-        **Minor losses:** Equivalent length method (Le/D)
+        **Gas species:** H₂, O₂, N₂, Air, or Custom
+        **Liquid:** KOH 30 wt%, KOH 15 wt%, Water, or Custom
+        **Minor losses:** Equivalent length method (Le/D, Crane TP-410)
         """)
 
     with st.expander("Model Assumptions", expanded=False):
         st.markdown("""
-        1. KOH concentration constant (no evaporation effect on concentration)
-        2. Ideal gas behavior for H₂, O₂, H₂O vapor mixture
-        3. Continuous liquid phase; no flooding or flow inversion
-        4. Bore = f(DN, PN) only — ANSI B36.10/19 schedule, material-independent for metallic pipe
-        5. Lined segments: effective ID = metal bore − 2 × liner thickness; liner roughness overrides metal
-        6. Roughness set per segment by material (Crane TP-410) or liner (manufacturer data)
-        7. Pressure marching: gas density and void fraction re-evaluated at each segment inlet pressure
-        8. Erosion check: API RP 14E, V_e = 122/√ρ_mix (m/s), C=100 continuous service
+        1. Ideal gas behaviour for gas mixture
+        2. Continuous liquid phase; no flooding or flow inversion
+        3. Bore = f(DN, PN) only — ANSI B36.10/19 schedule, material-independent
+        4. Lined segments: effective ID = metal bore − 2 × liner thickness
+        5. Roughness set per segment by material or liner
+        6. Pressure marching: gas density and void fraction re-evaluated at each segment inlet
+        7. Erosion check: API RP 14E, V_e = 122/√ρ_mix (m/s), C=100 continuous service
         8. Validated temperature range: 5–95 °C
         9. Validated pressure range: 1–100 bara
         10. Steady-state only — no transient effects
-        11. Void fraction displayed is homogeneous model α = (x/ρg) / (x/ρg + (1−x)/ρl)
+        11. Void fraction: homogeneous model α = (x/ρg) / (x/ρg + (1−x)/ρl)
         """)
 
     with st.expander("Flow Regimes", expanded=False):
@@ -93,11 +92,19 @@ with st.sidebar:
         - Annular — Vsl ≤ 2 m/s
         """)
 
-    with st.expander("Property Correlations", expanded=False):
+    with st.expander("Liquid Property Correlations", expanded=False):
         st.markdown("""
-        **KOH Density**  ρ(T) = 1295 − 0.3375·(T − 20) kg/m³
-        **KOH Viscosity**  μ(T) = μ_ref · exp(1200·(1/T − 1/T_ref)) Pa·s
-        **Surface Tension**  σ(T) = 0.074 − 0.001125·(T − 20) N/m
+        **KOH 30 wt%**
+        ρ(T) = 1295 − 0.3375·(T − 20) kg/m³
+        μ(T) = μ_ref · exp(1200·(1/T − 1/T_ref)) Pa·s
+        σ(T) = 0.074 − 0.001125·(T − 20) N/m
+
+        **KOH 15 wt%**
+        ρ(T) = 1139 − 0.50·(T − 20) kg/m³
+        μ(T) = μ_ref · exp(1540·(1/T − 1/T_ref)) Pa·s
+
+        **Water** — CoolProp (IAPWS-IF97)
+
         Valid range: 0–100 °C
         """)
 
@@ -106,7 +113,8 @@ with st.sidebar:
         - Beggs & Brill (1973) — SPE-4007-PA
         - CoolProp — open-source thermodynamic library
         - fluids — Python fluid dynamics library
-        - Yaws' Chemical Properties Handbook
+        - Crane TP-410 (2013)
+        - API RP 14E (2007)
         """)
 
 # ============================================================================
@@ -121,6 +129,13 @@ if "segments" not in st.session_state:
          "length":  4.5, "fittings": "None", "fitting_count": 0,
          "lined": False, "liner_material": "FEP", "liner_thickness_mm": 1.0},
     ]
+
+# Initialise gas/liquid selection state
+if "gas_species_widget" not in st.session_state:
+    st.session_state["gas_species_widget"] = ["H₂", "O₂"]
+if "liquid_type_widget" not in st.session_state:
+    st.session_state["liquid_type_widget"] = "KOH 30 wt%"
+
 # Migrate segments from earlier sessions
 _VALID_MATS   = set(engine.MATERIAL_ROUGHNESS.keys())
 _VALID_LINERS = set(engine.LINER_ROUGHNESS.keys())
@@ -146,31 +161,123 @@ with col_in:
     st.header("Inputs")
 
     PRESETS = {
-        "Custom":                              {"P": 10.0, "T": 50.0, "H2":   8.0, "O2":  2.0, "lye":  1.5},
-        "H₂ side — 80 °C, 16 bara, 30% KOH": {"P": 16.0, "T": 80.0, "H2": 100.0, "O2":  0.1, "lye": 50.0},
-        "O₂ side — 80 °C, 16 bara, 30% KOH": {"P": 16.0, "T": 80.0, "H2":   0.1, "O2": 50.0, "lye": 50.0},
+        "Custom": {
+            "P": 10.0, "T": 50.0,
+            "gas_flows": {"H₂": 8.0, "O₂": 2.0},
+            "liquid_type": "KOH 30 wt%", "lye": 1.5,
+        },
+        "H₂ side — 80 °C, 16 bara, KOH 30%": {
+            "P": 16.0, "T": 80.0,
+            "gas_flows": {"H₂": 100.0, "O₂": 0.1},
+            "liquid_type": "KOH 30 wt%", "lye": 50.0,
+        },
+        "O₂ side — 80 °C, 16 bara, KOH 30%": {
+            "P": 16.0, "T": 80.0,
+            "gas_flows": {"H₂": 0.1, "O₂": 50.0},
+            "liquid_type": "KOH 30 wt%", "lye": 50.0,
+        },
+        "N₂ purge — 25 °C, 5 bara, Water": {
+            "P": 5.0, "T": 25.0,
+            "gas_flows": {"N₂": 20.0},
+            "liquid_type": "Water", "lye": 2.0,
+        },
     }
 
     with st.container(border=True):
         st.subheader("Quick Presets")
-        selected_preset = st.selectbox("Load preset conditions", list(PRESETS.keys()))
+        selected_preset = st.selectbox("Load preset conditions", list(PRESETS.keys()),
+                                       key="preset_sel")
         preset_vals = PRESETS[selected_preset]
 
+        # When preset changes, sync session state for species / liquid / flows
+        if st.session_state.get("_last_preset") != selected_preset:
+            st.session_state["_last_preset"] = selected_preset
+            st.session_state["gas_species_widget"] = list(preset_vals["gas_flows"].keys())
+            st.session_state["liquid_type_widget"]  = preset_vals["liquid_type"]
+            for _sp, _fl in preset_vals["gas_flows"].items():
+                st.session_state[f"gflow_{_sp}"] = float(_fl)
+            st.session_state["q_lye_widget"] = float(preset_vals["lye"])
+
+    # ── Process Boundaries ────────────────────────────────────────────────────
     with st.container(border=True):
         st.subheader("Process Boundaries")
         p1, p2 = st.columns(2)
         P_bara = p1.number_input("Inlet Pressure (bara)", min_value=1.0, max_value=100.0,
-                                  value=preset_vals["P"], step=1.0)
+                                  value=float(preset_vals["P"]), step=1.0)
         T_C    = p2.number_input("Temperature (°C)",      min_value=5.0,  max_value=95.0,
-                                  value=preset_vals["T"], step=5.0)
+                                  value=float(preset_vals["T"]), step=5.0)
 
+    # ── Gas Phase ─────────────────────────────────────────────────────────────
     with st.container(border=True):
-        st.subheader("Mass & Volume Flows")
-        f1, f2, f3 = st.columns(3)
-        m_H2  = f1.number_input("H₂ (kg/h)",   min_value=0.1, value=preset_vals["H2"],  step=1.0)
-        m_O2  = f2.number_input("O₂ (kg/h)",   min_value=0.0, value=preset_vals["O2"],  step=0.1)
-        q_lye = f3.number_input("Lye (m³/h)",  min_value=0.1, value=preset_vals["lye"], step=1.0)
+        st.subheader("Gas Phase")
+        _all_species = list(engine.GAS_SPECIES.keys())
 
+        selected_species = st.multiselect(
+            "Gas species (select one or more)",
+            _all_species,
+            key="gas_species_widget",
+        )
+        if not selected_species:
+            st.warning("Select at least one gas species.")
+            selected_species = ["H₂"]
+
+        # Per-species mass flow inputs
+        gas_flows_kgh = {}
+        _sp_count = len(selected_species)
+        _ncols = min(_sp_count, 3)
+        _flow_cols = st.columns(_ncols)
+        for _ci, _sp in enumerate(selected_species):
+            _default_flow = float(preset_vals["gas_flows"].get(_sp, 1.0))
+            _col = _flow_cols[_ci % _ncols]
+            gas_flows_kgh[_sp] = _col.number_input(
+                f"{_sp}  (kg/h)",
+                min_value=0.0,
+                value=_default_flow,
+                step=1.0,
+                key=f"gflow_{_sp}",
+            )
+
+        # Custom gas properties shown only when "Custom" is selected
+        custom_gas = None
+        if "Custom" in selected_species:
+            st.markdown("*Custom gas — physical properties*")
+            _cg1, _cg2 = st.columns(2)
+            _cg_mw  = _cg1.number_input("Molecular Weight (g/mol)",
+                                         min_value=1.0, value=28.0, step=1.0)
+            _cg_mu  = _cg2.number_input("Viscosity (µPa·s)",
+                                         min_value=1.0, value=18.5, step=0.5)
+            custom_gas = {"MW_gmol": _cg_mw, "mu_upas": _cg_mu}
+
+    # ── Liquid Phase ──────────────────────────────────────────────────────────
+    with st.container(border=True):
+        st.subheader("Liquid Phase")
+        _liq_idx = engine.LIQUID_PHASES.index(st.session_state["liquid_type_widget"]) \
+                   if st.session_state["liquid_type_widget"] in engine.LIQUID_PHASES else 0
+        liquid_type = st.selectbox(
+            "Liquid type",
+            engine.LIQUID_PHASES,
+            index=_liq_idx,
+            key="liquid_type_widget",
+        )
+        q_lye = st.number_input(
+            "Volume flow (m³/h)",
+            min_value=0.0,
+            value=float(preset_vals["lye"]),
+            step=1.0,
+            key="q_lye_widget",
+        )
+
+        # Custom liquid properties shown only for "Custom" liquid type
+        custom_liquid = None
+        if liquid_type == "Custom":
+            st.markdown("*Custom liquid — physical properties*")
+            _cl1, _cl2, _cl3 = st.columns(3)
+            _cl_rho   = _cl1.number_input("Density (kg/m³)",    min_value=100.0, value=1000.0, step=10.0)
+            _cl_mu    = _cl2.number_input("Viscosity (mPa·s)",  min_value=0.01,  value=1.0,    step=0.1)
+            _cl_sigma = _cl3.number_input("Surface tension (mN/m)", min_value=1.0, value=72.0, step=1.0)
+            custom_liquid = {"rho_kgm3": _cl_rho, "mu_mpas": _cl_mu, "sigma_mnm": _cl_sigma}
+
+    # ── Pipe Geometry ─────────────────────────────────────────────────────────
     with st.container(border=True):
         st.subheader("Pipe Geometry")
         current_specs = []
@@ -270,26 +377,73 @@ with col_in:
 with col_out:
     st.header("Output")
 
-    is_valid, warn_list = engine.validate_input_bounds(P_bara, T_C, m_H2, m_O2, q_lye)
+    is_valid, warn_list = engine.validate_input_bounds(
+        P_bara, T_C, gas_flows_kgh, liquid_type, q_lye
+    )
     for w in warn_list:
         st.warning(w)
 
-    props = engine.calculate_two_phase_properties(P_bara, T_C, m_H2, m_O2, q_lye)
+    props = engine.calculate_two_phase_properties(
+        P_bara, T_C, gas_flows_kgh, liquid_type, q_lye,
+        custom_gas=custom_gas, custom_liquid=custom_liquid,
+    )
 
-    # ── Phase Thermodynamics ──────────────────────────────────────────────────
+    # ── Inlet Physical Properties ─────────────────────────────────────────────
     with st.container(border=True):
-        st.subheader("Phase Thermodynamics — Inlet")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("ρ_gas",     f"{props['rho_g']:.3f} kg/m³")
-        c2.metric("ρ_liquid",  f"{props['rho_l']:.1f} kg/m³")
-        c3.metric("μ_liquid",  f"{props['mu_l']*1e3:.3f} mPa·s")
-        c4.metric("σ_surface", f"{props['sigma']*1e3:.2f} mN/m")
+        st.subheader("Inlet Physical Properties")
 
-        c5, c6, c7, c8 = st.columns(4)
-        c5.metric("Mass Quality x", f"{props['x_gas']*100:.3f} %")
-        c6.metric("Void Fraction α", f"{props['alpha']*100:.1f} %")
-        c7.metric("P_sat (H₂O)",    f"{props['P_sat_H2O_pa']/1e5:.3f} bara")
-        c8.metric("H₂O Vapor",      f"{props['m_vapor_h2o_kgh']:.3f} kg/h")
+        col_gas, col_liq = st.columns(2)
+
+        # Gas phase — composition table + key properties
+        with col_gas:
+            st.markdown("**Gas phase**")
+            _comp     = props["composition"]
+            _n_total  = sum(v["mol_h"] for v in _comp.values())
+
+            _comp_rows = []
+            for _sp, _data in _comp.items():
+                _comp_rows.append({
+                    "Component": _sp,
+                    "kg/h":  round(_data["kg_h"],    3),
+                    "mol/h": round(_data["mol_h"],    1),
+                    "mol %": f"{_data['mol_frac']*100:.1f}",
+                })
+            _comp_rows.append({
+                "Component": "Total",
+                "kg/h":  round(props["m_gas_total_kgh"], 3),
+                "mol/h": round(_n_total, 1),
+                "mol %": "100.0",
+            })
+            st.dataframe(
+                pd.DataFrame(_comp_rows),
+                column_config={
+                    "kg/h":  st.column_config.NumberColumn(format="%.3f"),
+                    "mol/h": st.column_config.NumberColumn(format="%.1f"),
+                },
+                hide_index=True, use_container_width=True,
+            )
+            g1, g2, g3 = st.columns(3)
+            g1.metric("ρ_gas",  f"{props['rho_g']:.3f} kg/m³")
+            g2.metric("MW_mix", f"{props['MW_mix_gmol']:.2f} g/mol")
+            if props.get("P_sat_H2O_pa", 0) > 0:
+                g3.metric("P_sat H₂O", f"{props['P_sat_H2O_pa']/1e5:.3f} bara")
+
+        # Liquid phase + two-phase summary
+        with col_liq:
+            st.markdown(f"**Liquid phase ({liquid_type})**")
+            l1, l2 = st.columns(2)
+            l1.metric("ṁ_liquid",  f"{props['m_lye_kgh']:.1f} kg/h")
+            l2.metric("ρ_liquid",  f"{props['rho_l']:.1f} kg/m³")
+            l3, l4 = st.columns(2)
+            l3.metric("μ_liquid",  f"{props['mu_l']*1e3:.3f} mPa·s")
+            l4.metric("σ",         f"{props['sigma']*1e3:.2f} mN/m")
+
+            st.markdown("**Two-phase mixture**")
+            _m_total_kgh = props["m_gas_total_kgh"] + props["m_liquid_total_kgh"]
+            m1, m2, m3 = st.columns(3)
+            m1.metric("ṁ_total",        f"{_m_total_kgh:.2f} kg/h")
+            m2.metric("Mass quality x",  f"{props['x_gas']*100:.3f} %")
+            m3.metric("Void fraction α", f"{props['alpha']*100:.2f} %")
 
     # ── Inlet Flow Conditions (based on Segment 1 effective bore) ───────────
     _seg1    = st.session_state.segments[0]
@@ -332,11 +486,10 @@ with col_out:
         rough_seg = (engine.LINER_ROUGHNESS[_lmat] if _lined
                      else engine.MATERIAL_ROUGHNESS[seg.get("material", "SS316L")])
 
-        # Re-evaluate thermodynamic properties at the local segment inlet pressure
-        # so that gas density, void fraction and superficial velocities reflect
-        # actual local conditions rather than fixed inlet values.
+        # Re-evaluate at local segment inlet pressure (pressure marching)
         props_seg = engine.calculate_two_phase_properties(
-            current_P / 1e5, T_C, m_H2, m_O2, q_lye
+            current_P / 1e5, T_C, gas_flows_kgh, liquid_type, q_lye,
+            custom_gas=custom_gas, custom_liquid=custom_liquid,
         )
 
         angle = {"Horizontal": 0.0,
@@ -667,7 +820,10 @@ st.subheader("Export Report")
 # Detect input changes so a stale report is not silently reused
 _rpt_hash = hashlib.md5(
     json.dumps({
-        "P": P_bara, "T": T_C, "H2": m_H2, "O2": m_O2, "lye": q_lye,
+        "P": P_bara, "T": T_C,
+        "gas_flows": {k: float(v) for k, v in gas_flows_kgh.items()},
+        "liquid_type": liquid_type,
+        "lye": q_lye,
         "segs": [
             (s["type"], s["dn"], s["pn"], s["length"], s["fittings"], s["fitting_count"],
              s.get("lined", False), s.get("liner_material", "FEP"), s.get("liner_thickness_mm", 1.0))
@@ -686,7 +842,8 @@ with _rc1:
     if st.button("Generate Report", type="primary", use_container_width=True):
         with st.spinner("Rendering charts and building document…"):
             _buf = report_generator.generate_report(
-                P_bara=P_bara, T_C=T_C, m_H2=m_H2, m_O2=m_O2, q_lye=q_lye,
+                P_bara=P_bara, T_C=T_C,
+                gas_flows_kgh=gas_flows_kgh, liquid_type=liquid_type, q_lye=q_lye,
                 props=props,
                 grid_records=grid_records,
                 segments=st.session_state.segments,
@@ -714,6 +871,195 @@ with _rc2:
             st.info("Inputs changed — click Generate Report to refresh.")
 
 # ============================================================================
+# EXCEL EXPORT
+# ============================================================================
+st.divider()
+st.subheader("Export Data  (.xlsx)")
+
+def _build_xlsx():
+    from io import BytesIO
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    BLUE   = "2563EB"
+    LGRAY  = "F1F5F9"
+    STRIPE = "F8FAFC"
+
+    _hdr_font  = Font(bold=True, color="FFFFFF", size=10, name="Calibri")
+    _hdr_fill  = PatternFill("solid", fgColor=BLUE)
+    _sec_font  = Font(bold=True, size=9, name="Calibri")
+    _sec_fill  = PatternFill("solid", fgColor=LGRAY)
+    _dat_font  = Font(size=9, name="Calibri")
+    _alt_fill  = PatternFill("solid", fgColor=STRIPE)
+    _thin      = Side(style="thin", color="CBD5E1")
+    _border    = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
+
+    def _hdr(ws, row, text, ncols):
+        c = ws.cell(row=row, column=1, value=text)
+        c.font = _hdr_font; c.fill = _hdr_fill
+        c.alignment = Alignment(vertical="center")
+        c.border = _border
+        for col in range(2, ncols + 2):
+            cc = ws.cell(row=row, column=col)
+            cc.fill = _hdr_fill; cc.border = _border
+        return row + 1
+
+    def _sec(ws, row, text, ncols):
+        c = ws.cell(row=row, column=1, value=text)
+        c.font = _sec_font; c.fill = _sec_fill; c.border = _border
+        for col in range(2, ncols + 2):
+            cc = ws.cell(row=row, column=col)
+            cc.fill = _sec_fill; cc.border = _border
+        return row + 1
+
+    def _dat(ws, row, label, value, alt=False):
+        fill = _alt_fill if alt else None
+        lc = ws.cell(row=row, column=1, value=label)
+        lc.font = _dat_font; lc.border = _border
+        if fill: lc.fill = fill
+        vc = ws.cell(row=row, column=2, value=value)
+        vc.font = _dat_font; vc.border = _border
+        if fill: vc.fill = fill
+        return row + 1
+
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: System ───────────────────────────────────────────────────────
+    ws = wb.active
+    ws.title = "System"
+    ws.freeze_panes = "A2"
+
+    r = _hdr(ws, 1, "System Summary", 1)
+
+    # Boundary conditions
+    alt = False
+    r = _sec(ws, r, "Boundary Conditions", 1)
+    for lbl, val in [
+        ("Inlet Pressure (bara)",             round(P_bara, 4)),
+        ("Temperature (°C)",                  round(T_C, 2)),
+        ("Outlet Pressure (bara)",            round(outlet_pressure_bara, 4)),
+        ("Total ΔP (kPa)",                    round(total_dp_kpa, 4)),
+        ("Total ΔP (bar)",                    round(total_dp_kpa / 100, 6)),
+        ("Pipe Length (m)",                   round(pipe_length_m, 3)),
+        ("Effective Length incl. fittings (m)", round(cumulative_distance, 3)),
+    ]:
+        r = _dat(ws, r, lbl, val, alt); alt = not alt
+
+    # Gas phase
+    r += 1; alt = False
+    r = _sec(ws, r, "Gas Phase  —  inlet conditions", 1)
+    for sp, flow in gas_flows_kgh.items():
+        r = _dat(ws, r, f"{sp} mass flow (kg/h)", round(float(flow), 4), alt); alt = not alt
+    for lbl, val in [
+        ("Total gas mass flow (kg/h)",        round(props["m_gas_total_kgh"], 4)),
+        ("Gas density ρ_g (kg/m³)",           round(props["rho_g"], 4)),
+        ("Gas mixture MW (g/mol)",            round(props["MW_mix_gmol"], 3)),
+        ("Gas viscosity μ_g (µPa·s)",         round(props["mu_g"] * 1e6, 3)),
+        ("Mass quality x (%)",                round(props["x_gas"] * 100, 5)),
+        ("Void fraction α (%)",               round(props["alpha"] * 100, 4)),
+    ]:
+        r = _dat(ws, r, lbl, val, alt); alt = not alt
+    if props.get("P_sat_H2O_pa", 0) > 0:
+        for lbl, val in [
+            ("H₂O vapour flow (kg/h)",           round(props["m_vapor_h2o_kgh"], 5)),
+            ("H₂O saturation pressure (bara)",   round(props["P_sat_H2O_pa"] / 1e5, 5)),
+        ]:
+            r = _dat(ws, r, lbl, val, alt); alt = not alt
+
+    # Liquid phase
+    r += 1; alt = False
+    r = _sec(ws, r, f"Liquid Phase  —  {liquid_type}", 1)
+    for lbl, val in [
+        ("Volume flow (m³/h)",                round(q_lye, 4)),
+        ("Mass flow (kg/h)",                  round(props["m_lye_kgh"], 3)),
+        ("Density ρ_l (kg/m³)",               round(props["rho_l"], 3)),
+        ("Viscosity μ_l (mPa·s)",             round(props["mu_l"] * 1e3, 4)),
+        ("Surface tension σ (mN/m)",          round(props["sigma"] * 1e3, 4)),
+    ]:
+        r = _dat(ws, r, lbl, val, alt); alt = not alt
+
+    ws.column_dimensions["A"].width = 42
+    ws.column_dimensions["B"].width = 20
+
+    # ── Sheet 2: Segments ─────────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Segments")
+    ws2.freeze_panes = "B2"
+
+    n = len(grid_records)
+
+    # Header row
+    c = ws2.cell(row=1, column=1, value="Parameter")
+    c.font = _hdr_font; c.fill = _hdr_fill; c.border = _border
+    for j, rec in enumerate(grid_records):
+        seg = st.session_state.segments[j]
+        label = f"Seg {rec['Seg']}  {rec['Pipe']}"
+        if seg.get("lined"):
+            label += f" +{seg['liner_material']}"
+        cc = ws2.cell(row=1, column=j + 2, value=label)
+        cc.font = _hdr_font; cc.fill = _hdr_fill; cc.border = _border
+
+    # Parameter rows
+    _ROWS = [
+        ("Orientation",                        "Type"),
+        ("Pipe class",                         "Pipe"),
+        ("Inner diameter (mm)",                "ID (mm)"),
+        ("Material",                           "Material"),
+        ("Physical length (m)",                "L (m)"),
+        ("Effective length incl. fittings (m)","L_eff (m)"),
+        ("P_in  Inlet pressure (bara)",        "P_in (bara)"),
+        ("P_out  Outlet pressure (bara)",      "P_out (bara)"),
+        ("ΔP  Pressure drop (kPa)",            "ΔP (kPa)"),
+        ("dP/dz  Pressure gradient (Pa/m)",    "dP/dz (Pa/m)"),
+        ("Gas density ρ_g (kg/m³)",            "ρ_g (kg/m³)"),
+        ("Flow regime",                        "Regime"),
+        ("V_sg  Superficial gas velocity (m/s)",     "V_sg (m/s)"),
+        ("V_sl  Superficial liquid velocity (m/s)",  "V_sl (m/s)"),
+        ("V_m  Mixture velocity (m/s)",              "V_m (m/s)"),
+        ("V_e  Erosion limit API RP 14E (m/s)",      "V_e (m/s)"),
+        ("V_m/V_e  Erosion ratio (–)",               "V_m/V_e"),
+    ]
+
+    for i, (label, key) in enumerate(_ROWS):
+        row = i + 2
+        alt = (i % 2 == 1)
+        lc = ws2.cell(row=row, column=1, value=label)
+        lc.font = _dat_font; lc.border = _border
+        if alt: lc.fill = _alt_fill
+        for j, rec in enumerate(grid_records):
+            vc = ws2.cell(row=row, column=j + 2, value=rec.get(key, ""))
+            vc.font = _dat_font; vc.border = _border
+            if alt: vc.fill = _alt_fill
+
+    ws2.column_dimensions["A"].width = 46
+    for j in range(n):
+        ws2.column_dimensions[get_column_letter(j + 2)].width = 18
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+_xl1, _xl2 = st.columns([1, 2])
+with _xl1:
+    if st.button("Generate Excel", use_container_width=True):
+        try:
+            _xl_bytes = _build_xlsx().getvalue()
+            st.session_state["_xl_bytes"] = _xl_bytes
+        except Exception as _xe:
+            st.error(f"Excel export failed: {_xe}")
+
+with _xl2:
+    if st.session_state.get("_xl_bytes"):
+        st.download_button(
+            label="Download  (.xlsx)",
+            data=st.session_state["_xl_bytes"],
+            file_name="multiphase_hydraulic_data.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+# ============================================================================
 # VALIDATION
 # ============================================================================
 st.divider()
@@ -739,11 +1085,19 @@ with tab_val:
 
         if st.button("Run Validation Case"):
             vi = case["inputs"]
+            # Build generic gas_flows_kgh dict from legacy case keys
+            _v_gas = {}
+            if vi.get("m_H2_kgh", 0) > 0:
+                _v_gas["H₂"] = vi["m_H2_kgh"]
+            if vi.get("m_O2_kgh", 0) > 0:
+                _v_gas["O₂"] = vi["m_O2_kgh"]
+            _v_liquid = vi.get("liquid_type", "KOH 30 wt%")
+
             v_props = engine.calculate_two_phase_properties(
-                vi["P_bara"], vi["T_C"], vi["m_H2_kgh"], vi["m_O2_kgh"], vi["q_lye_m3h"]
+                vi["P_bara"], vi["T_C"], _v_gas, _v_liquid, vi["q_lye_m3h"]
             )
             v_D = engine.PIPE_DATABASE[vi["pipe_dn"]][vi["pipe_pn"]]
-            v_r = engine.MATERIAL_ROUGHNESS["SS316L"]  # reference cases are all SS316L
+            v_r = engine.MATERIAL_ROUGHNESS["SS316L"]
             v_total_dp = 0.0
 
             for seg in vi["segments"]:
