@@ -949,6 +949,30 @@ with tab_cmp:
         font=dict(size=12, color="#374151"))
     st.plotly_chart(fig_bar, use_container_width=True, key="fig_bar")
 
+    # ── Comparison report export ──────────────────────────────────────────────
+    st.divider()
+    _cr1, _cr2 = st.columns([1, 2])
+    with _cr1:
+        if st.button("Generate Comparison Report", type="primary",
+                     use_container_width=True, key="gen_cmp_rpt"):
+            with st.spinner("Building comparison document…"):
+                try:
+                    _cbuf = report_generator.generate_comparison_report(
+                        results_a=ra, results_b=rb,
+                        fig_cmp=fig_cmp, fig_bar=fig_bar)
+                    st.session_state["cmp_rpt_bytes"] = _cbuf.getvalue()
+                except Exception as _ce:
+                    st.error(f"Report failed: {_ce}")
+    with _cr2:
+        if st.session_state.get("cmp_rpt_bytes"):
+            st.download_button(
+                "Download Comparison Report  (.docx)",
+                data=st.session_state["cmp_rpt_bytes"],
+                file_name="hydraulic_comparison_report.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True, key="dl_cmp_rpt")
+    st.divider()
+
     # ── Full segment tables side by side ──────────────────────────────────────
     st.markdown("#### Segment Detail")
     _col_cfg = {
