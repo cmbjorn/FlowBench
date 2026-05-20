@@ -621,10 +621,10 @@ def run_case(cid: str, accent: str) -> dict:
     st.divider()
     tab_sch, tab_prof_tab = st.tabs(["Pipeline Schematic", "Pressure Profile"])
     with tab_sch:
-        st.plotly_chart(fig_sch, use_container_width=True)
+        st.plotly_chart(fig_sch, use_container_width=True, key=k("fig_sch"))
         st.caption("Line width ∝ DN  ·  Colour = flow regime  ·  Arrow = flow direction")
     with tab_prof_tab:
-        st.plotly_chart(fig_prof, use_container_width=True)
+        st.plotly_chart(fig_prof, use_container_width=True, key=k("fig_prof"))
 
     # ── EXPORTS ───────────────────────────────────────────────────────────────
     st.divider()
@@ -926,7 +926,7 @@ with tab_cmp:
         yaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
         legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0", borderwidth=1),
         font=dict(size=12, color="#374151"))
-    st.plotly_chart(fig_cmp, use_container_width=True)
+    st.plotly_chart(fig_cmp, use_container_width=True, key="fig_cmp")
 
     # ── Per-segment ΔP comparison ──────────────────────────────────────────────
     st.markdown("#### Pressure Drop by Segment")
@@ -947,7 +947,7 @@ with tab_cmp:
         yaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
         legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0", borderwidth=1),
         font=dict(size=12, color="#374151"))
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar, use_container_width=True, key="fig_bar")
 
     # ── Full segment tables side by side ──────────────────────────────────────
     st.markdown("#### Segment Detail")
