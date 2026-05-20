@@ -162,19 +162,19 @@ with col_in:
 
     PRESETS = {
         "Custom": {
-            "P": 10.0, "T": 50.0,
-            "gas_flows": {"H₂": 8.0, "O₂": 2.0},
-            "liquid_type": "KOH 30 wt%", "lye": 1.5,
+            "P": 16.0, "T": 80.0,
+            "gas_flows": {"H₂": 26.0},
+            "liquid_type": "KOH 30 wt%", "lye": 13.75,
         },
         "H₂ side — 80 °C, 16 bara, KOH 30%": {
             "P": 16.0, "T": 80.0,
-            "gas_flows": {"H₂": 100.0, "O₂": 0.1},
-            "liquid_type": "KOH 30 wt%", "lye": 50.0,
+            "gas_flows": {"H₂": 26.0},
+            "liquid_type": "KOH 30 wt%", "lye": 13.75,
         },
         "O₂ side — 80 °C, 16 bara, KOH 30%": {
             "P": 16.0, "T": 80.0,
-            "gas_flows": {"H₂": 0.1, "O₂": 50.0},
-            "liquid_type": "KOH 30 wt%", "lye": 50.0,
+            "gas_flows": {"O₂": 206.0},   # stoichiometric: 26 kg/h H₂ → ~206 kg/h O₂
+            "liquid_type": "KOH 30 wt%", "lye": 13.75,
         },
         "N₂ purge — 25 °C, 5 bara, Water": {
             "P": 5.0, "T": 25.0,
