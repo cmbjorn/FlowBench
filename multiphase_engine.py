@@ -65,6 +65,25 @@ FITTING_Le_over_D = {
     "Expansion — Sudden":                 30,
 }
 
+
+def _seg_le_fit(seg, D_eff):
+    """Sum equivalent pipe length from all fittings. Handles old and new segment format."""
+    fl = seg.get("fittings_list")
+    if fl is not None:
+        total = 0.0
+        for fit in fl:
+            t = fit.get("type", "")
+            q = fit.get("qty", 0)
+            if t in FITTING_Le_over_D and q > 0:
+                total += FITTING_Le_over_D[t] * D_eff * q
+        return total
+    f = seg.get("fittings", "None")
+    c = seg.get("fitting_count", 0)
+    if f in FITTING_Le_over_D and c > 0:
+        return FITTING_Le_over_D[f] * D_eff * c
+    return 0.0
+
+
 # ============================================================================
 # 2. CALCULATION METHOD REGISTRIES
 # ============================================================================
@@ -610,9 +629,7 @@ def run_sensitivity(
                     angle  = {"Horizontal":        0.0,
                               "Vertical Upflow":   np.pi / 2.0,
                               "Vertical Downflow": -np.pi / 2.0}[seg["type"]]
-                    le_fit = 0.0
-                    if seg["fittings"] in FITTING_Le_over_D:
-                        le_fit = FITTING_Le_over_D[seg["fittings"]] * D_eff * seg["fitting_count"]
+                    le_fit = _seg_le_fit(seg, D_eff)
                     L_eff  = seg["length"] + le_fit
                     res    = calculate_segment_pressure_drop(
                         props_seg, D_eff, roughness, L_eff, angle,

@@ -132,9 +132,7 @@ with st.sidebar:
                 for _sb_seg in _sb_vi["segments"]:
                     _sb_ang = {"Horizontal": 0.0, "Vertical Upflow": np.pi/2,
                                "Vertical Downflow": -np.pi/2}[_sb_seg["type"]]
-                    _sb_le  = 0.0
-                    if _sb_seg["fittings"] in engine.FITTING_Le_over_D:
-                        _sb_le = engine.FITTING_Le_over_D[_sb_seg["fittings"]]*_sb_D*_sb_seg["fitting_count"]
+                    _sb_le  = engine._seg_le_fit(_sb_seg, _sb_D)
                     _sb_res = engine.calculate_segment_pressure_drop(
                         _sb_vp, _sb_D, _sb_r, _sb_seg["length"]+_sb_le, _sb_ang)
                     _sb_dp += _sb_res["dP_Pa"]
@@ -212,10 +210,10 @@ PRESETS = {
 
 _DEFAULT_SEGMENTS = [
     {"type": "Horizontal",      "dn": "DN50", "pn": "PN40", "material": "SS316L",
-     "length": 12.0, "fittings": "None", "fitting_count": 0,
+     "length": 12.0, "fittings_list": [],
      "lined": False, "liner_material": "FEP", "liner_thickness_mm": 1.0},
     {"type": "Vertical Upflow", "dn": "DN50", "pn": "PN40", "material": "SS316L",
-     "length":  4.5, "fittings": "None", "fitting_count": 0,
+     "length":  4.5, "fittings_list": [],
      "lined": False, "liner_material": "FEP", "liner_thickness_mm": 1.0},
 ]
 
@@ -276,6 +274,24 @@ def _regime_color(regime_str, kw_list, default):
 # ============================================================================
 # CASE RUNNER  — renders one full case and returns results for Compare tab
 # ============================================================================
+def _sum_le_fit(seg, D_eff):
+    """Sum equivalent pipe length from all fittings. Handles old and new segment format."""
+    fl = seg.get("fittings_list")
+    if fl is not None:
+        total = 0.0
+        for fit in fl:
+            t = fit.get("type", "")
+            q = fit.get("qty", 0)
+            if t in engine.FITTING_Le_over_D and q > 0:
+                total += engine.FITTING_Le_over_D[t] * D_eff * q
+        return total
+    f = seg.get("fittings", "None")
+    c = seg.get("fitting_count", 0)
+    if f in engine.FITTING_Le_over_D and c > 0:
+        return engine.FITTING_Le_over_D[f] * D_eff * c
+    return 0.0
+
+
 def run_case(cid: str, accent: str, default_segments=None) -> dict:
     """
     Render inputs + outputs for one case.
@@ -412,8 +428,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             PN_OPTIONS    = ["PN20", "PN25", "PN40"]
             MAT_OPTIONS   = list(engine.MATERIAL_ROUGHNESS.keys())
             LINER_OPTIONS = list(engine.LINER_ROUGHNESS.keys())
-            fit_options   = ["None"] + list(engine.FITTING_Le_over_D.keys())
-
             for i, seg in enumerate(st.session_state[k("segments")]):
                 st.markdown(f"**Segment #{i+1}**")
                 g1, g2, g3, g4 = st.columns([1.3, 0.8, 0.7, 0.7])
@@ -432,19 +446,10 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 l  = g4.number_input("Length (m)", min_value=0.1,
                                      value=float(seg["length"]), step=1.0, key=k(f"l_{i}"))
 
-                g5, g6, g7, g8 = st.columns([1.1, 2.0, 0.6, 0.65])
+                g5, g8 = st.columns([3.5, 0.65])
                 _mat_def = seg.get("material","SS316L")
                 mat = g5.selectbox("Material", MAT_OPTIONS, key=k(f"m_{i}"),
                                    index=MAT_OPTIONS.index(_mat_def) if _mat_def in MAT_OPTIONS else 0)
-                _fit_idx = 0
-                if seg["fittings"] in engine.FITTING_Le_over_D:
-                    _fit_idx = list(engine.FITTING_Le_over_D.keys()).index(seg["fittings"]) + 1
-                f = g6.selectbox("Minor Loss", fit_options, key=k(f"f_{i}"), index=_fit_idx,
-                                 help="Fitting type for equivalent-length minor loss "
-                                      "(Crane TP-410 Le/D method). Select None if not applicable.")
-                c = g7.number_input("Qty", min_value=0, value=int(seg["fitting_count"]),
-                                    key=k(f"c_{i}"),
-                                    help="Number of this fitting type in the segment.")
                 g8.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
                 lined = g8.checkbox("Lined", value=bool(seg.get("lined",False)), key=k(f"lined_{i}"),
                                     help="Fluoropolymer liner (PTFE/FEP/PFA/PVDF) reduces effective "
@@ -468,9 +473,70 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 else:
                     st.caption(f"ID {D_seg*1000:.1f} mm  ·  ε {rough*1e6:.2g} µm  ·  {mat}")
 
+                # ── Multi-row fittings ───────────────────────────────────────────
+                _fk = k(f"fits_{i}")
+                if _fk not in st.session_state:
+                    _init_fl = seg.get("fittings_list")
+                    if _init_fl is None:
+                        _old_f = seg.get("fittings", "None")
+                        _old_c = seg.get("fitting_count", 0)
+                        _init_fl = ([{"type": _old_f, "qty": int(_old_c)}]
+                                    if _old_f in engine.FITTING_Le_over_D and _old_c > 0
+                                    else [])
+                    st.session_state[_fk] = list(_init_fl)
+
+                _fit_rows = st.session_state[_fk]
+                _n_fits   = len(_fit_rows)
+                _all_fit_types = list(engine.FITTING_Le_over_D.keys())
+
+                _fl_col, _fa_col = st.columns([4, 1])
+                _fl_col.caption("**Minor losses**" if _n_fits else "Minor losses — none")
+                if _fa_col.button("+ Add", key=k(f"fadd_{i}"), help="Add a fitting type"):
+                    for jj in range(_n_fits):
+                        _ft = st.session_state.get(k(f"ftype_{i}_{jj}"))
+                        _fq = st.session_state.get(k(f"fqty_{i}_{jj}"), 1)
+                        if _ft:
+                            st.session_state[_fk][jj]["type"] = _ft
+                            st.session_state[_fk][jj]["qty"]  = int(_fq)
+                    st.session_state[_fk].append({"type": _all_fit_types[0], "qty": 1})
+                    st.rerun()
+
+                for j, _fr in enumerate(list(_fit_rows)):
+                    _fc1, _fc2, _fc3 = st.columns([3.5, 0.7, 0.3])
+                    _ftype_key = k(f"ftype_{i}_{j}")
+                    _fqty_key  = k(f"fqty_{i}_{j}")
+                    _cur_type  = _fit_rows[j]["type"]
+                    _cur_qty   = _fit_rows[j]["qty"]
+                    _fc1.selectbox("Fitting", _all_fit_types,
+                        index=_all_fit_types.index(_cur_type) if _cur_type in _all_fit_types else 0,
+                        key=_ftype_key, label_visibility="collapsed")
+                    _fc2.number_input("Qty", min_value=1, value=_cur_qty,
+                        key=_fqty_key, label_visibility="collapsed")
+                    if _fc3.button("×", key=k(f"frem_{i}_{j}"), help="Remove this fitting"):
+                        for jj in range(_n_fits):
+                            _ft = st.session_state.get(k(f"ftype_{i}_{jj}"))
+                            _fq = st.session_state.get(k(f"fqty_{i}_{jj}"), 1)
+                            if _ft:
+                                st.session_state[_fk][jj]["type"] = _ft
+                                st.session_state[_fk][jj]["qty"]  = int(_fq)
+                        st.session_state[_fk].pop(j)
+                        for jj in range(j, _n_fits - 1):
+                            st.session_state[k(f"ftype_{i}_{jj}")] = st.session_state[_fk][jj]["type"]
+                            st.session_state[k(f"fqty_{i}_{jj}")] = st.session_state[_fk][jj]["qty"]
+                        st.session_state.pop(k(f"ftype_{i}_{_n_fits-1}"), None)
+                        st.session_state.pop(k(f"fqty_{i}_{_n_fits-1}"), None)
+                        st.rerun()
+
+                _fittings_list = []
+                for jj in range(_n_fits):
+                    _ft = st.session_state.get(k(f"ftype_{i}_{jj}"))
+                    _fq = st.session_state.get(k(f"fqty_{i}_{jj}"), 1)
+                    if _ft and _ft in engine.FITTING_Le_over_D and int(_fq) > 0:
+                        _fittings_list.append({"type": _ft, "qty": int(_fq)})
+
                 current_specs.append({
                     "type": t, "dn": dn, "pn": pn, "material": mat, "length": l,
-                    "fittings": f if f != "None" else "None", "fitting_count": c,
+                    "fittings_list": _fittings_list,
                     "lined": lined, "liner_material": _lmat, "liner_thickness_mm": _lthk_mm,
                 })
 
@@ -482,7 +548,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 st.session_state[k("segments")].append({
                     "type": "Horizontal", "dn": _last.get("dn","DN50"),
                     "pn": _last.get("pn","PN40"), "material": _last.get("material","SS316L"),
-                    "length": 2.0, "fittings": "None", "fitting_count": 0,
+                    "length": 2.0, "fittings_list": [],
                     "lined": _last.get("lined",False),
                     "liner_material": _last.get("liner_material","FEP"),
                     "liner_thickness_mm": _last.get("liner_thickness_mm",1.0),
@@ -597,9 +663,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             angle = {"Horizontal": 0.0,
                      "Vertical Upflow": np.pi/2.0,
                      "Vertical Downflow": -np.pi/2.0}[seg["type"]]
-            le_fit = 0.0
-            if seg["fittings"] in engine.FITTING_Le_over_D:
-                le_fit = engine.FITTING_Le_over_D[seg["fittings"]]*D_eff*seg["fitting_count"]
+            le_fit = _sum_le_fit(seg, D_eff)
             L_eff = seg["length"] + le_fit
 
             seg_result = engine.calculate_segment_pressure_drop(
@@ -633,10 +697,10 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 "ID (mm)":         round(D_eff*1000, 1),
                 "L (m)":           seg["length"],
                 "L_eq (m)":        round(le_fit, 3),
-                "Fittings":        (f"{seg['fittings']} ×{seg.get('fitting_count',0)}"
-                                    if seg.get('fitting_count', 0) > 0
-                                    and seg.get('fittings', 'None') not in ('None', 'none', '')
-                                    else "—"),
+                "Fittings":        (", ".join(f"{f['type']} ×{f['qty']}"
+                                              for f in seg.get("fittings_list", [])
+                                              if f.get("qty", 0) > 0)
+                                    or "—"),
                 "Regime":          regime,
                 "ΔP (kPa)":        round(dP_Pa/1000, 3),
                 "P_in (bara)":     round(current_P/1e5, 4),
@@ -861,8 +925,9 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             "P": P_bara, "T": T_C,
             "gas_flows": {_kk: float(_vv) for _kk,_vv in gas_flows_kgh.items()},
             "liquid_type": liquid_type, "lye": q_lye,
-            "segs": [(s["type"],s["dn"],s["pn"],s["length"],s["fittings"],
-                      s["fitting_count"],s.get("lined",False),
+            "segs": [(s["type"],s["dn"],s["pn"],s["length"],
+                      tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
+                      s.get("lined",False),
                       s.get("liner_material","FEP"),s.get("liner_thickness_mm",1.0))
                      for s in st.session_state[k("segments")]],
         }, sort_keys=True).encode()).hexdigest()
@@ -1073,9 +1138,7 @@ def _calc_dp_at_p(res, P_bara_override):
             custom_gas=cgas, custom_liquid=cliq)
         angle  = {"Horizontal": 0.0, "Vertical Upflow": np.pi / 2.0,
                   "Vertical Downflow": -np.pi / 2.0}[seg["type"]]
-        le_fit = 0.0
-        if seg["fittings"] in engine.FITTING_Le_over_D:
-            le_fit = engine.FITTING_Le_over_D[seg["fittings"]] * D_eff * seg["fitting_count"]
+        le_fit = _sum_le_fit(seg, D_eff)
         seg_res = engine.calculate_segment_pressure_drop(
             props, D_eff, rough, seg["length"] + le_fit, angle,
             correlation=corr, voidage_method=void)
@@ -1095,7 +1158,7 @@ def _march_header_simple(tap_dists, gas_per_tap, liq_per_tap,
     gas_per_tap : {species: kg/h} for ONE A-line.
     liq_per_tap : m³/h liquid for ONE A-line.
     hdr         : dict with dn, pn, material, lined, liner_material,
-                  liner_thickness_mm, fittings, fitting_count.
+                  liner_thickness_mm, fittings_list.
     Returns (total_dp_Pa, P_T_Pa, dp_fric_Pa, dp_grav_Pa, records).
     """
     if not tap_dists or not gas_per_tap or liq_per_tap <= 0:
@@ -1112,10 +1175,7 @@ def _march_header_simple(tap_dists, gas_per_tap, liq_per_tap,
     D_eff  = D_nom - 2 * lthk_m if lined else D_nom
     rough  = (engine.LINER_ROUGHNESS[lmat] if lined
               else engine.MATERIAL_ROUGHNESS[hdr.get("material", "SS316L")])
-    le_fit = 0.0
-    if hdr.get("fittings") in engine.FITTING_Le_over_D:
-        le_fit = (engine.FITTING_Le_over_D[hdr["fittings"]]
-                  * D_eff * hdr.get("fitting_count", 0))
+    le_fit = _sum_le_fit(hdr, D_eff)
 
     current_P   = P_start_Pa
     total_dp    = dp_fric = dp_grav = 0.0
@@ -1180,9 +1240,7 @@ def _march_single_seg(seg, P_in_Pa, T_C, gas_flows, liquid_type, q_lye, corr, vo
     D_nom = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
     mat   = seg.get("material", "SS316L")
     rough = engine.MATERIAL_ROUGHNESS.get(mat, engine.MATERIAL_ROUGHNESS["SS316L"])
-    le_fit = 0.0
-    if seg.get("fittings") in engine.FITTING_Le_over_D:
-        le_fit = engine.FITTING_Le_over_D[seg["fittings"]] * D_nom * seg.get("fitting_count", 0)
+    le_fit = _sum_le_fit(seg, D_nom)
 
     props   = engine.calculate_two_phase_properties(
         P_in_Pa / 1e5, T_C, gas_flows, liquid_type, q_lye)
@@ -1347,7 +1405,6 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
             DN_OPT  = list(engine.PIPE_DATABASE.keys())
             PN_OPT  = ["PN20", "PN25", "PN40"]
             MAT_OPT = list(engine.MATERIAL_ROUGHNESS.keys())
-            FIT_OPT = ["None"] + list(engine.FITTING_Le_over_D.keys())
             h1, h2, h3 = st.columns(3)
             hdr_dn  = h1.selectbox("DN",       DN_OPT,  key=k("hdr_dn"),
                                    index=DN_OPT.index(st.session_state.get(k("hdr_dn"), "DN100"))
@@ -1369,22 +1426,58 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
                                              step=0.5, key=k("hdr_lthk"))
             else:
                 hdr_lmat = "FEP";  hdr_lthk = 1.0
-            h7, h8 = st.columns(2)
-            _fit_cur = st.session_state.get(k("hdr_fit"), "None")
-            hdr_fit  = h7.selectbox("Fitting type", FIT_OPT, key=k("hdr_fit"),
-                                    index=FIT_OPT.index(_fit_cur) if _fit_cur in FIT_OPT else 0)
-            hdr_fitq = h8.number_input("Qty", min_value=0,
-                                        value=int(st.session_state.get(k("hdr_fitq"), 0)),
-                                        key=k("hdr_fitq"))
             _D_nom = engine.PIPE_DATABASE[hdr_dn][hdr_pn]
             _D_eff = _D_nom - 2 * hdr_lthk / 1000.0 if hdr_lined else _D_nom
             st.caption(f"ID {_D_eff*1000:.1f} mm")
+            st.caption("**Header fittings**" if st.session_state.get(k("hdr_fits"), []) else "Header fittings — none")
+            _hdr_fk = k("hdr_fits")
+            if _hdr_fk not in st.session_state:
+                st.session_state[_hdr_fk] = []
+            _hdr_fit_rows  = st.session_state[_hdr_fk]
+            _hdr_n_fits    = len(_hdr_fit_rows)
+            _all_fit_types = list(engine.FITTING_Le_over_D.keys())
+            if st.button("+ Add fitting", key=k("hdr_fadd"), help="Add a fitting to the header"):
+                for jj in range(_hdr_n_fits):
+                    _ft = st.session_state.get(k(f"hdr_ftype_{jj}"))
+                    _fq = st.session_state.get(k(f"hdr_fqty_{jj}"), 1)
+                    if _ft:
+                        st.session_state[_hdr_fk][jj]["type"] = _ft
+                        st.session_state[_hdr_fk][jj]["qty"]  = int(_fq)
+                st.session_state[_hdr_fk].append({"type": _all_fit_types[0], "qty": 1})
+                st.rerun()
+            for j, _hfr in enumerate(list(_hdr_fit_rows)):
+                _hfc1, _hfc2, _hfc3 = st.columns([3.5, 0.7, 0.3])
+                _hfc1.selectbox("Fitting", _all_fit_types,
+                    index=_all_fit_types.index(_hfr["type"]) if _hfr["type"] in _all_fit_types else 0,
+                    key=k(f"hdr_ftype_{j}"), label_visibility="collapsed")
+                _hfc2.number_input("Qty", min_value=1, value=_hfr["qty"],
+                    key=k(f"hdr_fqty_{j}"), label_visibility="collapsed")
+                if _hfc3.button("×", key=k(f"hdr_frem_{j}"), help="Remove"):
+                    for jj in range(_hdr_n_fits):
+                        _ft = st.session_state.get(k(f"hdr_ftype_{jj}"))
+                        _fq = st.session_state.get(k(f"hdr_fqty_{jj}"), 1)
+                        if _ft:
+                            st.session_state[_hdr_fk][jj]["type"] = _ft
+                            st.session_state[_hdr_fk][jj]["qty"]  = int(_fq)
+                    st.session_state[_hdr_fk].pop(j)
+                    for jj in range(j, _hdr_n_fits - 1):
+                        st.session_state[k(f"hdr_ftype_{jj}")] = st.session_state[_hdr_fk][jj]["type"]
+                        st.session_state[k(f"hdr_fqty_{jj}")] = st.session_state[_hdr_fk][jj]["qty"]
+                    st.session_state.pop(k(f"hdr_ftype_{_hdr_n_fits-1}"), None)
+                    st.session_state.pop(k(f"hdr_fqty_{_hdr_n_fits-1}"), None)
+                    st.rerun()
 
+        _hdr_fits_list = []
+        _hdr_fk = k("hdr_fits")
+        for jj in range(len(st.session_state.get(_hdr_fk, []))):
+            _ft = st.session_state.get(k(f"hdr_ftype_{jj}"))
+            _fq = st.session_state.get(k(f"hdr_fqty_{jj}"), 1)
+            if _ft and _ft in engine.FITTING_Le_over_D and int(_fq) > 0:
+                _hdr_fits_list.append({"type": _ft, "qty": int(_fq)})
         hdr_spec = {
             "dn": hdr_dn, "pn": hdr_pn, "material": hdr_mat,
             "lined": hdr_lined, "liner_material": hdr_lmat, "liner_thickness_mm": hdr_lthk,
-            "fittings": hdr_fit if hdr_fit != "None" else "None",
-            "fitting_count": hdr_fitq,
+            "fittings_list": _hdr_fits_list,
         }
 
         with st.container(border=True):
@@ -1456,7 +1549,7 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
             st.caption(f"ID {_t_D*1000:.1f} mm")
 
         t_seg_spec = {"dn": t_dn, "pn": t_pn, "material": t_mat,
-                      "length": t_len, "fittings": "None", "fitting_count": 0}
+                      "length": t_len, "fittings_list": []}
 
     # ── CALCULATION ───────────────────────────────────────────────────────────
     with col_out:
@@ -1741,7 +1834,7 @@ def _sens_hash(ra, rb):
             "gas": {_k: float(_v) for _k, _v in ra["gas_flows_kgh"].items()},
             "liq": ra["liquid_type"], "lye": ra["q_lye"],
             "segs": [(s["type"], s["dn"], s["pn"], float(s["length"]),
-                      s["fittings"], int(s["fitting_count"]),
+                      tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
                       bool(s.get("lined", False)), s.get("liner_material", "FEP"),
                       float(s.get("liner_thickness_mm", 1.0)))
                      for s in ra["segments"]],
@@ -1751,7 +1844,7 @@ def _sens_hash(ra, rb):
             "gas": {_k: float(_v) for _k, _v in rb["gas_flows_kgh"].items()},
             "liq": rb["liquid_type"], "lye": rb["q_lye"],
             "segs": [(s["type"], s["dn"], s["pn"], float(s["length"]),
-                      s["fittings"], int(s["fitting_count"]),
+                      tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
                       bool(s.get("lined", False)), s.get("liner_material", "FEP"),
                       float(s.get("liner_thickness_mm", 1.0)))
                      for s in rb["segments"]],
