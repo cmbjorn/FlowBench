@@ -4,6 +4,7 @@ Generates a Word (.docx) calculation report from multiphase hydraulics engine re
 """
 from io import BytesIO
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
 
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
@@ -15,6 +16,24 @@ from docx.oxml import OxmlElement
 _HDR_BG = "2563EB"
 _HDR_FG = RGBColor(0xFF, 0xFF, 0xFF)
 _ALT_BG = "F1F5F9"
+
+_IMG_TIMEOUT = 20  # seconds before giving up on kaleido
+
+
+def _fig_to_png(fig, width=900, height=400, scale=2):
+    """Render a Plotly figure to PNG bytes with a hard timeout.
+    Returns bytes on success, None if kaleido hangs or fails.
+    Kaleido can deadlock when called from a Streamlit run thread;
+    running it in a separate thread lets us abort cleanly.
+    """
+    import plotly.io as pio
+    try:
+        with ThreadPoolExecutor(max_workers=1) as _ex:
+            _fut = _ex.submit(pio.to_image, fig,
+                              format="png", width=width, height=height, scale=scale)
+            return _fut.result(timeout=_IMG_TIMEOUT)
+    except (_FuturesTimeout, Exception):
+        return None
 
 
 def _shd(cell, fill_hex):
@@ -240,29 +259,25 @@ def generate_report(
 
     # ── 6. Visualisations ────────────────────────────────────────────────────
     if fig_sch is not None or fig_prof is not None:
-        try:
-            import plotly.io as pio
+        doc.add_page_break()
+        doc.add_heading("6. Visualisations", level=1)
 
-            doc.add_page_break()
-            doc.add_heading("6. Visualisations", level=1)
-
-            if fig_sch is not None:
-                doc.add_heading("Pipeline Schematic", level=2)
-                img = pio.to_image(fig_sch, format="png", width=900, height=520, scale=2)
+        if fig_sch is not None:
+            doc.add_heading("Pipeline Schematic", level=2)
+            img = _fig_to_png(fig_sch, width=900, height=520, scale=2)
+            if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
-                doc.add_paragraph()
+            else:
+                doc.add_paragraph("(chart rendering timed out — export without kaleido)")
+            doc.add_paragraph()
 
-            if fig_prof is not None:
-                doc.add_heading("Pressure Profile", level=2)
-                img = pio.to_image(fig_prof, format="png", width=900, height=400, scale=2)
+        if fig_prof is not None:
+            doc.add_heading("Pressure Profile", level=2)
+            img = _fig_to_png(fig_prof, width=900, height=400, scale=2)
+            if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
-
-        except Exception:
-            p = doc.add_paragraph(
-                "Chart images could not be embedded (kaleido renderer error)."
-            )
-            if p.runs:
-                p.runs[0].font.size = Pt(9)
+            else:
+                doc.add_paragraph("(chart rendering timed out — export without kaleido)")
 
     # ── Disclaimer ───────────────────────────────────────────────────────────
     doc.add_paragraph()
@@ -507,23 +522,23 @@ def generate_comparison_report(
 
     # ── 7. Visualisations ────────────────────────────────────────────────────
     if fig_cmp is not None or fig_bar is not None:
-        try:
-            import plotly.io as pio
-            doc.add_page_break()
-            doc.add_heading("7. Visualisations", level=1)
-            if fig_cmp is not None:
-                doc.add_heading("Pressure Profiles — Case A vs B", level=2)
-                img = pio.to_image(fig_cmp, format="png", width=900, height=400, scale=2)
+        doc.add_page_break()
+        doc.add_heading("7. Visualisations", level=1)
+        if fig_cmp is not None:
+            doc.add_heading("Pressure Profiles — Case A vs B", level=2)
+            img = _fig_to_png(fig_cmp, width=900, height=400, scale=2)
+            if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
-                doc.add_paragraph()
-            if fig_bar is not None:
-                doc.add_heading("ΔP by Segment — Case A vs B", level=2)
-                img = pio.to_image(fig_bar, format="png", width=900, height=340, scale=2)
+            else:
+                doc.add_paragraph("(chart rendering timed out)")
+            doc.add_paragraph()
+        if fig_bar is not None:
+            doc.add_heading("ΔP by Segment — Case A vs B", level=2)
+            img = _fig_to_png(fig_bar, width=900, height=340, scale=2)
+            if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
-        except Exception:
-            p = doc.add_paragraph("Chart images could not be embedded (kaleido renderer error).")
-            if p.runs:
-                p.runs[0].font.size = Pt(9)
+            else:
+                doc.add_paragraph("(chart rendering timed out)")
 
     # ── 8. Method Sensitivity Analysis ───────────────────────────────────────
     if sensitivity_data is not None:
@@ -650,14 +665,11 @@ def generate_comparison_report(
 
         # Chart
         if _fig_s is not None:
-            try:
-                import plotly.io as pio
-                _img_s = pio.to_image(_fig_s, format="png", width=900, height=480, scale=2)
+            _img_s = _fig_to_png(_fig_s, width=900, height=480, scale=2)
+            if _img_s:
                 doc.add_picture(BytesIO(_img_s), width=Inches(6.2))
-            except Exception:
-                _p = doc.add_paragraph("Sensitivity chart could not be embedded.")
-                if _p.runs:
-                    _p.runs[0].font.size = Pt(9)
+            else:
+                doc.add_paragraph("(sensitivity chart rendering timed out)")
 
     # ── Disclaimer ───────────────────────────────────────────────────────────
     doc.add_paragraph()
@@ -912,41 +924,46 @@ def generate_combined_report(
     _has_figs = (fig_cmp is not None or fig_bar is not None
                  or any(c.get("fig_sch") or c.get("fig_prof") for c in cases))
     if _has_figs:
-        try:
-            import plotly.io as pio
-            doc.add_page_break()
-            _h1("Visualisations")
+        doc.add_page_break()
+        _h1("Visualisations")
 
-            if fig_cmp is not None:
-                doc.add_heading("Pressure Profiles — A vs B", level=2)
-                img = pio.to_image(fig_cmp, format="png", width=900, height=400, scale=2)
+        if fig_cmp is not None:
+            doc.add_heading("Pressure Profiles — A vs B", level=2)
+            img = _fig_to_png(fig_cmp, width=900, height=400, scale=2)
+            if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
-                doc.add_paragraph()
+            else:
+                doc.add_paragraph("(chart rendering timed out)")
+            doc.add_paragraph()
 
-            if fig_bar is not None:
-                doc.add_heading("ΔP by Segment — A vs B", level=2)
-                img = pio.to_image(fig_bar, format="png", width=900, height=340, scale=2)
+        if fig_bar is not None:
+            doc.add_heading("ΔP by Segment — A vs B", level=2)
+            img = _fig_to_png(fig_bar, width=900, height=340, scale=2)
+            if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
+            else:
+                doc.add_paragraph("(chart rendering timed out)")
+            doc.add_paragraph()
+
+        for c, lbl in zip(cases, case_labels):
+            _fs = c.get("fig_sch")
+            _fp = c.get("fig_prof")
+            if _fs is not None or _fp is not None:
+                doc.add_heading(f"{lbl} — Pipeline", level=2)
+            if _fs is not None:
+                img = _fig_to_png(_fs, width=900, height=440, scale=2)
+                if img:
+                    doc.add_picture(BytesIO(img), width=Inches(6.2))
+                else:
+                    doc.add_paragraph("(chart rendering timed out)")
                 doc.add_paragraph()
-
-            for c, lbl in zip(cases, case_labels):
-                _fs = c.get("fig_sch")
-                _fp = c.get("fig_prof")
-                if _fs is not None or _fp is not None:
-                    doc.add_heading(f"{lbl} — Pipeline", level=2)
-                if _fs is not None:
-                    img = pio.to_image(_fs, format="png", width=900, height=440, scale=2)
+            if _fp is not None:
+                img = _fig_to_png(_fp, width=900, height=320, scale=2)
+                if img:
                     doc.add_picture(BytesIO(img), width=Inches(6.2))
-                    doc.add_paragraph()
-                if _fp is not None:
-                    img = pio.to_image(_fp, format="png", width=900, height=320, scale=2)
-                    doc.add_picture(BytesIO(img), width=Inches(6.2))
-                    doc.add_paragraph()
-
-        except Exception:
-            p = doc.add_paragraph("Chart images could not be embedded (kaleido renderer error).")
-            if p.runs:
-                p.runs[0].font.size = Pt(9)
+                else:
+                    doc.add_paragraph("(chart rendering timed out)")
+                doc.add_paragraph()
 
     # ── Sensitivity Analysis ──────────────────────────────────────────────────
     if sensitivity_data is not None:
@@ -1005,12 +1022,11 @@ def generate_combined_report(
         doc.add_paragraph()
 
         if _fig_s is not None:
-            try:
-                import plotly.io as pio
-                _img_s = pio.to_image(_fig_s, format="png", width=900, height=480, scale=2)
+            _img_s = _fig_to_png(_fig_s, width=900, height=480, scale=2)
+            if _img_s:
                 doc.add_picture(BytesIO(_img_s), width=Inches(6.2))
-            except Exception:
-                pass
+            else:
+                doc.add_paragraph("(sensitivity chart rendering timed out)")
 
     # ── Disclaimer ───────────────────────────────────────────────────────────
     doc.add_paragraph()
