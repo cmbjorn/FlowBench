@@ -1,7 +1,13 @@
 # multiphase_engine.py
 import numpy as np
 import CoolProp.CoolProp as CP
-from fluids.two_phase import Beggs_Brill
+from fluids.two_phase import (
+    Beggs_Brill, two_phase_dP, two_phase_dP_dz_gravitational,
+    Taitel_Dukler_regime, Mandhane_Gregory_Aziz_regime,
+)
+from fluids.two_phase_voidage import liquid_gas_voidage
+
+_g = 9.80665
 
 # ============================================================================
 # 1. INDUSTRIAL STANDARDS DATABASE
@@ -60,29 +66,56 @@ FITTING_Le_over_D = {
 }
 
 # ============================================================================
-# 2. GAS SPECIES DATABASE
+# 2. CALCULATION METHOD REGISTRIES
+# ============================================================================
+# Subset of fluids.two_phase correlations that work with our available inputs
+# (rhog, mul, mug, sigma all present).  Method strings must match the keys in
+# fluids.two_phase.two_phase_correlations exactly.
+TWO_PHASE_CORRELATIONS = [
+    "Beggs-Brill",
+    "Friedel",
+    "Lockhart_Martinelli",
+    "Muller_Steinhagen_Heck",
+    "Chisholm",
+    "Kim_Mudawar",
+]
+
+# Void fraction models offered in the UI.
+VOIDAGE_METHODS = [
+    "Homogeneous",
+    "Rouhani-1 (slip)",
+]
+
+# ============================================================================
+# 3. GAS SPECIES DATABASE
 # ============================================================================
 # MW in kg/mol; coolprop_id used for CoolProp viscosity lookup; mu_ref is
 # a temperature-independent fallback (Pa·s).
 GAS_SPECIES = {
-    "H₂":     {"MW": 2.016e-3,   "coolprop_id": "Hydrogen",  "mu_ref": 8.9e-6},
-    "O₂":     {"MW": 31.998e-3,  "coolprop_id": "Oxygen",    "mu_ref": 20.4e-6},
-    "N₂":     {"MW": 28.014e-3,  "coolprop_id": "Nitrogen",  "mu_ref": 17.8e-6},
-    "Air":    {"MW": 28.97e-3,   "coolprop_id": None,        "mu_ref": 18.5e-6},
-    "Custom": {"MW": None,        "coolprop_id": None,        "mu_ref": None},
+    "H₂":     {"MW": 2.016e-3,   "coolprop_id": "Hydrogen",       "mu_ref": 8.9e-6},
+    "O₂":     {"MW": 31.998e-3,  "coolprop_id": "Oxygen",         "mu_ref": 20.4e-6},
+    "N₂":     {"MW": 28.014e-3,  "coolprop_id": "Nitrogen",       "mu_ref": 17.8e-6},
+    "CO₂":    {"MW": 44.010e-3,  "coolprop_id": "CarbonDioxide",  "mu_ref": 15.0e-6},
+    "CH₄":    {"MW": 16.043e-3,  "coolprop_id": "Methane",        "mu_ref": 11.1e-6},
+    "Ar":     {"MW": 39.948e-3,  "coolprop_id": "Argon",          "mu_ref": 22.6e-6},
+    "He":     {"MW": 4.003e-3,   "coolprop_id": "Helium",         "mu_ref": 19.7e-6},
+    "Air":    {"MW": 28.97e-3,   "coolprop_id": None,             "mu_ref": 18.5e-6},
+    "Custom": {"MW": None,        "coolprop_id": None,             "mu_ref": None},
 }
 
 # ============================================================================
 # 3. LIQUID PHASE DATABASE
 # ============================================================================
 
-LIQUID_PHASES = ["KOH 30 wt%", "KOH 15 wt%", "Water", "Custom"]
+LIQUID_PHASES = ["KOH 30 wt%", "KOH 15 wt%", "Water", "Methanol", "Ethanol", "Custom"]
 
 # Aqueous liquids add H₂O vapour to the gas phase via Dalton's Law.
 LIQUID_AQUEOUS = {
     "KOH 30 wt%": True,
     "KOH 15 wt%": True,
     "Water":       True,
+    "Methanol":    False,
+    "Ethanol":     False,
     "Custom":      False,
 }
 
@@ -139,24 +172,38 @@ def koh15_surface_tension_nm(T_C):
 
 
 # ============================================================================
-# 3C. WATER PROPERTIES (via CoolProp) AND GAS VISCOSITY HELPER
+# 3C. LIQUID PROPERTIES VIA COOLPROP AND GAS VISCOSITY HELPER
 # ============================================================================
 
-def _water_properties(T_C, P_bara):
-    """Density (kg/m³), dynamic viscosity (Pa·s), surface tension (N/m) for water."""
-    T_K = T_C + 273.15
+# CoolProp fluid ID and surface-tension fallback (N/m) for each supported liquid.
+_COOLPROP_LIQUID = {
+    "Water":    ("Water",    0.072),
+    "Methanol": ("Methanol", 0.022),
+    "Ethanol":  ("Ethanol",  0.022),
+}
+
+
+def _coolprop_liquid_properties(liquid_type, T_C, P_bara):
+    """Density (kg/m³), dynamic viscosity (Pa·s), surface tension (N/m) via CoolProp."""
+    fluid, sigma_fallback = _COOLPROP_LIQUID[liquid_type]
+    T_K  = T_C + 273.15
     P_pa = P_bara * 1e5
     try:
-        rho = CP.PropsSI('D', 'T', T_K, 'P', P_pa, 'Water')
-        mu  = CP.PropsSI('V', 'T', T_K, 'P', P_pa, 'Water')
+        rho = CP.PropsSI('D', 'T', T_K, 'P', P_pa, fluid)
+        mu  = CP.PropsSI('V', 'T', T_K, 'P', P_pa, fluid)
     except Exception:
-        rho = max(800.0, 1000.0 - 0.4 * (T_C - 20.0))
-        mu  = max(2e-4, 1.002e-3 * np.exp(-0.02 * (T_C - 20.0)))
+        rho = 800.0
+        mu  = 1e-3
     try:
-        sigma = CP.PropsSI('surface_tension', 'T', T_K, 'Q', 0, 'Water')
+        sigma = CP.PropsSI('surface_tension', 'T', T_K, 'Q', 0, fluid)
     except Exception:
-        sigma = max(0.040, 0.0728 - 0.000166 * T_C)
+        sigma = sigma_fallback
     return rho, mu, sigma
+
+
+def _water_properties(T_C, P_bara):
+    """Kept for back-compatibility; delegates to the generic helper."""
+    return _coolprop_liquid_properties("Water", T_C, P_bara)
 
 
 def _get_species_viscosity(species, T_K, P_pa):
@@ -200,8 +247,8 @@ def calculate_two_phase_properties(
         rho_l = koh15_density_kgm3(T_C)
         mu_l  = koh15_viscosity_pas(T_C)
         sigma = koh15_surface_tension_nm(T_C)
-    elif liquid_type == "Water":
-        rho_l, mu_l, sigma = _water_properties(T_C, P_bara)
+    elif liquid_type in _COOLPROP_LIQUID:   # Water, Methanol, Ethanol
+        rho_l, mu_l, sigma = _coolprop_liquid_properties(liquid_type, T_C, P_bara)
     else:  # Custom
         cl    = custom_liquid or {}
         rho_l = cl.get("rho_kgm3", 1000.0)
@@ -339,58 +386,260 @@ def validate_input_bounds(P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h):
 # 5. PRESSURE DROP SOLVER
 # ============================================================================
 
-def calculate_segment_pressure_drop(props, D_inner, roughness, L_eff, angle_rad):
+def _classify_regime(m, x, rhol, rhog, mul, mug, sigma, alpha, D, roughness, angle_deg):
     """
-    Pressure drop across one pipe segment — Beggs & Brill (1973) correlation.
+    Automatic flow regime classification — method selected by pipe orientation.
+
+    |θ| ≤ 15°  Horizontal / near-horizontal
+        Taitel & Dukler (1976) primary + Mandhane, Gregory & Aziz (1974) secondary.
+        Returns "<T-D regime> / <MGA regime>".
+
+    |θ| ≥ 75°  Vertical
+        Upflow   — Wallis/Taitel (1980) annular-onset criterion plus void-fraction
+                   thresholds for bubble / slug / churn transitions.
+        Downflow — Wallis annular criterion; otherwise falling film / slug.
+        Gas-dominated (x > 0.90) → mist / annular.
+
+    15° < |θ| < 75°  Inclined
+        Taitel-Dukler called at θ = 0 (X-parameter is angle-independent);
+        result labelled "(inclined)".  No validated library method exists here.
+    """
+    A   = 0.25 * np.pi * D ** 2
+    Vsg = (x * m / rhog) / A         if rhog > 0 else 0.0
+    abs_ang = abs(angle_deg)
+
+    # ── Horizontal / near-horizontal ─────────────────────────────────────────
+    if abs_ang <= 15.0:
+        try:
+            td  = Taitel_Dukler_regime(
+                m=m, x=x, rhol=rhol, rhog=rhog, mul=mul, mug=mug,
+                D=D, angle=angle_deg, roughness=roughness)[0]
+            mga = Mandhane_Gregory_Aziz_regime(
+                m=m, x=x, rhol=rhol, rhog=rhog, mul=mul, mug=mug,
+                sigma=sigma, D=D)[0]
+            return f"{td} / {mga}"
+        except Exception:
+            return "intermittent / slug"          # safe fallback
+
+    # ── Vertical ─────────────────────────────────────────────────────────────
+    elif abs_ang >= 75.0:
+        try:
+            V_ann = 3.1 * (_g * sigma * (rhol - rhog) / rhog ** 2) ** 0.25
+        except Exception:
+            V_ann = 1e9
+        if angle_deg > 0:                         # upflow
+            if x > 0.90:
+                return "mist / annular"
+            if Vsg >= V_ann:
+                return "annular"
+            if alpha >= 0.52:
+                return "churn"
+            if alpha >= 0.25:
+                return "slug"
+            return "bubble"
+        else:                                      # downflow
+            if x > 0.90:
+                return "falling film"
+            if Vsg >= V_ann:
+                return "falling film / annular"
+            return "falling film / slug"
+
+    # ── Inclined ─────────────────────────────────────────────────────────────
+    else:
+        try:
+            td = Taitel_Dukler_regime(
+                m=m, x=x, rhol=rhol, rhog=rhog, mul=mul, mug=mug,
+                D=D, angle=0.0, roughness=roughness)[0]
+            return f"{td} (inclined)"
+        except Exception:
+            return "intermittent (inclined)"
+
+def calculate_segment_pressure_drop(
+    props, D_inner, roughness, L_eff, angle_rad,
+    correlation="Beggs-Brill",
+    voidage_method="Homogeneous",
+):
+    """
+    Pressure drop across one pipe segment with ΔP decomposition.
 
     Args:
-        props:      dict from calculate_two_phase_properties()
-        D_inner:    effective inner diameter (m), after liner if applicable
-        roughness:  absolute roughness (m)
-        L_eff:      effective length including fittings (m)
-        angle_rad:  inclination (0 = horizontal, π/2 = vertical up)
+        props:          dict from calculate_two_phase_properties()
+        D_inner:        effective inner diameter (m), after liner if applicable
+        roughness:      absolute roughness (m)
+        L_eff:          effective length including minor losses (m)
+        angle_rad:      inclination (0 = horizontal, +π/2 = vertical up)
+        correlation:    one of TWO_PHASE_CORRELATIONS
+        voidage_method: one of VOIDAGE_METHODS
 
     Returns:
-        tuple: (dP_Pa, flow_regime, dP_per_dz, Vsg, Vsl)
+        dict with keys: dP_Pa, dP_fric_Pa, dP_grav_Pa, dP_accel_Pa,
+                        regime, dP_per_dz, Vsg, Vsl, alpha
     """
+    _err_result = lambda msg: {
+        "dP_Pa": 0.0, "dP_fric_Pa": 0.0, "dP_grav_Pa": 0.0, "dP_accel_Pa": 0.0,
+        "regime": msg, "dP_per_dz": 0.0, "Vsg": 0.0, "Vsl": 0.0,
+        "alpha": props.get("alpha", 0.0),
+    }
     try:
-        dP_Pa = Beggs_Brill(
-            m=props["m_total_kgs"],
-            x=props["x_gas"],
-            rhol=props["rho_l"],
-            rhog=props["rho_g"],
-            mul=props["mu_l"],
-            mug=props["mu_g"],
-            sigma=props["sigma"],
-            P=props["P_pa"],
-            D=D_inner,
-            angle=np.degrees(angle_rad),
-            roughness=roughness,
-            L=L_eff,
+        m     = props["m_total_kgs"]
+        x     = props["x_gas"]
+        rhol  = props["rho_l"]
+        rhog  = props["rho_g"]
+        mul   = props["mu_l"]
+        mug   = props["mu_g"]
+        sigma = props["sigma"]
+        P_pa  = props["P_pa"]
+
+        angle_deg = np.degrees(angle_rad)
+        A_cs = 0.25 * np.pi * D_inner ** 2
+        Vsg  = (x * m / rhog) / A_cs       if rhog > 0 else 0.0
+        Vsl  = ((1.0 - x) * m / rhol) / A_cs if rhol > 0 else 0.0
+
+        # ── Void fraction ─────────────────────────────────────────────────────
+        if voidage_method == "Rouhani-1 (slip)" and 0 < x < 1:
+            try:
+                alpha = float(liquid_gas_voidage(
+                    x=x, rhol=rhol, rhog=rhog,
+                    D=D_inner, m=m, sigma=sigma,
+                    Method="Rouhani 1",
+                ))
+                alpha = max(0.0, min(1.0, alpha))
+            except Exception:
+                alpha = props["alpha"]
+        else:
+            alpha = props["alpha"]
+
+        # ── Gravitational component (can be negative for downflow) ────────────
+        dP_grav_Pa = two_phase_dP_dz_gravitational(
+            angle=angle_deg, alpha=alpha, rhol=rhol, rhog=rhog,
+        ) * L_eff
+
+        # ── Frictional component + total ─────────────────────────────────────
+        if correlation == "Beggs-Brill":
+            # Use direct Beggs_Brill for total (gravity already included).
+            dP_total = Beggs_Brill(
+                m=m, x=x, rhol=rhol, rhog=rhog,
+                mul=mul, mug=mug, sigma=sigma, P=P_pa,
+                D=D_inner, angle=angle_deg, roughness=roughness, L=L_eff,
+            )
+            # Friction-only: same correlation at horizontal (angle=0).
+            dP_fric_Pa = Beggs_Brill(
+                m=m, x=x, rhol=rhol, rhog=rhog,
+                mul=mul, mug=mug, sigma=sigma, P=P_pa,
+                D=D_inner, angle=0.0, roughness=roughness, L=L_eff,
+            )
+            # Acceleration is the residual (includes B&B inclination correction).
+            dP_accel_Pa = dP_total - dP_fric_Pa - dP_grav_Pa
+        else:
+            # Other correlations: two_phase_dP is friction-only by design.
+            dP_fric_Pa = two_phase_dP(
+                m=m, x=x, rhol=rhol, rhog=rhog,
+                mul=mul, mug=mug, sigma=sigma,
+                D=D_inner, L=L_eff, roughness=roughness,
+                Method=correlation,
+            )
+            dP_total    = dP_fric_Pa + dP_grav_Pa
+            dP_accel_Pa = 0.0  # negligible for subsonic adiabatic flow
+
+        dP_per_dz = dP_total / L_eff if L_eff > 0 else 0.0
+
+        # ── Flow regime — automatic method selection by orientation ──────────
+        regime = _classify_regime(
+            m=m, x=x, rhol=rhol, rhog=rhog, mul=mul, mug=mug,
+            sigma=sigma, alpha=alpha, D=D_inner, roughness=roughness,
+            angle_deg=angle_deg,
         )
 
-        dP_per_dz = dP_Pa / L_eff if L_eff > 0 else 0.0
-        A_cs = 0.25 * np.pi * D_inner ** 2
-        Vsg = ((props["x_gas"] * props["m_total_kgs"]) / props["rho_g"]) / A_cs \
-              if props["rho_g"] > 0 else 0.0
-        Vsl = (((1.0 - props["x_gas"]) * props["m_total_kgs"]) / props["rho_l"]) / A_cs \
-              if props["rho_l"] > 0 else 0.0
-
-        if abs(angle_rad) < 1e-9:
-            regime = ("Stratified" if Vsg < 1.0
-                      else "Intermittent (Slug)" if Vsg < 5.0
-                      else "Annular/Dispersed")
-        elif angle_rad > 0:
-            regime = "Bubble/Slug" if Vsg < 3.0 else "Churn/Annular"
-        else:
-            regime = "Falling Film" if Vsl > 2.0 else "Annular"
-
-        return dP_Pa, regime, dP_per_dz, Vsg, Vsl
+        return {
+            "dP_Pa":       dP_total,
+            "dP_fric_Pa":  dP_fric_Pa,
+            "dP_grav_Pa":  dP_grav_Pa,
+            "dP_accel_Pa": dP_accel_Pa,
+            "regime":      regime,
+            "dP_per_dz":   dP_per_dz,
+            "Vsg":         Vsg,
+            "Vsl":         Vsl,
+            "alpha":       alpha,
+        }
 
     except Exception as e:
         import warnings as _w
-        _w.warn(f"Beggs-Brill error: {str(e)[:60]}")
-        return 0.0, f"Calc Error: {str(e)[:40]}", 0.0, 0.0, 0.0
+        _w.warn(f"Pressure drop error ({correlation}): {str(e)[:80]}")
+        return _err_result(f"Error ({correlation[:12]}): {str(e)[:30]}")
+
+
+# ============================================================================
+# 5A. SENSITIVITY ANALYSIS — all correlation × void-fraction combinations
+# ============================================================================
+
+def run_sensitivity(
+    P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h, segments,
+    custom_gas=None, custom_liquid=None,
+):
+    """
+    Run all 12 combinations (6 correlations × 2 void-fraction models) and
+    return the total ΔP for each using pressure marching.
+
+    Returns list of dicts — one per combination, ordered as in TWO_PHASE_CORRELATIONS
+    (outer) × VOIDAGE_METHODS (inner):
+        label        str   e.g. "Beggs-Brill / Homogeneous"
+        correlation  str   key in TWO_PHASE_CORRELATIONS
+        voidage      str   key in VOIDAGE_METHODS
+        total_dp_kpa float   None if convergence failed
+        ok           bool
+        error        str | None
+    """
+    results = []
+    for corr in TWO_PHASE_CORRELATIONS:
+        for void in VOIDAGE_METHODS:
+            try:
+                current_P   = P_bara * 1e5
+                total_dp    = 0.0
+                seg_regimes = []
+                for seg in segments:
+                    D_seg     = PIPE_DATABASE[seg["dn"]][seg["pn"]]
+                    lined     = seg.get("lined", False)
+                    lthk_m    = seg.get("liner_thickness_mm", 1.0) / 1000.0
+                    lmat      = seg.get("liner_material", "FEP")
+                    D_eff     = D_seg - 2 * lthk_m if lined else D_seg
+                    roughness = (LINER_ROUGHNESS[lmat] if lined
+                                 else MATERIAL_ROUGHNESS[seg.get("material", "SS316L")])
+                    props_seg = calculate_two_phase_properties(
+                        current_P / 1e5, T_C, gas_flows_kgh, liquid_type, q_lye_m3h,
+                        custom_gas=custom_gas, custom_liquid=custom_liquid)
+                    angle  = {"Horizontal":        0.0,
+                              "Vertical Upflow":   np.pi / 2.0,
+                              "Vertical Downflow": -np.pi / 2.0}[seg["type"]]
+                    le_fit = 0.0
+                    if seg["fittings"] in FITTING_Le_over_D:
+                        le_fit = FITTING_Le_over_D[seg["fittings"]] * D_eff * seg["fitting_count"]
+                    L_eff  = seg["length"] + le_fit
+                    res    = calculate_segment_pressure_drop(
+                        props_seg, D_eff, roughness, L_eff, angle,
+                        correlation=corr, voidage_method=void)
+                    total_dp  += res["dP_Pa"]
+                    current_P -= res["dP_Pa"]
+                    seg_regimes.append(res["regime"])
+                results.append({
+                    "label":           f"{corr} / {void}",
+                    "correlation":     corr,
+                    "voidage":         void,
+                    "total_dp_kpa":    total_dp / 1000.0,
+                    "segment_regimes": seg_regimes,
+                    "ok":              True,
+                    "error":           None,
+                })
+            except Exception as exc:
+                results.append({
+                    "label":           f"{corr} / {void}",
+                    "correlation":     corr,
+                    "voidage":         void,
+                    "total_dp_kpa":    None,
+                    "segment_regimes": [],
+                    "ok":              False,
+                    "error":           str(exc)[:80],
+                })
+    return results
 
 
 # ============================================================================
