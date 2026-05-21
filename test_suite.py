@@ -354,6 +354,150 @@ def test_report_generator():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 7. Header goal-seek (two-arm collecting manifold)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_arm_seg(dn, length, h2_kgh, q_lye):
+    return {
+        "type": "Horizontal", "dn": dn, "pn": "PN40", "material": "SS316L",
+        "length": length, "fittings": "None", "fitting_count": 0,
+        "lined": False, "liner_material": "FEP", "liner_thickness_mm": 1.0,
+        "branch_gas_kgh": {"H₂": h2_kgh},
+        "branch_q_lye": q_lye,
+    }
+
+
+def _march_header_arm_local(segs, P_start_Pa, T_C, liquid_type, corr, void):
+    """Local copy of _march_header_arm — mirrors app.py logic."""
+    current_P   = P_start_Pa
+    total_dp    = 0.0
+    running_gas = {}
+    running_q   = 0.0
+
+    for seg in segs:
+        for sp, kg_h in seg.get("branch_gas_kgh", {}).items():
+            if kg_h > 0:
+                running_gas[sp] = running_gas.get(sp, 0.0) + kg_h
+        running_q += seg.get("branch_q_lye", 0.0)
+
+        if not running_gas or running_q <= 0.0:
+            continue
+
+        D_seg  = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
+        D_eff  = D_seg
+        rough  = engine.MATERIAL_ROUGHNESS["SS316L"]
+        angle  = 0.0
+        le_fit = 0.0
+
+        props_seg = engine.calculate_two_phase_properties(
+            current_P / 1e5, T_C, running_gas, liquid_type, running_q)
+        seg_res = engine.calculate_segment_pressure_drop(
+            props_seg, D_eff, rough, seg["length"] + le_fit, angle,
+            correlation=corr, voidage_method=void)
+
+        total_dp  += seg_res["dP_Pa"]
+        current_P  = max(1e4, current_P - seg_res["dP_Pa"])
+
+    return total_dp, current_P
+
+
+def test_header_goal_seek():
+    print("\n── 7. Header goal-seek (two-arm collecting manifold) ───────────────")
+
+    corr = engine.TWO_PHASE_CORRELATIONS[0]
+    void = engine.VOIDAGE_METHODS[0]
+    T_C  = 60.0
+    liq  = "KOH 30 wt%"
+
+    # Left arm: 2 segments, each with a branch tapping in H₂ + lye
+    left_segs = [
+        _make_arm_seg("DN100", 3.0, h2_kgh=5.0, q_lye=2.5),
+        _make_arm_seg("DN100", 3.0, h2_kgh=5.0, q_lye=2.5),
+    ]
+    # Right arm: 2 segments, symmetric
+    right_segs = [
+        _make_arm_seg("DN100", 3.0, h2_kgh=5.0, q_lye=2.5),
+        _make_arm_seg("DN100", 3.0, h2_kgh=5.0, q_lye=2.5),
+    ]
+
+    # Branch pipes (Cases A and B)
+    seg_ab = {
+        "type": "Vertical Upflow", "dn": "DN80", "pn": "PN25", "material": "SS316L",
+        "length": 20.0, "fittings": "None", "fitting_count": 0,
+        "lined": False, "liner_material": "FEP", "liner_thickness_mm": 1.0,
+    }
+    res_ab_base = {
+        "T_C": T_C, "gas_flows_kgh": {"H₂": 5.0},
+        "liquid_type": liq, "q_lye": 2.5,
+        "correlation": corr, "voidage_method": void,
+        "segments": [seg_ab],
+    }
+
+    # Stub res_c as a header dict (mirrors run_header_case return)
+    # total_dp_kpa is used only for the initial estimate seed
+    def _dp_of_arm(segs, P_bara):
+        dp_Pa, P_T, *_ = _march_header_arm_local(segs, P_bara * 1e5, T_C, liq, corr, void)
+        return dp_Pa / 1000.0
+
+    dp0_l = _dp_of_arm(left_segs,  30.0)
+    dp0_r = _dp_of_arm(right_segs, 30.0)
+
+    res_c = {
+        "T_C": T_C, "liquid_type": liq,
+        "correlation": corr, "voidage_method": void,
+        "left_segs": left_segs, "right_segs": right_segs,
+        "total_dp_kpa": max(dp0_l, dp0_r),
+        "P_bara": 30.0,
+    }
+
+    # Calculate initial ΔPs for branches to seed goal-seek
+    dp_ab_0, _ = _calc_dp_at_p_local(res_ab_base, 30.0)
+    res_a = {**res_ab_base, "total_dp_kpa": dp_ab_0}
+    res_b = {**res_ab_base, "total_dp_kpa": dp_ab_0}
+
+    P_target = 25.0  # bara — target at worst branch outlet
+
+    # Run goal-seek manually (mirrors _goal_seek_inlet in app.py)
+    _is_header = "left_segs" in res_c
+    _check("res_c detected as header", float(_is_header), 1.0, tol_abs=1e-9)
+
+    P_c_in = P_target + max(res_a["total_dp_kpa"], res_b["total_dp_kpa"]) / 100.0 \
+             + res_c["total_dp_kpa"] / 100.0
+
+    tol = 0.0005
+    converged = False
+    worst_out = 0.0
+    for i in range(25):
+        # Header arm march
+        dp_l_Pa, P_T_l, *_ = _march_header_arm_local(left_segs,  P_c_in * 1e5, T_C, liq, corr, void)
+        dp_r_Pa, P_T_r, *_ = _march_header_arm_local(right_segs, P_c_in * 1e5, T_C, liq, corr, void)
+        if dp_l_Pa >= dp_r_Pa:
+            dp_c, P_c_out = dp_l_Pa / 1000.0, P_T_l / 1e5
+        else:
+            dp_c, P_c_out = dp_r_Pa / 1000.0, P_T_r / 1e5
+
+        dp_a, P_a_out = _calc_dp_at_p_local(res_a, P_c_out)
+        dp_b, P_b_out = _calc_dp_at_p_local(res_b, P_c_out)
+        worst_out = min(P_a_out, P_b_out)
+        error = worst_out - P_target
+        if abs(error) < tol:
+            converged = True
+            break
+        P_c_in -= error
+
+    _check("Header goal-seek converges", float(converged), 1.0, tol_abs=1e-9)
+    _check(f"Worst outlet ≈ target {P_target} bara",
+           abs(worst_out - P_target), 0.0, tol_abs=tol)
+    _check("T-junction pressure < branch inlet pressure",
+           float(P_c_out < P_c_in), 1.0, tol_abs=1e-9)
+    _check("Arms are symmetric → same T-junction pressure from both",
+           abs(P_T_l - P_T_r), 0.0, tol_abs=0.5)  # within 0.5 Pa for symmetric arms
+    print(f"         converged in {i+1} iterations, "
+          f"C_in={P_c_in:.4f} bara, T-junction={P_c_out:.4f} bara, "
+          f"worst_out={worst_out:.4f} bara")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -363,6 +507,7 @@ if __name__ == "__main__":
     test_pressure_clamping()
     test_goal_seek()
     test_sensitivity()
+    test_header_goal_seek()
     test_report_generator()
 
     total = _results["pass"] + _results["fail"] + _results["warn"]
