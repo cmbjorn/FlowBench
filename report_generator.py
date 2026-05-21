@@ -1,6 +1,6 @@
 # report_generator.py
 """
-Generates a Word (.docx) calculation report from multiphase hydraulics engine results.
+Generates a Word (.docx) calculation report from multiphase hydraulics calculation results.
 """
 from io import BytesIO
 from datetime import datetime

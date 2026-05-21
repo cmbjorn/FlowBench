@@ -10,7 +10,7 @@ import hashlib
 import json
 
 st.set_page_config(
-    page_title="Multiphase Hydraulic Engine",
+    page_title="Multiphase Hydraulic Calculator",
     page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -36,7 +36,7 @@ hr { margin: 0.5rem 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Multiphase Pipe Hydraulic Engine")
+st.title("Multiphase Pipe Hydraulic Calculator")
 st.caption("Two-phase pressure drop · Six correlations · Generic gas + liquid · Steady-state")
 
 with st.expander("About this calculator", expanded=False):
