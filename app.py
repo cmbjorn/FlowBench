@@ -222,18 +222,6 @@ _DEFAULT_SEGMENTS = [
 _VALID_MATS   = set(engine.MATERIAL_ROUGHNESS.keys())
 _VALID_LINERS = set(engine.LINER_ROUGHNESS.keys())
 
-# Default arm segments for Case C — collecting manifold
-def _arm_seg(dn="DN100", length=2.5):
-    return {
-        "type": "Horizontal", "dn": dn, "pn": "PN40", "material": "SS316L",
-        "length": length, "fittings": "None", "fitting_count": 0,
-        "lined": False, "liner_material": "FEP", "liner_thickness_mm": 1.0,
-        "branch_gas_kgh": {},   # gas flow (kg/h per species) entering from branch at seg inlet
-        "branch_q_lye":   0.0,  # liquid flow (m³/h) entering from branch at seg inlet
-    }
-
-_DEFAULT_LEFT_SEGS  = [_arm_seg() for _ in range(2)]
-_DEFAULT_RIGHT_SEGS = [_arm_seg() for _ in range(2)]
 
 # ============================================================================
 # REGIME COLOUR HELPERS
@@ -1092,58 +1080,57 @@ def _calc_dp_at_p(res, P_bara_override):
     return dp_kpa, outlet_bara
 
 
-def _march_header_arm(segs, P_start_Pa, T_C, liquid_type, correlation, voidage_method):
-    """Pressure-march one arm of a collecting manifold with accumulating branch flows.
-    Returns (total_dp_Pa, P_T_Pa, dp_fric_Pa, dp_grav_Pa, grid_records).
+def _march_header_simple(tap_dists, gas_per_tap, liq_per_tap,
+                          hdr, P_start_Pa, T_C, liquid_type, corr, void):
+    """Pressure-march one header arm from farthest tap to T-junction.
+
+    tap_dists   : list of distances from T (m) for each tap — sorted internally.
+    gas_per_tap : {species: kg/h} for ONE A-line.
+    liq_per_tap : m³/h liquid for ONE A-line.
+    hdr         : dict with dn, pn, material, lined, liner_material,
+                  liner_thickness_mm, fittings, fitting_count.
+    Returns (total_dp_Pa, P_T_Pa, dp_fric_Pa, dp_grav_Pa, records).
     """
+    if not tap_dists or not gas_per_tap or liq_per_tap <= 0:
+        return 0.0, P_start_Pa, 0.0, 0.0, []
+
+    dists = sorted(tap_dists, reverse=True)   # farthest first
+    n     = len(dists)
+    boundaries = dists + [0.0]                # segment endpoints, T at 0
+
+    D_nom  = engine.PIPE_DATABASE[hdr["dn"]][hdr["pn"]]
+    lined  = hdr.get("lined", False)
+    lthk_m = hdr.get("liner_thickness_mm", 1.0) / 1000.0
+    lmat   = hdr.get("liner_material", "FEP")
+    D_eff  = D_nom - 2 * lthk_m if lined else D_nom
+    rough  = (engine.LINER_ROUGHNESS[lmat] if lined
+              else engine.MATERIAL_ROUGHNESS[hdr.get("material", "SS316L")])
+    le_fit = 0.0
+    if hdr.get("fittings") in engine.FITTING_Le_over_D:
+        le_fit = (engine.FITTING_Le_over_D[hdr["fittings"]]
+                  * D_eff * hdr.get("fitting_count", 0))
+
     current_P   = P_start_Pa
-    total_dp    = 0.0
-    dp_fric     = 0.0
-    dp_grav     = 0.0
+    total_dp    = dp_fric = dp_grav = 0.0
     running_gas = {}
-    running_q   = 0.0
+    running_liq = 0.0
     records     = []
 
-    for i, seg in enumerate(segs):
-        # Accumulate branch flow entering at this segment's inlet
-        for sp, kg_h in seg.get("branch_gas_kgh", {}).items():
-            if kg_h > 0:
-                running_gas[sp] = running_gas.get(sp, 0.0) + kg_h
-        running_q += seg.get("branch_q_lye", 0.0)
+    for i in range(n):
+        for sp, kgh in gas_per_tap.items():
+            running_gas[sp] = running_gas.get(sp, 0.0) + kgh
+        running_liq += liq_per_tap
 
-        D_seg  = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
-        lined  = seg.get("lined", False)
-        lthk_m = seg.get("liner_thickness_mm", 1.0) / 1000.0
-        lmat   = seg.get("liner_material", "FEP")
-        D_eff  = D_seg - 2 * lthk_m if lined else D_seg
-        rough  = (engine.LINER_ROUGHNESS[lmat] if lined
-                  else engine.MATERIAL_ROUGHNESS[seg.get("material", "SS316L")])
-        angle  = {"Horizontal": 0.0, "Vertical Upflow": np.pi / 2.0,
-                  "Vertical Downflow": -np.pi / 2.0}[seg["type"]]
-        le_fit = 0.0
-        if seg["fittings"] in engine.FITTING_Le_over_D:
-            le_fit = engine.FITTING_Le_over_D[seg["fittings"]] * D_eff * seg["fitting_count"]
-
-        if not running_gas or running_q <= 0.0:
-            # No flow in this section yet — zero ΔP, record placeholder
-            records.append({
-                "Seg": f"#{i+1}", "Type": seg["type"],
-                "Pipe": f"{seg['dn']}/{seg['pn']}", "ID (mm)": round(D_eff * 1000, 1),
-                "L (m)": seg["length"], "Regime": "—",
-                "ΔP (kPa)": 0.0, "P_in (bara)": round(current_P / 1e5, 4),
-                "P_out (bara)": round(current_P / 1e5, 4),
-                "V_m (m/s)": 0.0, "V_m/V_e": 0.0,
-                "V_sg (m/s)": 0.0, "V_sl (m/s)": 0.0, "V_e (m/s)": 0.0,
-                "ΔP_fric (kPa)": 0.0, "ΔP_grav (kPa)": 0.0, "ΔP_accel (kPa)": 0.0,
-                "Q_gas_kgh": 0.0, "Q_liq_m3h": 0.0,
-            })
+        seg_len = boundaries[i] - boundaries[i + 1]
+        if seg_len <= 1e-6:
             continue
 
+        eff_len = seg_len + le_fit / n    # distribute fittings equally
         props_seg = engine.calculate_two_phase_properties(
-            current_P / 1e5, T_C, running_gas, liquid_type, running_q)
+            current_P / 1e5, T_C, running_gas, liquid_type, running_liq)
         seg_res = engine.calculate_segment_pressure_drop(
-            props_seg, D_eff, rough, seg["length"] + le_fit, angle,
-            correlation=correlation, voidage_method=voidage_method)
+            props_seg, D_eff, rough, eff_len, 0.0,
+            correlation=corr, voidage_method=void)
 
         dP_Pa = seg_res["dP_Pa"]
         end_P = current_P - dP_Pa
@@ -1152,22 +1139,23 @@ def _march_header_arm(segs, P_start_Pa, T_C, liquid_type, correlation, voidage_m
             props_seg["rho_g"], props_seg["rho_l"], props_seg["x_gas"])
 
         records.append({
-            "Seg": f"#{i+1}", "Type": seg["type"],
-            "Pipe": f"{seg['dn']}/{seg['pn']}", "ID (mm)": round(D_eff * 1000, 1),
-            "L (m)": seg["length"], "Regime": seg_res["regime"],
-            "ΔP (kPa)": round(dP_Pa / 1000, 3),
-            "P_in (bara)": round(current_P / 1e5, 4),
+            "Seg":          f"#{i+1}",
+            "Taps in seg":  i + 1,
+            "From T (m)":   round(boundaries[i], 2),
+            "To T (m)":     round(boundaries[i + 1], 2),
+            "L (m)":        round(seg_len, 3),
+            "Pipe":         f"{hdr['dn']}/{hdr['pn']}",
+            "ID (mm)":      round(D_eff * 1000, 1),
+            "Regime":       seg_res["regime"],
+            "ΔP (kPa)":     round(dP_Pa / 1000, 3),
+            "P_in (bara)":  round(current_P / 1e5, 4),
             "P_out (bara)": round(end_P / 1e5, 4),
-            "V_m (m/s)": round(V_m, 3),
-            "V_m/V_e": round(V_m / V_e if V_e > 0 else 0.0, 3),
-            "V_sg (m/s)": round(seg_res["Vsg"], 3),
-            "V_sl (m/s)": round(seg_res["Vsl"], 3),
-            "V_e (m/s)": round(V_e, 2),
+            "V_m (m/s)":    round(V_m, 3),
+            "V_m/V_e":      round(V_m / V_e if V_e > 0 else 0.0, 3),
+            "Q_gas_kgh":    round(sum(running_gas.values()), 3),
+            "Q_liq_m3h":    round(running_liq, 3),
             "ΔP_fric (kPa)": round(seg_res["dP_fric_Pa"] / 1000, 3),
             "ΔP_grav (kPa)": round(seg_res["dP_grav_Pa"] / 1000, 3),
-            "ΔP_accel (kPa)": round(seg_res["dP_accel_Pa"] / 1000, 3),
-            "Q_gas_kgh": round(sum(running_gas.values()), 3),
-            "Q_liq_m3h": round(running_q, 3),
         })
 
         total_dp  += dP_Pa
@@ -1180,129 +1168,147 @@ def _march_header_arm(segs, P_start_Pa, T_C, liquid_type, correlation, voidage_m
 
 def _calc_header_dp_at_p(res_c, P_c_in_bara):
     """Re-run both header arms at an overridden inlet pressure.
-    Returns (worst_arm_dp_kpa, P_T_junction_bara).
-    Used by the goal-seek solver.
+    Returns (worst_arm_dp_kpa, P_T_junction_bara).  Used by goal-seek.
     """
     P_start = P_c_in_bara * 1e5
-    T_C     = res_c["T_C"]
-    liq     = res_c["liquid_type"]
-    corr    = res_c.get("correlation",    engine.TWO_PHASE_CORRELATIONS[0])
-    void    = res_c.get("voidage_method", engine.VOIDAGE_METHODS[0])
+    hdr  = res_c["header_pipe"]
+    gpt  = res_c["gas_per_tap"]
+    lpt  = res_c["liq_per_tap"]
+    T_C  = res_c["T_C"]
+    liq  = res_c["liquid_type"]
+    corr = res_c.get("correlation",    engine.TWO_PHASE_CORRELATIONS[0])
+    void = res_c.get("voidage_method", engine.VOIDAGE_METHODS[0])
 
-    dp_l, P_T_l, *_ = _march_header_arm(res_c["left_segs"],  P_start, T_C, liq, corr, void)
-    dp_r, P_T_r, *_ = _march_header_arm(res_c["right_segs"], P_start, T_C, liq, corr, void)
+    dp_l, P_T_l, *_ = _march_header_simple(
+        res_c["left_taps"],  gpt, lpt, hdr, P_start, T_C, liq, corr, void)
+    dp_r, P_T_r, *_ = _march_header_simple(
+        res_c["right_taps"], gpt, lpt, hdr, P_start, T_C, liq, corr, void)
 
-    # Governing arm = higher ΔP → lower T-junction pressure
     if dp_l >= dp_r:
         return dp_l / 1000.0, P_T_l / 1e5
     return dp_r / 1000.0, P_T_r / 1e5
 
 
-def _goal_seek_inlet(res_c, res_a, res_b, P_target_out, tol=0.0005, max_iter=25):
+def _goal_seek_inlet(res_c, res_a, P_target_out, tol=0.0005, max_iter=25):
+    """Find the Case C inlet pressure such that branch A outlet equals P_target_out.
+    Monotonic relationship → successive-substitution.  Returns a result dict.
     """
-    Find the Case C inlet pressure such that the worst-case branch outlet
-    (min of A_out, B_out) equals P_target_out.
-
-    Strategy: monotonic relationship ⟹ simple successive-substitution.
-    Returns a result dict.
-    """
-    _is_header = "left_segs" in res_c
-
-    # Seed with first-order estimate from current ΔP values
     P_c_in = (P_target_out
-              + max(res_a["total_dp_kpa"], res_b["total_dp_kpa"]) / 100.0
+              + res_a["total_dp_kpa"] / 100.0
               + res_c["total_dp_kpa"] / 100.0)
 
-    dp_c = dp_a = dp_b = 0.0
-    P_c_out = P_a_out = P_b_out = 0.0
+    dp_c = dp_a = 0.0
+    P_c_out = P_a_out = 0.0
 
     for i in range(max_iter):
-        if _is_header:
-            dp_c, P_c_out = _calc_header_dp_at_p(res_c, P_c_in)
-        else:
-            dp_c, P_c_out = _calc_dp_at_p(res_c, P_c_in)
+        dp_c, P_c_out = _calc_header_dp_at_p(res_c, P_c_in)
         dp_a, P_a_out = _calc_dp_at_p(res_a, P_c_out)
-        dp_b, P_b_out = _calc_dp_at_p(res_b, P_c_out)
 
-        worst_out = min(P_a_out, P_b_out)
-        error     = worst_out - P_target_out
-
+        error = P_a_out - P_target_out
         if abs(error) < tol:
             return {
                 "P_c_in": P_c_in, "P_c_out": P_c_out,
-                "dp_c": dp_c, "dp_a": dp_a, "dp_b": dp_b,
-                "P_a_out": P_a_out, "P_b_out": P_b_out,
-                "worst_out": worst_out, "iterations": i + 1, "converged": True,
+                "dp_c": dp_c, "dp_a": dp_a,
+                "P_a_out": P_a_out,
+                "iterations": i + 1, "converged": True,
             }
         P_c_in -= error
 
     return {
         "P_c_in": P_c_in, "P_c_out": P_c_out,
-        "dp_c": dp_c, "dp_a": dp_a, "dp_b": dp_b,
-        "P_a_out": P_a_out, "P_b_out": P_b_out,
-        "worst_out": worst_out, "iterations": max_iter,
-        "converged": abs(min(P_a_out, P_b_out) - P_target_out) < tol * 20,
+        "dp_c": dp_c, "dp_a": dp_a,
+        "P_a_out": P_a_out,
+        "iterations": max_iter,
+        "converged": abs(P_a_out - P_target_out) < tol * 20,
     }
 
 
 # ============================================================================
-# HEADER CASE RUNNER  (Case C — collecting manifold with two arms)
+# HEADER CASE RUNNER  (Case C — uniform header with n A-line taps on each side)
 # ============================================================================
-def run_header_case(cid: str = "c", accent: str = "#059669") -> dict:
+def run_header_case(cid: str = "c", accent: str = "#059669",
+                    results_a: dict = None) -> dict:
     """
-    Collecting manifold: branches inject flow at tap points along two arms
-    (Left and Right of the T-junction). Flow accumulates toward the T.
-    Both arms share the same branch inlet pressure and fluid properties.
+    Uniform header with n A-line taps on each side of the T-junction.
+    Flow enters from n_left + n_right copies of Case A and exits at T.
+    Tap positions (distance from T) are individually configurable.
     """
     k = lambda name: f"{cid}_{name}"
-    import copy
 
-    # ── Session state init ────────────────────────────────────────────────────
-    if k("left_segs") not in st.session_state:
-        st.session_state[k("left_segs")]  = copy.deepcopy(_DEFAULT_LEFT_SEGS)
-        st.session_state[k("right_segs")] = copy.deepcopy(_DEFAULT_RIGHT_SEGS)
-    if k("gas_species_widget") not in st.session_state:
-        st.session_state[k("gas_species_widget")] = ["H₂"]
-    if k("liquid_type_widget") not in st.session_state:
-        st.session_state[k("liquid_type_widget")] = "KOH 30 wt%"
-
-    # Migrate: ensure all required keys exist in stored segments
-    for _arm_key in (k("left_segs"), k("right_segs")):
-        for _seg in st.session_state[_arm_key]:
-            _seg.setdefault("dn", "DN100"); _seg.setdefault("pn", "PN40")
-            _seg.setdefault("material", "SS316L"); _seg.setdefault("lined", False)
-            _seg.setdefault("liner_material", "FEP"); _seg.setdefault("liner_thickness_mm", 1.0)
-            _seg.setdefault("branch_gas_kgh", {}); _seg.setdefault("branch_q_lye", 0.0)
-            if _seg["material"] not in _VALID_MATS: _seg["material"] = "SS316L"
+    # ── Flow source: read from results_a, fall back to session state defaults
+    _ra = results_a or {}
+    gas_per_tap = dict(_ra.get("gas_flows_kgh") or {"H₂": 5.0})
+    liq_per_tap = float(_ra.get("q_lye") or 0.5)
+    liquid_type = str(_ra.get("liquid_type") or "KOH 30 wt%")
+    T_C_a       = float(_ra.get("T_C") or 60.0)
 
     col_in, col_out = st.columns([1, 1.2])
 
-    # ── INPUTS ────────────────────────────────────────────────────────────────
     with col_in:
         st.subheader("Inputs")
 
         with st.container(border=True):
-            st.markdown("**Process Conditions** — common to all branches")
-            p1, p2 = st.columns(2)
-            P_bara = p1.number_input("Branch Inlet Pressure (bara)",
-                                     min_value=1.0, max_value=100.0,
-                                     value=30.0, step=1.0, key=k("P_bara"))
-            T_C    = p2.number_input("Temperature (°C)",
-                                     min_value=5.0, max_value=95.0,
-                                     value=60.0, step=5.0, key=k("T_C"))
+            st.markdown("**Fluid — from Case A (read-only)**")
+            _gas_str = "  ·  ".join(f"{sp}: {v:.2f} kg/h" for sp, v in gas_per_tap.items())
+            st.caption(f"Gas per tap:  {_gas_str}")
+            st.caption(f"Liquid per tap:  {liq_per_tap:.3f} m³/h  ·  {liquid_type}")
 
         with st.container(border=True):
-            st.markdown("**Fluid** — carried by all branches")
-            _all_sp = list(engine.GAS_SPECIES.keys())
-            selected_species = st.multiselect("Gas species", _all_sp,
-                                              key=k("gas_species_widget"))
-            if not selected_species:
-                st.warning("Select at least one gas species.")
-                selected_species = ["H₂"]
-            _liq_idx = (engine.LIQUID_PHASES.index(st.session_state[k("liquid_type_widget")])
-                        if st.session_state[k("liquid_type_widget")] in engine.LIQUID_PHASES else 0)
-            liquid_type = st.selectbox("Liquid type", engine.LIQUID_PHASES,
-                                       index=_liq_idx, key=k("liquid_type_widget"))
+            st.markdown("**Process Conditions**")
+            p1, p2 = st.columns(2)
+            P_bara = p1.number_input("Header inlet pressure (bara)",
+                                     min_value=1.0, max_value=100.0,
+                                     value=float(st.session_state.get(k("P_bara"), 30.0)),
+                                     step=1.0, key=k("P_bara"))
+            T_C    = p2.number_input("Temperature (°C)",
+                                     min_value=5.0, max_value=95.0,
+                                     value=float(st.session_state.get(k("T_C"), T_C_a)),
+                                     step=5.0, key=k("T_C"))
+
+        with st.container(border=True):
+            st.markdown("**Header Pipe** — uniform along full length")
+            DN_OPT  = list(engine.PIPE_DATABASE.keys())
+            PN_OPT  = ["PN20", "PN25", "PN40"]
+            MAT_OPT = list(engine.MATERIAL_ROUGHNESS.keys())
+            FIT_OPT = ["None"] + list(engine.FITTING_Le_over_D.keys())
+            h1, h2, h3 = st.columns(3)
+            hdr_dn  = h1.selectbox("DN",       DN_OPT,  key=k("hdr_dn"),
+                                   index=DN_OPT.index(st.session_state.get(k("hdr_dn"), "DN100"))
+                                         if st.session_state.get(k("hdr_dn"), "DN100") in DN_OPT else 0)
+            hdr_pn  = h2.selectbox("PN",       PN_OPT,  key=k("hdr_pn"),
+                                   index=PN_OPT.index(st.session_state.get(k("hdr_pn"), "PN40"))
+                                         if st.session_state.get(k("hdr_pn"), "PN40") in PN_OPT else 2)
+            hdr_mat = h3.selectbox("Material", MAT_OPT, key=k("hdr_mat"),
+                                   index=MAT_OPT.index(st.session_state.get(k("hdr_mat"), "SS316L"))
+                                         if st.session_state.get(k("hdr_mat"), "SS316L") in MAT_OPT else 0)
+            h4, h5, h6 = st.columns(3)
+            hdr_lined = h4.checkbox("Lined", value=bool(st.session_state.get(k("hdr_lined"), False)),
+                                    key=k("hdr_lined"))
+            LINER_OPT = list(engine.LINER_ROUGHNESS.keys())
+            if hdr_lined:
+                hdr_lmat  = h5.selectbox("Liner", LINER_OPT, key=k("hdr_lmat"))
+                hdr_lthk  = h6.number_input("Thickness (mm)", min_value=0.1, max_value=20.0,
+                                             value=float(st.session_state.get(k("hdr_lthk"), 1.0)),
+                                             step=0.5, key=k("hdr_lthk"))
+            else:
+                hdr_lmat = "FEP";  hdr_lthk = 1.0
+            h7, h8 = st.columns(2)
+            _fit_cur = st.session_state.get(k("hdr_fit"), "None")
+            hdr_fit  = h7.selectbox("Fitting type", FIT_OPT, key=k("hdr_fit"),
+                                    index=FIT_OPT.index(_fit_cur) if _fit_cur in FIT_OPT else 0)
+            hdr_fitq = h8.number_input("Qty", min_value=0,
+                                        value=int(st.session_state.get(k("hdr_fitq"), 0)),
+                                        key=k("hdr_fitq"))
+            _D_nom = engine.PIPE_DATABASE[hdr_dn][hdr_pn]
+            _D_eff = _D_nom - 2 * hdr_lthk / 1000.0 if hdr_lined else _D_nom
+            st.caption(f"ID {_D_eff*1000:.1f} mm")
+
+        hdr_spec = {
+            "dn": hdr_dn, "pn": hdr_pn, "material": hdr_mat,
+            "lined": hdr_lined, "liner_material": hdr_lmat, "liner_thickness_mm": hdr_lthk,
+            "fittings": hdr_fit if hdr_fit != "None" else "None",
+            "fitting_count": hdr_fitq,
+        }
 
         with st.container(border=True):
             st.markdown("**Calculation Settings**")
@@ -1312,157 +1318,81 @@ def run_header_case(cid: str = "c", accent: str = "#059669") -> dict:
             voidage_method = _cs2.selectbox("Void fraction",
                                             engine.VOIDAGE_METHODS, key=k("voidage_method"))
 
-        # ── Segment editor for one arm ─────────────────────────────────────────
-        def _arm_editor(arm_key, arm_label):
-            segs       = st.session_state[k(arm_key)]
-            DN_OPT     = list(engine.PIPE_DATABASE.keys())
-            PN_OPT     = ["PN20", "PN25", "PN40"]
-            MAT_OPT    = list(engine.MATERIAL_ROUGHNESS.keys())
-            FIT_OPT    = ["None"] + list(engine.FITTING_Le_over_D.keys())
-            LINER_OPT  = list(engine.LINER_ROUGHNESS.keys())
-            new_segs   = []
-
-            for i, seg in enumerate(segs):
-                with st.expander(f"{arm_label}  Seg #{i+1}  —  {seg['dn']}/{seg['pn']}  {seg['length']} m",
-                                 expanded=(len(segs) <= 3)):
-                    g1, g2, g3, g4 = st.columns([1.3, 0.8, 0.7, 0.7])
-                    t  = g1.selectbox("Orientation",
-                                      ["Horizontal", "Vertical Upflow", "Vertical Downflow"],
-                                      key=k(f"{arm_key}_t_{i}"),
-                                      index=["Horizontal","Vertical Upflow","Vertical Downflow"]
-                                            .index(seg["type"]))
-                    dn = g2.selectbox("DN", DN_OPT, key=k(f"{arm_key}_dn_{i}"),
-                                      index=DN_OPT.index(seg.get("dn", "DN100")))
-                    pn = g3.selectbox("PN", PN_OPT, key=k(f"{arm_key}_pn_{i}"),
-                                      index=PN_OPT.index(seg.get("pn", "PN40")))
-                    l  = g4.number_input("Length (m)", min_value=0.1,
-                                         value=float(seg["length"]), step=1.0,
-                                         key=k(f"{arm_key}_l_{i}"))
-
-                    g5, g6, g7, g8 = st.columns([1.1, 2.0, 0.6, 0.65])
-                    _mat_def = seg.get("material", "SS316L")
-                    mat = g5.selectbox("Material", MAT_OPT, key=k(f"{arm_key}_m_{i}"),
-                                       index=MAT_OPT.index(_mat_def) if _mat_def in MAT_OPT else 0)
-                    _fit_idx = 0
-                    if seg["fittings"] in engine.FITTING_Le_over_D:
-                        _fit_idx = list(engine.FITTING_Le_over_D.keys()).index(seg["fittings"]) + 1
-                    f  = g6.selectbox("Minor Loss", FIT_OPT, key=k(f"{arm_key}_f_{i}"),
-                                      index=_fit_idx)
-                    c  = g7.number_input("Qty", min_value=0, value=int(seg["fitting_count"]),
-                                         key=k(f"{arm_key}_c_{i}"))
-                    g8.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
-                    lined = g8.checkbox("Lined", value=bool(seg.get("lined", False)),
-                                        key=k(f"{arm_key}_lined_{i}"))
-                    _lmat    = seg.get("liner_material", "FEP")
-                    _lthk_mm = float(seg.get("liner_thickness_mm", 1.0))
-                    if lined:
-                        gl1, gl2 = st.columns([1.6, 1.0])
-                        _lmat    = gl1.selectbox("Liner Material", LINER_OPT,
-                                                  key=k(f"{arm_key}_lmat_{i}"),
-                                                  index=LINER_OPT.index(_lmat) if _lmat in LINER_OPT else 0)
-                        _lthk_mm = gl2.number_input("Liner Thickness (mm)", min_value=0.1,
-                                                     max_value=20.0, value=_lthk_mm, step=0.5,
-                                                     key=k(f"{arm_key}_lthk_{i}"))
-
-                    D_seg = engine.PIPE_DATABASE[dn][pn]
-                    D_eff = D_seg - 2 * (_lthk_mm / 1000.0) if lined else D_seg
-                    rough = engine.LINER_ROUGHNESS[_lmat] if lined else engine.MATERIAL_ROUGHNESS[mat]
-                    if lined:
-                        st.caption(f"Bore {D_seg*1000:.1f} mm → ID {D_eff*1000:.1f} mm  ·  {mat} + {_lmat}")
-                    else:
-                        st.caption(f"ID {D_seg*1000:.1f} mm  ·  ε {rough*1e6:.2g} µm  ·  {mat}")
-
-                    # Branch flow entering the header at this segment's inlet
-                    st.markdown("**Branch flow entering at this tap:**")
-                    branch_gas = {}
-                    _nc = min(len(selected_species), 3)
-                    _fc = st.columns(_nc) if _nc > 0 else [st]
-                    for _ci, _sp in enumerate(selected_species):
-                        _def = float(seg.get("branch_gas_kgh", {}).get(_sp, 0.0))
-                        branch_gas[_sp] = _fc[_ci % _nc].number_input(
-                            f"{_sp}  (kg/h)", min_value=0.0, value=_def, step=0.1,
-                            key=k(f"{arm_key}_bgas_{_sp}_{i}"))
-                    branch_q = st.number_input(
-                        "Liquid  (m³/h)", min_value=0.0,
-                        value=float(seg.get("branch_q_lye", 0.0)), step=0.25,
-                        key=k(f"{arm_key}_bliq_{i}"))
-
-                    new_segs.append({
-                        "type": t, "dn": dn, "pn": pn, "material": mat, "length": l,
-                        "fittings": f if f != "None" else "None", "fitting_count": c,
-                        "lined": lined, "liner_material": _lmat, "liner_thickness_mm": _lthk_mm,
-                        "branch_gas_kgh": branch_gas,
-                        "branch_q_lye": branch_q,
-                    })
-
-            st.session_state[k(arm_key)] = new_segs
-            ba, br = st.columns(2)
-            if ba.button(f"+ Add Segment", key=k(f"add_{arm_key}")):
-                _last = st.session_state[k(arm_key)][-1]
-                st.session_state[k(arm_key)].append({
-                    "type": "Horizontal", "dn": _last.get("dn", "DN100"),
-                    "pn": _last.get("pn", "PN40"), "material": _last.get("material", "SS316L"),
-                    "length": 2.5, "fittings": "None", "fitting_count": 0,
-                    "lined": _last.get("lined", False),
-                    "liner_material": _last.get("liner_material", "FEP"),
-                    "liner_thickness_mm": _last.get("liner_thickness_mm", 1.0),
-                    "branch_gas_kgh": {sp: 0.0 for sp in selected_species},
-                    "branch_q_lye": 0.0,
-                })
-                st.rerun()
-            if br.button(f"- Remove Last", key=k(f"rem_{arm_key}")) and \
-               len(st.session_state[k(arm_key)]) > 1:
-                st.session_state[k(arm_key)].pop()
-                st.rerun()
-            return new_segs
+        # ── Tap position editor ────────────────────────────────────────────────
+        def _tap_editor(side, default_n=3, default_spacing=2.5):
+            """Render n + position inputs for one arm. Returns list of distances (m)."""
+            n = st.number_input(f"Taps — {side} arm", min_value=0, max_value=8,
+                                value=int(st.session_state.get(k(f"n_{side}"), default_n)),
+                                step=1, key=k(f"n_{side}"))
+            if n == 0:
+                return []
+            # Show positions in rows of 4
+            positions = []
+            cols_per_row = 4
+            _rows = [range(i, min(i + cols_per_row, n))
+                     for i in range(0, n, cols_per_row)]
+            for _row_idxs in _rows:
+                _cols = st.columns(len(_row_idxs))
+                for _ci, _ti in enumerate(_row_idxs):
+                    _pk = k(f"pos_{side}_{_ti}")
+                    if _pk not in st.session_state:
+                        st.session_state[_pk] = float((_ti + 1) * default_spacing)
+                    positions.append(_cols[_ci].number_input(
+                        f"{side[0].upper()}{_ti+1} (m)", min_value=0.1, step=0.5,
+                        key=_pk))
+            return positions
 
         st.markdown("---")
-        st.markdown(f"#### ← Left Arm  *(branch end → T-junction)*")
-        left_segs = _arm_editor("left_segs", "Left")
-        st.markdown("---")
-        st.markdown(f"#### Right Arm →  *(branch end → T-junction)*")
-        right_segs = _arm_editor("right_segs", "Right")
+        st.markdown("#### Tap Positions  *(distance from T-junction)*")
+        _diag_left  = st.session_state.get(k("n_left"), 3)
+        _diag_right = st.session_state.get(k("n_right"), 3)
+        st.caption(
+            "  ".join([f"←─ L{i}" for i in range(int(_diag_left), 0, -1)])
+            + "  ──T──  "
+            + "  ".join([f"R{i} ─→" for i in range(1, int(_diag_right) + 1)])
+        )
+        lc, rc = st.columns(2)
+        with lc:
+            st.markdown("**← Left arm**")
+            left_positions  = _tap_editor("left")
+        with rc:
+            st.markdown("**Right arm →**")
+            right_positions = _tap_editor("right")
 
     # ── CALCULATION ───────────────────────────────────────────────────────────
     with col_out:
         st.subheader("Results")
 
         P_start = P_bara * 1e5
-        dp_l_Pa, P_T_l, fric_l, grav_l, rec_l = _march_header_arm(
-            left_segs,  P_start, T_C, liquid_type, correlation, voidage_method)
-        dp_r_Pa, P_T_r, fric_r, grav_r, rec_r = _march_header_arm(
-            right_segs, P_start, T_C, liquid_type, correlation, voidage_method)
+        dp_l_Pa, P_T_l, fric_l, grav_l, rec_l = _march_header_simple(
+            left_positions,  gas_per_tap, liq_per_tap,
+            hdr_spec, P_start, T_C, liquid_type, correlation, voidage_method)
+        dp_r_Pa, P_T_r, fric_r, grav_r, rec_r = _march_header_simple(
+            right_positions, gas_per_tap, liq_per_tap,
+            hdr_spec, P_start, T_C, liquid_type, correlation, voidage_method)
 
-        dp_l_kpa = dp_l_Pa / 1000.0
-        dp_r_kpa = dp_r_Pa / 1000.0
+        dp_l_kpa   = dp_l_Pa / 1000.0
+        dp_r_kpa   = dp_r_Pa / 1000.0
         P_T_l_bara = P_T_l / 1e5
         P_T_r_bara = P_T_r / 1e5
+        worst_arm  = "Left" if dp_l_kpa >= dp_r_kpa else "Right"
+        dp_worst   = max(dp_l_kpa, dp_r_kpa)
+        P_T_worst  = min(P_T_l_bara, P_T_r_bara)
 
-        # Governing arm = higher ΔP
-        worst_arm = "Left" if dp_l_kpa >= dp_r_kpa else "Right"
-        dp_worst  = max(dp_l_kpa, dp_r_kpa)
-        P_T_worst = min(P_T_l_bara, P_T_r_bara)
+        n_left  = len(left_positions)
+        n_right = len(right_positions)
+        n_total = n_left + n_right
+        total_gas = {sp: kgh * n_total for sp, kgh in gas_per_tap.items()}
+        total_liq = liq_per_tap * n_total
 
-        # Combined total flows (both arms)
-        total_gas = {}
-        total_q   = 0.0
-        for _segs in (left_segs, right_segs):
-            for _seg in _segs:
-                for sp, kg_h in _seg.get("branch_gas_kgh", {}).items():
-                    total_gas[sp] = total_gas.get(sp, 0.0) + kg_h
-                total_q += _seg.get("branch_q_lye", 0.0)
-        if not total_gas:
-            total_gas = {sp: 0.0 for sp in selected_species}
-
-        # T-junction summary
         with st.container(border=True):
-            st.subheader("T-Junction Summary")
+            st.subheader("T-Junction")
             _c1, _c2, _c3 = st.columns(3)
-            _c1.metric("Left arm  ΔP",
+            _c1.metric("Left arm ΔP",
                        f"{dp_l_kpa:.3f} kPa",
                        delta=f"{P_bara:.2f} → {P_T_l_bara:.4f} bara",
                        delta_color="off")
-            _c2.metric("Right arm  ΔP",
+            _c2.metric("Right arm ΔP",
                        f"{dp_r_kpa:.3f} kPa",
                        delta=f"{P_bara:.2f} → {P_T_r_bara:.4f} bara",
                        delta_color="off")
@@ -1471,18 +1401,21 @@ def run_header_case(cid: str = "c", accent: str = "#059669") -> dict:
                        delta=f"Governing: {worst_arm} arm",
                        delta_color="off")
             st.caption(
-                f"Total combined flow at T-junction:  "
-                + "  ·  ".join(f"{sp} {kg_h:.2f} kg/h" for sp, kg_h in total_gas.items())
-                + f"  ·  Liquid {total_q:.3f} m³/h"
+                f"Total flow at T:  "
+                + "  ·  ".join(f"{sp} {v:.2f} kg/h" for sp, v in total_gas.items())
+                + f"  ·  Liquid {total_liq:.3f} m³/h"
+                + f"  ·  ({n_left}L + {n_right}R = {n_total} taps)"
             )
 
-        # Per-arm segment tables
-        _col_hdr = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)",
-                    "Q_gas_kgh", "Q_liq_m3h", "Regime",
+        _col_hdr = ["Seg", "Taps in seg", "From T (m)", "To T (m)", "L (m)",
+                    "Pipe", "ID (mm)", "Regime",
+                    "Q_gas_kgh", "Q_liq_m3h",
                     "ΔP_fric (kPa)", "ΔP_grav (kPa)", "ΔP (kPa)",
                     "P_in (bara)", "P_out (bara)", "V_m (m/s)", "V_m/V_e"]
         _col_cfg_hdr = {
             "ID (mm)":       st.column_config.NumberColumn(format="%.1f"),
+            "From T (m)":    st.column_config.NumberColumn(format="%.2f"),
+            "To T (m)":      st.column_config.NumberColumn(format="%.2f"),
             "Q_gas_kgh":     st.column_config.NumberColumn(label="Q gas (kg/h)", format="%.3f"),
             "Q_liq_m3h":     st.column_config.NumberColumn(label="Q liq (m³/h)", format="%.3f"),
             "P_in (bara)":   st.column_config.NumberColumn(format="%.4f"),
@@ -1493,40 +1426,41 @@ def run_header_case(cid: str = "c", accent: str = "#059669") -> dict:
             "V_m (m/s)":     st.column_config.NumberColumn(format="%.3f"),
             "V_m/V_e":       st.column_config.NumberColumn(format="%.3f"),
         }
-
         tl, tr = st.columns(2)
         with tl:
-            st.markdown(f"**Left Arm**  {'⚠️ governing' if worst_arm == 'Left' else ''}")
+            st.markdown(f"**Left arm**  {'⚠️ governing' if worst_arm == 'Left' else ''}")
             if rec_l:
-                st.dataframe(pd.DataFrame(rec_l)[_col_hdr],
+                _df_l = pd.DataFrame(rec_l)
+                st.dataframe(_df_l[[c for c in _col_hdr if c in _df_l.columns]],
                              column_config=_col_cfg_hdr,
                              hide_index=True, use_container_width=True)
         with tr:
-            st.markdown(f"**Right Arm**  {'⚠️ governing' if worst_arm == 'Right' else ''}")
+            st.markdown(f"**Right arm**  {'⚠️ governing' if worst_arm == 'Right' else ''}")
             if rec_r:
-                st.dataframe(pd.DataFrame(rec_r)[_col_hdr],
+                _df_r = pd.DataFrame(rec_r)
+                st.dataframe(_df_r[[c for c in _col_hdr if c in _df_r.columns]],
                              column_config=_col_cfg_hdr,
                              hide_index=True, use_container_width=True)
 
-        # Pressure profile chart — both arms on one plot
         if rec_l or rec_r:
             fig_hdr = go.Figure()
-            def _arm_trace(records, label, color):
-                xs = [0.0]
+            def _arm_trace(records, label, color, positions):
+                if not records:
+                    return
+                dists_sorted = sorted(positions, reverse=True)
+                xs = [dists_sorted[0]] if dists_sorted else [0.0]
                 ys = [P_bara]
-                dist = 0.0
                 for r in records:
-                    dist += r["L (m)"]
-                    xs.append(dist)
+                    xs.append(r["To T (m)"])
                     ys.append(r["P_out (bara)"])
                 fig_hdr.add_trace(go.Scatter(
                     x=xs, y=ys, mode="lines+markers", name=label,
-                    line=dict(color=color, width=2),
-                    marker=dict(size=6)))
-            _arm_trace(rec_l, "Left arm",  "#2563EB")
-            _arm_trace(rec_r, "Right arm", "#D97706")
+                    line=dict(color=color, width=2), marker=dict(size=6)))
+            _arm_trace(rec_l, "Left arm",  "#2563EB", left_positions)
+            _arm_trace(rec_r, "Right arm", "#D97706", right_positions)
             fig_hdr.update_layout(
-                xaxis_title="Distance from branch end (m)",
+                xaxis_title="Distance from T-junction (m)",
+                xaxis=dict(autorange="reversed"),
                 yaxis_title="Pressure (bara)",
                 height=300, margin=dict(l=40, r=20, t=30, b=40),
                 legend=dict(orientation="h", y=1.1),
@@ -1534,57 +1468,54 @@ def run_header_case(cid: str = "c", accent: str = "#059669") -> dict:
             st.plotly_chart(fig_hdr, use_container_width=True,
                             key=f"{cid}_hdr_pressure_profile")
 
-    # ── RETURN DICT — compatible with Compare tab and report generator ─────────
-    # Compute props at combined total flow for report phase-properties section
-    if total_gas and total_q > 0:
-        try:
-            _props_out = engine.calculate_two_phase_properties(
-                P_T_worst, T_C, total_gas, liquid_type, total_q)
-        except Exception:
-            _props_out = {}
-    else:
+    # ── RETURN DICT ────────────────────────────────────────────────────────────
+    try:
+        _props_out = engine.calculate_two_phase_properties(
+            P_T_worst, T_C, total_gas, liquid_type, total_liq) if total_liq > 0 and total_gas else {}
+    except Exception:
         _props_out = {}
 
-    _all_recs   = (
-        [dict(r, Seg=f"L{r['Seg']}") for r in rec_l] +
-        [dict(r, Seg=f"R{r['Seg']}") for r in rec_r]
-    )
-    _all_segs   = left_segs + right_segs
-    _pipe_len   = sum(s["length"] for s in _all_segs)
+    _all_recs  = ([dict(r, Seg=f"L{r['Seg']}") for r in rec_l] +
+                  [dict(r, Seg=f"R{r['Seg']}") for r in rec_r])
+    _pipe_len  = (max(left_positions,  default=[0.0]) +
+                  max(right_positions, default=[0.0]))
     _total_dp_fric = (fric_l + fric_r) / 1000.0
     _total_dp_grav = (grav_l + grav_r) / 1000.0
 
     return {
-        # Core fields consumed by Compare tab
         "P_bara":               P_bara,
         "T_C":                  T_C,
         "total_dp_kpa":         dp_worst,
         "outlet_pressure_bara": P_T_worst,
         "outlet_pressure_mbar": P_T_worst * 1000.0,
-        # Fields for report generator
         "total_dp_fric_kpa":    _total_dp_fric,
         "total_dp_grav_kpa":    _total_dp_grav,
         "pipe_length_m":        _pipe_len,
         "cumulative_distance":  _pipe_len,
         "liquid_type":          liquid_type,
         "gas_flows_kgh":        total_gas,
-        "q_lye":                total_q,
+        "q_lye":                total_liq,
         "props":                _props_out,
-        "segments":             _all_segs,
+        "segments":             [],
         "grid_records":         _all_recs,
         "correlation":          correlation,
         "voidage_method":       voidage_method,
         "fig_sch":              None,
         "fig_prof":             None,
-        # Header-specific fields (used by goal-seek)
-        "left_segs":            left_segs,
-        "right_segs":           right_segs,
+        # Fields for goal-seek re-run
+        "left_taps":            left_positions,
+        "right_taps":           right_positions,
+        "gas_per_tap":          gas_per_tap,
+        "liq_per_tap":          liq_per_tap,
+        "header_pipe":          hdr_spec,
         # Per-arm detail
         "dp_left_kpa":          dp_l_kpa,
         "dp_right_kpa":         dp_r_kpa,
         "P_T_left_bara":        P_T_l_bara,
         "P_T_right_bara":       P_T_r_bara,
         "worst_arm":            worst_arm,
+        "n_left":               n_left,
+        "n_right":              n_right,
     }
 
 
@@ -1611,12 +1542,12 @@ with tab_b:
 
 with tab_c:
     st.info(
-        "**Case C — Collecting Header / Manifold**  "
-        "Branches inject flow at tap points along two arms (Left / Right of the T-junction). "
-        "Flow accumulates toward the T — each section carries the sum of all upstream branches.",
+        "**Case C — Collecting Header**  "
+        "A uniform pipe with n A-line taps on each side of a central T-junction. "
+        "Each tap feeds one copy of Case A's flow. Worst-arm ΔP = farthest tap → T.",
         icon="ℹ️",
     )
-    results_c = run_header_case("c", accent="#059669")
+    results_c = run_header_case("c", accent="#059669", results_a=results_a)
 
 # ============================================================================
 # COMPARE TAB
@@ -1708,57 +1639,45 @@ with tab_cmp:
         _max_b = max((r["V_m/V_e"] for r in rb["grid_records"]), default=0.0)
         _cmp_row("Worst V_m/V_e",         _max_a,                     _max_b,                     fmt="{:.3f}", unit="–",    better="lower")
 
-    # ── System Total ΔP  (Header C + Branch A or B) ──────────────────────────
-    st.markdown("#### System Total ΔP — Header (C) + Branch")
+    # ── System Total ΔP  (Header C + Branch A) ───────────────────────────────
+    st.markdown(f"#### System Total ΔP — Header (C) + {_la}")
     with st.container(border=True):
-        _dp_c    = results_c["total_dp_kpa"]
-        _dp_a    = ra["total_dp_kpa"]
-        _dp_b    = rb["total_dp_kpa"]
-        _total_a = _dp_c + _dp_a
-        _total_b = _dp_c + _dp_b
-        _p_in_c  = results_c["P_bara"]          # system inlet = Case C inlet
-        _p_out_a = _p_in_c - _total_a / 100.0
-        _p_out_b = _p_in_c - _total_b / 100.0
-        _worst_total  = max(_total_a, _total_b)
-        _worst_label  = "C + A" if _total_a >= _total_b else "C + B"
-        _p_out_worst  = _p_in_c - _worst_total / 100.0
+        _dp_c   = results_c["total_dp_kpa"]
+        _dp_a   = ra["total_dp_kpa"]
+        _total  = _dp_c + _dp_a
+        _p_in_c = results_c["P_bara"]
+        _p_out  = _p_in_c - _total / 100.0
+        _n_taps = results_c.get("n_left", 0) + results_c.get("n_right", 0)
 
         st.caption(
-            f"System inlet = Case C inlet pressure  ·  "
-            f"Case C header ΔP: **{_dp_c:.3f} kPa**  ·  "
-            f"Branch A ΔP: **{_dp_a:.3f} kPa**  ·  "
-            f"Branch B ΔP: **{_dp_b:.3f} kPa**"
+            f"Header inlet pressure: **{_p_in_c:.2f} bara**  ·  "
+            f"Header ΔP (worst arm): **{_dp_c:.3f} kPa**  ·  "
+            f"{_la} branch ΔP: **{_dp_a:.3f} kPa**  ·  "
+            f"{_n_taps} total A-line taps"
         )
-        _s1, _s2, _s3 = st.columns(3)
+        _s1, _s2 = st.columns(2)
         _s1.metric(
-            "Path A  (C + A)",
-            f"{_total_a:.3f} kPa",
-            delta=f"{_p_in_c:.2f} → {_p_out_a:.4f} bara",
+            f"C + {_la}  total ΔP",
+            f"{_total:.3f} kPa",
+            delta=f"{_p_in_c:.2f} → {_p_out:.4f} bara",
             delta_color="off",
-            help="Total ΔP from header inlet through branch A to branch outlet",
+            help=f"Header ΔP + {_la} branch ΔP from header inlet to branch outlet",
         )
         _s2.metric(
-            "Path B  (C + B)",
-            f"{_total_b:.3f} kPa",
-            delta=f"{_p_in_c:.2f} → {_p_out_b:.4f} bara",
+            f"Total flow at T-junction",
+            "  ·  ".join(f"{sp}: {v:.2f} kg/h"
+                         for sp, v in results_c["gas_flows_kgh"].items()),
+            delta=f"Liquid: {results_c['q_lye']:.3f} m³/h",
             delta_color="off",
-            help="Total ΔP from header inlet through branch B to branch outlet",
-        )
-        _s3.metric(
-            f"Worst case  ({_worst_label})",
-            f"{_worst_total:.3f} kPa",
-            delta=f"{_p_in_c:.2f} → {_p_out_worst:.4f} bara",
-            delta_color="off",
-            help="Higher of the two total path ΔPs — governs required inlet pressure",
         )
 
     # ── Goal Seek — Required Inlet Pressure ──────────────────────────────────
     st.markdown("#### Goal Seek — Required C Inlet Pressure")
     with st.container(border=True):
         st.caption(
-            "Set the **target outlet pressure** at the end of branches A and B. "
-            "The solver iterates Case C → A and C → B with pressure marching until "
-            "the worst-case branch outlet matches the target."
+            f"Set the **target outlet pressure** at the end of {_la} branches. "
+            "The solver iterates C → A with pressure marching until the branch outlet "
+            "matches the target."
         )
         _gs_col1, _gs_col2 = st.columns([1, 1])
         with _gs_col1:
@@ -1766,12 +1685,11 @@ with tab_cmp:
                 "Target outlet pressure (bara)",
                 min_value=0.1,
                 max_value=float(results_c["P_bara"]) * 2.0,
-                value=float(round(min(ra["outlet_pressure_bara"],
-                                      rb["outlet_pressure_bara"]), 2)),
+                value=float(round(ra["outlet_pressure_bara"], 2)),
                 step=0.05,
                 format="%.3f",
                 key="gs_p_target",
-                help="Desired minimum outlet pressure at the end of the worst-case branch (A or B).",
+                help=f"Desired outlet pressure at the end of {_la} branch.",
             )
             _gs_run = st.button(
                 "Calculate Required Inlet",
@@ -1782,7 +1700,7 @@ with tab_cmp:
 
         if _gs_run:
             with st.spinner("Iterating…"):
-                _gsr = _goal_seek_inlet(results_c, ra, rb, _p_target)
+                _gsr = _goal_seek_inlet(results_c, ra, _p_target)
             st.session_state["gs_result"] = _gsr
             st.session_state["gs_target"] = _p_target
 
@@ -1790,16 +1708,16 @@ with tab_cmp:
         if _gsr:
             _gs_target_shown = st.session_state.get("gs_target", _p_target)
             with _gs_col2:
+                _gs_resid = abs(_gsr["P_a_out"] - _gs_target_shown) * 1000
                 if _gsr["converged"]:
                     st.success(
                         f"Converged in {_gsr['iterations']} iteration(s).  "
-                        f"Residual: {abs(_gsr['worst_out'] - _gs_target_shown)*1000:.2f} mbar"
+                        f"Residual: {_gs_resid:.2f} mbar"
                     )
                 else:
                     st.warning(
                         f"Did not fully converge after {_gsr['iterations']} iterations — "
-                        f"result is approximate (residual "
-                        f"{abs(_gsr['worst_out'] - _gs_target_shown)*1000:.1f} mbar)"
+                        f"result is approximate (residual {_gs_resid:.1f} mbar)"
                     )
 
             st.divider()
@@ -1819,31 +1737,22 @@ with tab_cmp:
                 "Target outlet",
                 f"{_gs_target_shown:.4f} bara",
             )
-            _r2c1, _r2c2, _r2c3 = st.columns(3)
-            _worse_branch = "A" if _gsr["P_a_out"] <= _gsr["P_b_out"] else "B"
+            _r2c1, _r2c2 = st.columns(2)
             _r2c1.metric(
-                "Branch A outlet",
+                f"{_la} outlet",
                 f"{_gsr['P_a_out']:.4f} bara",
                 delta=f"ΔP = {_gsr['dp_a']:.3f} kPa",
                 delta_color="off",
             )
             _r2c2.metric(
-                "Branch B outlet",
-                f"{_gsr['P_b_out']:.4f} bara",
-                delta=f"ΔP = {_gsr['dp_b']:.3f} kPa",
-                delta_color="off",
-            )
-            _r2c3.metric(
-                f"Governing branch (worst = {_worse_branch})",
-                f"{_gsr['worst_out']:.4f} bara",
-                delta=f"vs target: {(_gsr['worst_out'] - _gs_target_shown)*1000:+.1f} mbar",
+                "vs target",
+                f"{_gs_target_shown:.4f} bara",
+                delta=f"{(_gsr['P_a_out'] - _gs_target_shown)*1000:+.1f} mbar",
                 delta_color="off",
             )
             st.info(
-                f"**To achieve {_gs_target_shown:.3f} bara at the worst-case branch outlet**, "
-                f"set **Case C inlet pressure to {_gsr['P_c_in']:.4f} bara**.  "
-                f"Branch {_la if _gsr['P_a_out'] > _gsr['P_b_out'] else _lb} has "
-                f"{abs(_gsr['P_a_out'] - _gsr['P_b_out'])*1000:.1f} mbar of pressure margin."
+                f"**To achieve {_gs_target_shown:.3f} bara at the {_la} branch outlet**, "
+                f"set **Case C inlet pressure to {_gsr['P_c_in']:.4f} bara**."
             )
 
     # ── Overlaid pressure profiles ─────────────────────────────────────────────
