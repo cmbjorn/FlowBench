@@ -1697,7 +1697,7 @@ _ld = f"{_lb} Header"
 
 tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_stack = st.tabs(
     [_la, _lb, _lc, _ld,
-     f"Compare {_la} vs {_lb}", "Stack ΔP"])
+     f"Compare {_la} vs {_lb}", "Generator ΔP"])
 
 with tab_a:
     st.text_input("Case label", key="label_a", max_chars=40,
@@ -2330,7 +2330,7 @@ with tab_cmp:
     if not _sens_avail:
         st.caption("ℹ Run the Sensitivity Analysis above first to include it in the reports.")
     if not st.session_state.get("stack_gsr_h2"):
-        st.caption("ℹ Run the Stack ΔP calculation (Stack ΔP tab) first to include it in the reports.")
+        st.caption("ℹ Run the Generator ΔP calculation (Generator ΔP tab) first to include it in the reports.")
 
     st.divider()
 
@@ -2371,11 +2371,11 @@ with tab_stack:
     _lc = f"{_la} Header"
     _ld = f"{_lb} Header"
 
-    st.subheader("Stack Differential Pressure")
+    st.subheader("Generator Differential Pressure")
     st.caption(
         f"Goal-seek both the {_la} system ({_la} → {_lc}) and {_lb} system ({_lb} → {_ld}) "
         "to find the required line inlet pressures for given separator pressures. "
-        f"The **Stack ΔP** = P_inlet_{_la} − P_inlet_{_lb} is the differential pressure "
+        f"The **Generator ΔP** = P_inlet_{_la} − P_inlet_{_lb} is the differential pressure "
         "across the process unit."
     )
 
@@ -2403,7 +2403,7 @@ with tab_stack:
                 help=f"Target pressure at the {_lb} gas-liquid separator."
             )
 
-        _sk_run = st.button("Calculate Stack ΔP", type="primary",
+        _sk_run = st.button("Calculate Generator ΔP", type="primary",
                             use_container_width=True, key="stack_run")
 
     if _sk_run:
@@ -2444,7 +2444,7 @@ with tab_stack:
         _dp_stack = _p_in_a - _p_in_b
 
         with st.container(border=True):
-            st.markdown(f"##### Stack Differential Pressure  (P_inlet_{_la} − P_inlet_{_lb})")
+            st.markdown(f"##### Generator Differential Pressure  (P_inlet_{_la} − P_inlet_{_lb})")
             _sk1, _sk2, _sk3 = st.columns(3)
             _sk1.metric(
                 f"{_la} inlet pressure",
@@ -2461,7 +2461,7 @@ with tab_stack:
             _dp_stack_kpa  = _dp_stack * 100.0
             _dp_stack_mbar = _dp_stack_kpa * 10.0
             _sk3.metric(
-                f"Stack ΔP  ({_la} − {_lb})",
+                f"Generator ΔP  ({_la} − {_lb})",
                 f"{_dp_stack:.4f} bara",
                 delta=f"{_dp_stack_kpa:.2f} kPa  ·  {_dp_stack_mbar:.1f} mbar",
                 delta_color="off",

@@ -726,7 +726,7 @@ def generate_comparison_report(
         _dp_mbar = _dp_kpa * 10.0
 
         doc.add_page_break()
-        doc.add_heading("Stack Differential Pressure", level=1)
+        doc.add_heading("Generator Differential Pressure", level=1)
 
         doc.add_heading("Target Conditions", level=2)
         _kv_table(doc, [
@@ -755,7 +755,7 @@ def generate_comparison_report(
         ])
         doc.add_paragraph()
 
-        doc.add_heading(f"ΔP Result  (P_inlet_{_la_s} − P_inlet_{_lb_s})", level=2)
+        doc.add_heading(f"Generator ΔP Result  (P_inlet_{_la_s} − P_inlet_{_lb_s})", level=2)
         _kv_table(doc, [
             (f"ΔP  {_la_s} − {_lb_s}  (bara)",  f"{_dp_s:.4f}"),
             (f"ΔP  {_la_s} − {_lb_s}  (kPa)",   f"{_dp_kpa:.2f}"),
@@ -1160,7 +1160,7 @@ def generate_combined_report(
         _dp_mbar = _dp_kpa * 10.0
 
         doc.add_page_break()
-        _h1("Stack Differential Pressure")
+        _h1("Generator Differential Pressure")
 
         doc.add_heading("Target Conditions", level=2)
         _kv_table(doc, [
@@ -1189,7 +1189,7 @@ def generate_combined_report(
         ])
         doc.add_paragraph()
 
-        doc.add_heading(f"ΔP Result  (P_inlet_{_la_s} − P_inlet_{_lb_s})", level=2)
+        doc.add_heading(f"Generator ΔP Result  (P_inlet_{_la_s} − P_inlet_{_lb_s})", level=2)
         _kv_table(doc, [
             (f"ΔP  {_la_s} − {_lb_s}  (bara)",  f"{_dp_s:.4f}"),
             (f"ΔP  {_la_s} − {_lb_s}  (kPa)",   f"{_dp_kpa:.2f}"),
