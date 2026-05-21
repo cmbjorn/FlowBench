@@ -51,6 +51,101 @@ with st.expander("About this calculator", expanded=False):
     """)
 
 # ============================================================================
+# SAVE / LOAD  (defined here so sidebar can call them on first render)
+# ============================================================================
+def _collect_save_state() -> dict:
+    s = st.session_state
+    data: dict = {
+        "version": 1,
+        "label_a": s.get("label_a", "Case A"),
+        "label_b": s.get("label_b", "Case B"),
+    }
+    for cid in ("a", "b"):
+        gas_flows = {
+            k[len(f"{cid}_gflow_"):]: v
+            for k, v in s.items()
+            if k.startswith(f"{cid}_gflow_")
+        }
+        data[cid] = {
+            "segments":           s.get(f"{cid}_segments", []),
+            "P_bara":             s.get(f"{cid}_P_bara", 20.0),
+            "T_C":                s.get(f"{cid}_T_C", 60.0),
+            "gas_species_widget": s.get(f"{cid}_gas_species_widget", ["H₂"]),
+            "gas_flows":          gas_flows,
+            "liquid_type_widget": s.get(f"{cid}_liquid_type_widget", "Water"),
+            "q_lye_widget":       s.get(f"{cid}_q_lye_widget", 1.0),
+            "correlation":        s.get(f"{cid}_correlation", "Beggs-Brill"),
+            "voidage_method":     s.get(f"{cid}_voidage_method", "Homogeneous"),
+            "cg_mw":              s.get(f"{cid}_cg_mw"),
+            "cg_mu":              s.get(f"{cid}_cg_mu"),
+            "cl_rho":             s.get(f"{cid}_cl_rho"),
+            "cl_mu":              s.get(f"{cid}_cl_mu"),
+            "cl_sigma":           s.get(f"{cid}_cl_sigma"),
+        }
+    for cid in ("c", "d"):
+        n_left  = int(s.get(f"{cid}_n_left",  3))
+        n_right = int(s.get(f"{cid}_n_right", 3))
+        data[cid] = {
+            "P_target_sep":    s.get(f"{cid}_P_target_sep", 16.5),
+            "T_C":             s.get(f"{cid}_T_C", 60.0),
+            "hdr_dn":          s.get(f"{cid}_hdr_dn", "DN100"),
+            "hdr_pn":          s.get(f"{cid}_hdr_pn", "PN40"),
+            "hdr_mat":         s.get(f"{cid}_hdr_mat", "SS316L"),
+            "hdr_lined":       s.get(f"{cid}_hdr_lined", False),
+            "hdr_lmat":        s.get(f"{cid}_hdr_lmat", "FEP"),
+            "hdr_lthk":        s.get(f"{cid}_hdr_lthk", 1.0),
+            "hdr_fits":        s.get(f"{cid}_hdr_fits", []),
+            "n_left":          n_left,
+            "n_right":         n_right,
+            "left_positions":  [s.get(f"{cid}_pos_left_{i}",  float((i+1)*2.5)) for i in range(n_left)],
+            "right_positions": [s.get(f"{cid}_pos_right_{i}", float((i+1)*2.5)) for i in range(n_right)],
+            "t_dn":            s.get(f"{cid}_t_dn", "DN150"),
+            "t_pn":            s.get(f"{cid}_t_pn", "PN40"),
+            "t_mat":           s.get(f"{cid}_t_mat", "SS316L"),
+            "t_len":           s.get(f"{cid}_t_len", 1.0),
+            "correlation":     s.get(f"{cid}_correlation", "Beggs-Brill"),
+            "voidage_method":  s.get(f"{cid}_voidage_method", "Homogeneous"),
+        }
+    return data
+
+
+def _apply_save_state(data: dict) -> None:
+    import copy
+    s = st.session_state
+    s["label_a"] = data.get("label_a", "Case A")
+    s["label_b"] = data.get("label_b", "Case B")
+
+    for cid in ("a", "b"):
+        cd = data.get(cid, {})
+        if not cd:
+            continue
+        if "segments" in cd:
+            s[f"{cid}_segments"] = copy.deepcopy(cd["segments"])
+        for key in ("P_bara", "T_C", "gas_species_widget", "liquid_type_widget",
+                    "q_lye_widget", "correlation", "voidage_method",
+                    "cg_mw", "cg_mu", "cl_rho", "cl_mu", "cl_sigma"):
+            if cd.get(key) is not None:
+                s[f"{cid}_{key}"] = cd[key]
+        for sp, flow in cd.get("gas_flows", {}).items():
+            s[f"{cid}_gflow_{sp}"] = flow
+
+    for cid in ("c", "d"):
+        cd = data.get(cid, {})
+        if not cd:
+            continue
+        for key in ("P_target_sep", "T_C", "hdr_dn", "hdr_pn", "hdr_mat",
+                    "hdr_lined", "hdr_lmat", "hdr_lthk", "hdr_fits",
+                    "n_left", "n_right", "t_dn", "t_pn", "t_mat", "t_len",
+                    "correlation", "voidage_method"):
+            if cd.get(key) is not None:
+                s[f"{cid}_{key}"] = cd[key]
+        for i, pos in enumerate(cd.get("left_positions", [])):
+            s[f"{cid}_pos_left_{i}"] = float(pos)
+        for i, pos in enumerate(cd.get("right_positions", [])):
+            s[f"{cid}_pos_right_{i}"] = float(pos)
+
+
+# ============================================================================
 # SIDEBAR
 # ============================================================================
 with st.sidebar:
@@ -152,6 +247,40 @@ with st.sidebar:
                 else:
                     st.warning(f"Failed — {_sb_err:.2f}% exceeds ±{_sb_tol:.0f}%")
 
+    st.divider()
+    st.header("Session")
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+    _save_json = json.dumps(_collect_save_state(), indent=2, ensure_ascii=False)
+    st.download_button(
+        "Save session (.json)",
+        data=_save_json,
+        file_name="hydraulic_session.json",
+        mime="application/json",
+        use_container_width=True,
+        help="Download all current inputs as a JSON file you can reload later.",
+    )
+
+    # ── Load ──────────────────────────────────────────────────────────────────
+    _uploaded = st.file_uploader(
+        "Load session (.json)",
+        type="json",
+        label_visibility="collapsed",
+        help="Upload a previously saved session JSON to restore all inputs.",
+        key="session_uploader",
+    )
+    if _uploaded is not None:
+        try:
+            _loaded = json.loads(_uploaded.read())
+            if _loaded.get("version") != 1:
+                st.warning("Unrecognised file format — not loaded.")
+            else:
+                _apply_save_state(_loaded)
+                st.success("Session loaded.")
+                st.rerun()
+        except Exception as _e:
+            st.error(f"Could not load session: {_e}")
+
 # ============================================================================
 # PRESETS  (shared across both cases)
 # ============================================================================
@@ -209,12 +338,19 @@ PRESETS = {
 }
 
 _DEFAULT_SEGMENTS = [
-    {"type": "Horizontal",      "dn": "DN50", "pn": "PN40", "material": "SS316L",
-     "length": 12.0, "fittings_list": [],
-     "lined": False, "liner_material": "FEP", "liner_thickness_mm": 1.0},
-    {"type": "Vertical Upflow", "dn": "DN50", "pn": "PN40", "material": "SS316L",
-     "length":  4.5, "fittings_list": [],
-     "lined": False, "liner_material": "FEP", "liner_thickness_mm": 1.0},
+    {"type": "Horizontal",      "dn": "DN50", "pn": "PN20", "material": "SS316L",
+     "length": 3.0,
+     "fittings_list": [{"type": "90° Standard Elbow", "qty": 2}],
+     "lined": True, "liner_material": "FEP", "liner_thickness_mm": 1.5},
+    {"type": "Vertical Upflow", "dn": "DN50", "pn": "PN20", "material": "SS316L",
+     "length": 5.0,
+     "fittings_list": [],
+     "lined": True, "liner_material": "FEP", "liner_thickness_mm": 1.5},
+    {"type": "Horizontal",      "dn": "DN50", "pn": "PN20", "material": "SS316L",
+     "length": 2.0,
+     "fittings_list": [{"type": "90° Standard Elbow", "qty": 2},
+                       {"type": "Expansion — Sudden",  "qty": 1}],
+     "lined": True, "liner_material": "FEP", "liner_thickness_mm": 1.5},
 ]
 
 _VALID_MATS   = set(engine.MATERIAL_ROUGHNESS.keys())
@@ -1783,6 +1919,19 @@ if "label_a" not in st.session_state:
 if "label_b" not in st.session_state:
     st.session_state["label_b"] = "Case B"
 
+# Forward any pending goal-seek apply values BEFORE widgets render
+if "stack_apply_a_pending" in st.session_state:
+    st.session_state["a_P_bara"] = st.session_state.pop("stack_apply_a_pending")
+if "stack_apply_b_pending" in st.session_state:
+    st.session_state["b_P_bara"] = st.session_state.pop("stack_apply_b_pending")
+
+with st.container(border=True):
+    _lab_col1, _lab_col2 = st.columns(2)
+    _lab_col1.text_input("Case A label", key="label_a", max_chars=40,
+                         help="Name used in all tabs, headers, charts, and reports.")
+    _lab_col2.text_input("Case B label", key="label_b", max_chars=40,
+                         help="Name used in all tabs, headers, charts, and reports.")
+
 _la = st.session_state["label_a"]
 _lb = st.session_state["label_b"]
 _lc = f"{_la} Header"
@@ -1793,13 +1942,9 @@ tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_stack = st.tabs(
      f"Compare {_la} vs {_lb}", "Generator ΔP"])
 
 with tab_a:
-    st.text_input("Case label", key="label_a", max_chars=40,
-                  help="Custom name shown in tabs, charts, and reports.")
     results_a = run_case("a", accent="#2563EB")
 
 with tab_b:
-    st.text_input("Case label", key="label_b", max_chars=40,
-                  help="Custom name shown in tabs, charts, and reports.")
     results_b = run_case("b", accent="#D97706")
 
 with tab_c:
@@ -1872,16 +2017,16 @@ with tab_cmp:
 
     # ── Side-by-side headline metrics ─────────────────────────────────────────
     with st.container(border=True):
-        _lc, _mc, _rc = st.columns([2, 2, 2])
+        _cl, _cm, _cr = st.columns([2, 2, 2])
 
-        _lc.markdown("**Metric**")
-        _mc.markdown(f"**{_la}**")
-        _rc.markdown(f"**{_lb}**")
+        _cl.markdown("**Metric**")
+        _cm.markdown(f"**{_la}**")
+        _cr.markdown(f"**{_lb}**")
         st.divider()
 
         def _cmp_row(label, va, vb, fmt="{}", better="lower", unit=""):
             """Render one comparison row with delta badge."""
-            _lc, _mc, _rc = st.columns([2, 2, 2])
+            _cl, _cm, _cr = st.columns([2, 2, 2])
             try:
                 _delta = vb - va
                 _pct   = (_delta / abs(va) * 100) if abs(va) > 1e-9 else 0.0
@@ -1896,9 +2041,9 @@ with tab_cmp:
             except Exception:
                 _delta_str = "—"
                 _color = "off"
-            _lc.markdown(label)
-            _mc.metric(_la, f"{fmt.format(va)} {unit}", label_visibility="collapsed")
-            _rc.metric(_lb, f"{fmt.format(vb)} {unit}", delta=_delta_str,
+            _cl.markdown(label)
+            _cm.metric(_la, f"{fmt.format(va)} {unit}", label_visibility="collapsed")
+            _cr.metric(_lb, f"{fmt.format(vb)} {unit}", delta=_delta_str,
                        delta_color=_color, label_visibility="collapsed")
 
         _cmp_row("Inlet pressure",        ra["P_bara"],               rb["P_bara"],               fmt="{:.2f}", unit="bara", better="neutral")
@@ -1911,117 +2056,6 @@ with tab_cmp:
         _max_a = max((r["V_m/V_e"] for r in ra["grid_records"]), default=0.0)
         _max_b = max((r["V_m/V_e"] for r in rb["grid_records"]), default=0.0)
         _cmp_row("Worst V_m/V_e",         _max_a,                     _max_b,                     fmt="{:.3f}", unit="–",    better="lower")
-
-    # ── System Total ΔP  (Header C + Branch A) ───────────────────────────────
-    st.markdown(f"#### System Total ΔP — Header (C) + {_la}")
-    with st.container(border=True):
-        _dp_c      = results_c["total_dp_kpa"]
-        _dp_a      = ra["total_dp_kpa"]
-        _total     = _dp_c + _dp_a
-        _p_in_c    = results_c["P_bara"]          # required tap inlet (= branch outlet)
-        _p_sep_c   = results_c.get("P_separator_bara", results_c["outlet_pressure_bara"])
-        _p_tgt_c   = results_c.get("P_target_sep", _p_sep_c)
-        _n_taps    = results_c.get("n_left", 0) + results_c.get("n_right", 0)
-
-        st.caption(
-            f"Required tap inlet: **{_p_in_c:.4f} bara**  ·  "
-            f"Target separator: **{_p_tgt_c:.2f} bara**  ·  "
-            f"Header ΔP (worst arm + T-seg): **{_dp_c:.3f} kPa**  ·  "
-            f"{_la} branch ΔP: **{_dp_a:.3f} kPa**  ·  "
-            f"{_n_taps} total A-line taps"
-        )
-        _s1, _s2 = st.columns(2)
-        _s1.metric(
-            f"C + {_la}  total ΔP",
-            f"{_total:.3f} kPa",
-            delta=f"Tap inlet {_p_in_c:.4f} → sep {_p_sep_c:.4f} bara",
-            delta_color="off",
-            help=f"Header ΔP + {_la} branch ΔP from header tap inlet to branch outlet",
-        )
-        _s2.metric(
-            f"Total flow at T-junction",
-            "  ·  ".join(f"{sp}: {v:.2f} kg/h"
-                         for sp, v in results_c["gas_flows_kgh"].items()),
-            delta=f"Liquid: {results_c['q_lye']:.3f} m³/h",
-            delta_color="off",
-        )
-
-    # ── Goal Seek — Required Inlet Pressure ──────────────────────────────────
-    st.markdown(f"#### Goal Seek — Required {_la} Inlet Pressure")
-    with st.container(border=True):
-        st.caption(
-            f"Set the **target separator pressure**. The solver finds the required "
-            f"{_la} branch inlet pressure so that the flow through {_la} → C → T-segment "
-            "arrives at the separator at the target pressure."
-        )
-        _gs_col1, _gs_col2 = st.columns([1, 1])
-        with _gs_col1:
-            _p_target = st.number_input(
-                "Target separator pressure (bara)",
-                min_value=0.1,
-                max_value=float(results_c.get("P_target_sep", results_c["P_bara"])) * 3.0,
-                value=float(round(results_c.get("P_separator_bara",
-                                                ra["outlet_pressure_bara"]), 2)),
-                step=0.05,
-                format="%.3f",
-                key="gs_p_target",
-                help="Desired pressure at the separator connection.",
-            )
-            _gs_run = st.button(
-                "Calculate Required Inlet",
-                type="primary",
-                use_container_width=True,
-                key="gs_run",
-            )
-
-        if _gs_run:
-            with st.spinner("Iterating…"):
-                _gsr = _goal_seek_stack(ra, results_c, _p_target)
-            st.session_state["gs_result"] = _gsr
-            st.session_state["gs_target"] = _p_target
-
-        _gsr = st.session_state.get("gs_result")
-        if _gsr and "P_sep" not in _gsr:   # stale result from old function shape
-            _gsr = None
-            st.session_state.pop("gs_result", None)
-        if _gsr:
-            _gs_target_shown = st.session_state.get("gs_target", _p_target)
-            with _gs_col2:
-                _gs_resid = abs(_gsr["P_sep"] - _gs_target_shown) * 1000
-                if _gsr["converged"]:
-                    st.success(
-                        f"Converged in {_gsr['iterations']} iteration(s).  "
-                        f"Residual: {_gs_resid:.2f} mbar"
-                    )
-                else:
-                    st.warning(
-                        f"Did not fully converge after {_gsr['iterations']} iterations — "
-                        f"result is approximate (residual {_gs_resid:.1f} mbar)"
-                    )
-
-            st.divider()
-            _r1c1, _r1c2, _r1c3 = st.columns(3)
-            _r1c1.metric(
-                f"Required {_la} inlet pressure",
-                f"{_gsr['P_line_in']:.4f} bara",
-                help=f"Set this as {_la}'s inlet pressure to achieve the target.",
-            )
-            _r1c2.metric(
-                f"{_la} outlet / header C inlet",
-                f"{_gsr['P_line_out']:.4f} bara",
-                delta=f"{_la} ΔP = {_gsr['dp_line']:.3f} kPa",
-                delta_color="off",
-            )
-            _r1c3.metric(
-                "Separator pressure",
-                f"{_gsr['P_sep']:.4f} bara",
-                delta=f"Header C ΔP = {_gsr['dp_hdr']:.3f} kPa",
-                delta_color="off",
-            )
-            st.info(
-                f"**To achieve {_gs_target_shown:.3f} bara at the separator**, "
-                f"set **{_la} inlet pressure to {_gsr['P_line_in']:.4f} bara**."
-            )
 
     # ── Overlaid pressure profiles ─────────────────────────────────────────────
     st.markdown("#### Pressure Profiles")
@@ -2587,3 +2621,23 @@ with tab_stack:
                           f"{_gsr_o2['P_sep']:.4f} bara",
                           delta=f"{_ld}+T ΔP = {_gsr_o2['dp_hdr']:.3f} kPa",
                           delta_color="off")
+
+        st.divider()
+        st.markdown("##### Apply Results to Cases")
+        st.caption(
+            "Write the required inlet pressures back into Case A and Case B "
+            "so the branch calculations reflect the goal-seek solution."
+        )
+        _ap1, _ap2 = st.columns(2)
+        if _ap1.button(
+            f"Apply {_p_in_a:.4f} bara → {_la}",
+            use_container_width=True, key="stack_apply_a",
+        ):
+            st.session_state["stack_apply_a_pending"] = float(_p_in_a)
+            st.rerun()
+        if _ap2.button(
+            f"Apply {_p_in_b:.4f} bara → {_lb}",
+            use_container_width=True, key="stack_apply_b",
+        ):
+            st.session_state["stack_apply_b_pending"] = float(_p_in_b)
+            st.rerun()
