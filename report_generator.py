@@ -236,10 +236,10 @@ def generate_report(
     doc.add_heading("5. Segment Analysis", level=1)
 
     # Subset of columns that fits A4 portrait (6.47" available between margins)
-    _COLS   = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)", "Regime",
-               "V_m (m/s)", "V_e (m/s)", "V_m/V_e", "ΔP (kPa)", "P_out (bara)"]
-    _WIDTHS = [0.28, 0.55,   0.45,     0.88,   0.42,   0.90,
-               0.55,         0.55,        0.48,      0.55,      0.56]
+    _COLS   = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)", "L_eq (m)", "Fittings", "Regime",
+               "V_m (m/s)", "V_m/V_e", "ΔP (kPa)", "P_out (bara)"]
+    _WIDTHS = [0.25,  0.50,   0.42,     0.80,   0.38,   0.42,      0.70,      0.85,
+               0.48,         0.44,      0.50,       0.53]
 
     if grid_records:
         tbl3 = doc.add_table(rows=len(grid_records) + 1, cols=len(_COLS))
@@ -530,9 +530,9 @@ def generate_comparison_report(
     doc.add_paragraph()
 
     # ── 5. Segment Analysis ──────────────────────────────────────────────────
-    _COLS   = ["Seg","Pipe","ID (mm)","Type","L (m)","Regime",
-               "V_m (m/s)","V_e (m/s)","V_m/V_e","ΔP (kPa)","P_out (bara)"]
-    _WIDTHS = [0.28, 0.55, 0.45, 0.88, 0.42, 0.90, 0.55, 0.55, 0.48, 0.55, 0.56]
+    _COLS   = ["Seg","Pipe","ID (mm)","Type","L (m)","L_eq (m)","Fittings","Regime",
+               "V_m (m/s)","V_m/V_e","ΔP (kPa)","P_out (bara)"]
+    _WIDTHS = [0.25, 0.50, 0.42, 0.80, 0.38, 0.42, 0.70, 0.85, 0.48, 0.44, 0.50, 0.53]
 
     def _seg_table(doc, grid_records):
         if not grid_records:
@@ -953,9 +953,9 @@ def generate_combined_report(
         doc.add_paragraph()
 
     # ── 6+. Segment Analysis (one section per case) ───────────────────────────
-    _SC = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)", "Regime",
-           "V_m (m/s)", "V_e (m/s)", "V_m/V_e", "ΔP (kPa)", "P_out (bara)"]
-    _SW = [0.28, 0.55, 0.45, 0.88, 0.42, 0.90, 0.55, 0.55, 0.48, 0.55, 0.56]
+    _SC = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)", "L_eq (m)", "Fittings", "Regime",
+           "V_m (m/s)", "V_m/V_e", "ΔP (kPa)", "P_out (bara)"]
+    _SW = [0.25, 0.50, 0.42, 0.80, 0.38, 0.42, 0.70, 0.85, 0.48, 0.44, 0.50, 0.53]
 
     def _seg_tbl(records):
         if not records:

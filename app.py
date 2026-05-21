@@ -632,6 +632,11 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 "Pipe":            f"{seg['dn']}/{seg['pn']}",
                 "ID (mm)":         round(D_eff*1000, 1),
                 "L (m)":           seg["length"],
+                "L_eq (m)":        round(le_fit, 3),
+                "Fittings":        (f"{seg['fittings']} ×{seg.get('fitting_count',0)}"
+                                    if seg.get('fitting_count', 0) > 0
+                                    and seg.get('fittings', 'None') not in ('None', 'none', '')
+                                    else "—"),
                 "Regime":          regime,
                 "ΔP (kPa)":        round(dP_Pa/1000, 3),
                 "P_in (bara)":     round(current_P/1e5, 4),
