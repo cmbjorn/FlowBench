@@ -1692,9 +1692,11 @@ if "label_b" not in st.session_state:
 
 _la = st.session_state["label_a"]
 _lb = st.session_state["label_b"]
+_lc = f"{_la} Header"
+_ld = f"{_lb} Header"
 
 tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_stack = st.tabs(
-    [_la, _lb, "Case C — Header", "Case D — Header",
+    [_la, _lb, _lc, _ld,
      f"Compare {_la} vs {_lb}", "Stack ΔP"])
 
 with tab_a:
@@ -1709,9 +1711,9 @@ with tab_b:
 
 with tab_c:
     st.info(
-        "**Case C — Collecting Header**  "
-        "A uniform pipe with n A-line taps on each side of a central T-junction. "
-        "Each tap feeds one copy of Case A's branch flow. "
+        f"**{_lc}**  "
+        f"A uniform pipe with n {_la} taps on each side of a central T-junction. "
+        f"Each tap feeds one copy of {_la}'s branch flow. "
         "Worst-arm ΔP = farthest tap → T → separator.",
         icon="ℹ️",
     )
@@ -1719,9 +1721,9 @@ with tab_c:
 
 with tab_d:
     st.info(
-        "**Case D — Collecting Header**  "
-        "A uniform pipe with n B-line taps on each side of a central T-junction. "
-        "Each tap feeds one copy of Case B's branch flow. "
+        f"**{_ld}**  "
+        f"A uniform pipe with n {_lb} taps on each side of a central T-junction. "
+        f"Each tap feeds one copy of {_lb}'s branch flow. "
         "Worst-arm ΔP = farthest tap → T → separator.",
         icon="ℹ️",
     )
@@ -2279,7 +2281,7 @@ with tab_cmp:
                 try:
                     _combined_buf = report_generator.generate_combined_report(
                         cases=[ra, rb, results_c],
-                        case_labels=[_la, _lb, "Case C — H₂ Header"],
+                        case_labels=[_la, _lb, _lc],
                         fig_cmp=fig_cmp, fig_bar=fig_bar,
                         sensitivity_data=_build_sens_data(),
                         stack_dp=_build_stack_dp_data())
@@ -2366,12 +2368,14 @@ with tab_cmp:
 with tab_stack:
     _la = st.session_state.get("label_a", "Case A")
     _lb = st.session_state.get("label_b", "Case B")
+    _lc = f"{_la} Header"
+    _ld = f"{_lb} Header"
 
     st.subheader("Stack Differential Pressure")
     st.caption(
-        f"Goal-seek both the {_la} system ({_la} + C) and {_lb} system ({_lb} + D) "
+        f"Goal-seek both the {_la} system ({_la} → {_lc}) and {_lb} system ({_lb} → {_ld}) "
         "to find the required line inlet pressures for given separator pressures. "
-        "The **Stack ΔP** = P_inlet_A − P_inlet_B is the differential pressure "
+        f"The **Stack ΔP** = P_inlet_{_la} − P_inlet_{_lb} is the differential pressure "
         "across the process unit."
     )
 
@@ -2380,30 +2384,30 @@ with tab_stack:
         _sk_col1, _sk_col2 = st.columns(2)
         with _sk_col1:
             _p_sep_h2 = st.number_input(
-                "H₂ separator pressure (bara)",
+                f"{_la} separator pressure (bara)",
                 min_value=0.1, max_value=200.0,
                 value=float(round(results_c.get("P_separator_bara",
                                                 results_a["outlet_pressure_bara"]), 3)),
                 step=0.1, format="%.3f",
                 key="stack_p_sep_h2",
-                help="Target pressure at the H₂ gas-liquid separator."
+                help=f"Target pressure at the {_la} gas-liquid separator."
             )
         with _sk_col2:
             _p_sep_o2 = st.number_input(
-                "O₂ separator pressure (bara)",
+                f"{_lb} separator pressure (bara)",
                 min_value=0.1, max_value=200.0,
                 value=float(round(results_d.get("P_separator_bara",
                                                 results_b["outlet_pressure_bara"]), 3)),
                 step=0.1, format="%.3f",
                 key="stack_p_sep_o2",
-                help="Target pressure at the O₂ gas-liquid separator."
+                help=f"Target pressure at the {_lb} gas-liquid separator."
             )
 
         _sk_run = st.button("Calculate Stack ΔP", type="primary",
                             use_container_width=True, key="stack_run")
 
     if _sk_run:
-        with st.spinner("Solving H₂ and O₂ systems…"):
+        with st.spinner(f"Solving {_la} and {_lb} systems…"):
             _gsr_h2 = _goal_seek_stack(results_a, results_c, _p_sep_h2)
             _gsr_o2 = _goal_seek_stack(results_b, results_d, _p_sep_o2)
         st.session_state["stack_gsr_h2"]  = _gsr_h2
@@ -2422,15 +2426,15 @@ with tab_stack:
         _conv_o2 = _gsr_o2["converged"]
         if _conv_h2 and _conv_o2:
             st.success(
-                f"H₂ converged in {_gsr_h2['iterations']} iter.  "
-                f"O₂ converged in {_gsr_o2['iterations']} iter."
+                f"{_la} converged in {_gsr_h2['iterations']} iter.  "
+                f"{_lb} converged in {_gsr_o2['iterations']} iter."
             )
         else:
             if not _conv_h2:
-                st.warning(f"H₂ did not fully converge ({_gsr_h2['iterations']} iter, "
+                st.warning(f"{_la} did not fully converge ({_gsr_h2['iterations']} iter, "
                            f"residual {abs(_gsr_h2['P_sep'] - _shown_sep_h2)*1000:.1f} mbar)")
             if not _conv_o2:
-                st.warning(f"O₂ did not fully converge ({_gsr_o2['iterations']} iter, "
+                st.warning(f"{_lb} did not fully converge ({_gsr_o2['iterations']} iter, "
                            f"residual {abs(_gsr_o2['P_sep'] - _shown_sep_o2)*1000:.1f} mbar)")
 
         st.divider()
@@ -2440,16 +2444,16 @@ with tab_stack:
         _dp_stack = _p_in_a - _p_in_b
 
         with st.container(border=True):
-            st.markdown("##### Stack Differential Pressure  (P_inlet_A − P_inlet_B)")
+            st.markdown(f"##### Stack Differential Pressure  (P_inlet_{_la} − P_inlet_{_lb})")
             _sk1, _sk2, _sk3 = st.columns(3)
             _sk1.metric(
-                f"{_la} inlet pressure  (H₂ side)",
+                f"{_la} inlet pressure",
                 f"{_p_in_a:.4f} bara",
                 delta=f"{_la} ΔP = {_gsr_h2['dp_line']:.3f} kPa",
                 delta_color="off",
             )
             _sk2.metric(
-                f"{_lb} inlet pressure  (O₂ side)",
+                f"{_lb} inlet pressure",
                 f"{_p_in_b:.4f} bara",
                 delta=f"{_lb} ΔP = {_gsr_o2['dp_line']:.3f} kPa",
                 delta_color="off",
@@ -2457,7 +2461,7 @@ with tab_stack:
             _dp_stack_kpa  = _dp_stack * 100.0
             _dp_stack_mbar = _dp_stack_kpa * 10.0
             _sk3.metric(
-                "Stack ΔP  (H₂ − O₂)",
+                f"Stack ΔP  ({_la} − {_lb})",
                 f"{_dp_stack:.4f} bara",
                 delta=f"{_dp_stack_kpa:.2f} kPa  ·  {_dp_stack_mbar:.1f} mbar",
                 delta_color="off",
@@ -2467,26 +2471,26 @@ with tab_stack:
         with st.container(border=True):
             _bk1, _bk2 = st.columns(2)
             with _bk1:
-                st.markdown(f"**H₂ system  ({_la} → C → Separator)**")
+                st.markdown(f"**{_la} system  ({_la} → {_lc} → Separator)**")
                 st.metric(f"{_la} inlet",
                           f"{_gsr_h2['P_line_in']:.4f} bara")
-                st.metric(f"{_la} outlet / C inlet",
+                st.metric(f"{_la} outlet / {_lc} inlet",
                           f"{_gsr_h2['P_line_out']:.4f} bara",
                           delta=f"{_la} ΔP = {_gsr_h2['dp_line']:.3f} kPa",
                           delta_color="off")
-                st.metric("H₂ Separator",
+                st.metric(f"{_la} Separator",
                           f"{_gsr_h2['P_sep']:.4f} bara",
-                          delta=f"C+T ΔP = {_gsr_h2['dp_hdr']:.3f} kPa",
+                          delta=f"{_lc}+T ΔP = {_gsr_h2['dp_hdr']:.3f} kPa",
                           delta_color="off")
             with _bk2:
-                st.markdown(f"**O₂ system  ({_lb} → D → Separator)**")
+                st.markdown(f"**{_lb} system  ({_lb} → {_ld} → Separator)**")
                 st.metric(f"{_lb} inlet",
                           f"{_gsr_o2['P_line_in']:.4f} bara")
-                st.metric(f"{_lb} outlet / D inlet",
+                st.metric(f"{_lb} outlet / {_ld} inlet",
                           f"{_gsr_o2['P_line_out']:.4f} bara",
                           delta=f"{_lb} ΔP = {_gsr_o2['dp_line']:.3f} kPa",
                           delta_color="off")
-                st.metric("O₂ Separator",
+                st.metric(f"{_lb} Separator",
                           f"{_gsr_o2['P_sep']:.4f} bara",
-                          delta=f"D+T ΔP = {_gsr_o2['dp_hdr']:.3f} kPa",
+                          delta=f"{_ld}+T ΔP = {_gsr_o2['dp_hdr']:.3f} kPa",
                           delta_color="off")
