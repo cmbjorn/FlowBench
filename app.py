@@ -878,7 +878,9 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                         outlet_pressure_bara=outlet_pressure_bara,
                         pipe_length_m=pipe_length_m,
                         cumulative_distance=cumulative_distance,
-                        fig_sch=fig_sch, fig_prof=fig_prof)
+                        fig_sch=fig_sch, fig_prof=fig_prof,
+                        case_label=st.session_state.get(
+                            f"label_{cid}", f"Case {cid.upper()}"))
                     st.session_state[k("rpt_bytes")] = _buf.getvalue()
                     st.session_state[k("rpt_hash")]  = _rpt_hash
         with _wc2:

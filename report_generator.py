@@ -106,6 +106,7 @@ def generate_report(
     cumulative_distance,
     fig_sch=None,
     fig_prof=None,
+    case_label="Case",
 ):
     doc = Document()
 
@@ -119,11 +120,11 @@ def generate_report(
     sec.bottom_margin = Inches(0.9)
 
     # ── Title block ──────────────────────────────────────────────────────────
-    h = doc.add_heading("Multiphase Pipe Hydraulic Engine", level=0)
+    h = doc.add_heading(f"Branch Line Hydraulic Calculation — {case_label}", level=0)
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     sub = doc.add_paragraph(
-        f"Calculation Report  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
+        f"Electrolyzer gas–liquid piping  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
     )
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if sub.runs:
@@ -142,8 +143,23 @@ def generate_report(
 
     doc.add_paragraph()
 
-    # ── 1. Method ────────────────────────────────────────────────────────────
-    doc.add_heading("1. Method", level=1)
+    # ── 1. Purpose ───────────────────────────────────────────────────────────
+    doc.add_heading("1. Purpose", level=1)
+    _purpose = doc.add_paragraph(
+        f"This calculation determines the two-phase pressure drop along the {case_label} "
+        f"branch pipeline, which carries {_gas_label} and {liquid_type} from an "
+        f"electrolyzer stack to a gas–liquid separator. "
+        f"The result — inlet pressure, outlet pressure, and total ΔP — is used to "
+        f"size the pipe and, in combination with the collecting header calculation, "
+        f"to establish the required electrolyzer stack outlet pressure."
+    )
+    _purpose.paragraph_format.space_after = Pt(4)
+    if _purpose.runs:
+        _purpose.runs[0].font.size = Pt(9)
+    doc.add_paragraph()
+
+    # ── 2. Method ────────────────────────────────────────────────────────────
+    doc.add_heading("2. Method", level=1)
 
     _method_paras = [
         (
@@ -178,9 +194,10 @@ def generate_report(
 
     doc.add_paragraph()
 
-    # ── 2. Process Conditions ────────────────────────────────────────────────
-    doc.add_heading("2. Process Conditions", level=1)
+    # ── 3. Process Conditions ────────────────────────────────────────────────
+    doc.add_heading("3. Process Conditions", level=1)
     _cond_rows = [
+        ("Case",               case_label),
         ("Inlet Pressure",     f"{P_bara:.2f} bara"),
         ("Temperature",        f"{T_C:.1f} °C"),
     ]
@@ -194,8 +211,8 @@ def generate_report(
     _kv_table(doc, _cond_rows)
     doc.add_paragraph()
 
-    # ── 3. Phase Thermodynamics ──────────────────────────────────────────────
-    doc.add_heading("3. Phase Thermodynamics", level=1)
+    # ── 4. Phase Thermodynamics ──────────────────────────────────────────────
+    doc.add_heading("4. Phase Thermodynamics", level=1)
     _thermo_rows = [
         ("Gas Density ρ_g",               f"{props['rho_g']:.4f} kg/m³"),
         ("Gas Mixture MW",                f"{props['MW_mix_gmol']:.3f} g/mol"),
@@ -215,8 +232,8 @@ def generate_report(
     _kv_table(doc, _thermo_rows)
     doc.add_paragraph()
 
-    # ── 4. Segment Analysis ──────────────────────────────────────────────────
-    doc.add_heading("4. Segment Analysis", level=1)
+    # ── 5. Segment Analysis ──────────────────────────────────────────────────
+    doc.add_heading("5. Segment Analysis", level=1)
 
     # Subset of columns that fits A4 portrait (6.47" available between margins)
     _COLS   = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)", "Regime",
@@ -247,20 +264,22 @@ def generate_report(
 
     doc.add_paragraph()
 
-    # ── 5. System Totals ─────────────────────────────────────────────────────
-    doc.add_heading("5. System Totals", level=1)
+    # ── 6. System Totals ─────────────────────────────────────────────────────
+    doc.add_heading("6. System Totals", level=1)
     _kv_table(doc, [
-        ("Total Pressure Drop ΔP",                f"{total_dp_kpa:.4f} kPa"),
-        ("Total Pressure Drop ΔP",                f"{total_dp_kpa / 100:.6f} bar"),
+        ("Case",                                       case_label),
+        ("Inlet Pressure",                             f"{P_bara:.4f} bara"),
         ("Outlet Pressure",                            f"{outlet_pressure_bara:.4f} bara"),
+        ("Total Pressure Drop ΔP",                    f"{total_dp_kpa:.4f} kPa"),
+        ("Total Pressure Drop ΔP",                    f"{total_dp_kpa / 100:.6f} bar"),
         ("Pipe Length (physical segments)",            f"{pipe_length_m:.2f} m"),
         ("Effective Length (incl. fittings)",          f"{cumulative_distance:.2f} m"),
     ])
 
-    # ── 6. Visualisations ────────────────────────────────────────────────────
+    # ── 7. Visualisations ────────────────────────────────────────────────────
     if fig_sch is not None or fig_prof is not None:
         doc.add_page_break()
-        doc.add_heading("6. Visualisations", level=1)
+        doc.add_heading("7. Visualisations", level=1)
 
         if fig_sch is not None:
             doc.add_heading("Pipeline Schematic", level=2)
@@ -283,11 +302,12 @@ def generate_report(
     doc.add_paragraph()
     _gas_str = " / ".join(gas_flows_kgh.keys())
     note = doc.add_paragraph(
-        f"Disclaimer: The correlations implemented were developed primarily for oil/gas "
-        f"systems. Application to {_gas_str} / {liquid_type} duty carries an estimated "
-        f"uncertainty of ±20–30 %. Use the sensitivity analysis (Compare tab) to bracket "
-        f"the range across all available methods. Treat as an engineering estimate and "
-        f"validate against plant data before use in safety-critical design."
+        f"Engineering Note: The two-phase correlations used here were developed primarily "
+        f"for oil/gas systems. Their application to electrolysis duty ({_gas_str} / "
+        f"{liquid_type}) carries an estimated uncertainty of ±20–30 %. Use the sensitivity "
+        f"analysis (Compare tab) to bracket the ΔP range across all available methods. "
+        f"Treat as a first-pass engineering estimate; validate against commissioning data "
+        f"before use in safety-critical design."
     )
     if note.runs:
         note.runs[0].font.size      = Pt(8)
@@ -368,11 +388,11 @@ def generate_comparison_report(
     sec.top_margin    = Inches(0.9);   sec.bottom_margin = Inches(0.9)
 
     # ── Title ────────────────────────────────────────────────────────────────
-    h = doc.add_heading("Multiphase Pipe Hydraulic Engine — Comparison Report", level=0)
+    h = doc.add_heading(f"Branch Line Comparison — {label_a}  vs.  {label_b}", level=0)
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     sub = doc.add_paragraph(
-        f"{label_a}  vs.  {label_b}  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
+        f"Electrolyzer gas–liquid piping  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
     )
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if sub.runs:
@@ -381,8 +401,24 @@ def generate_comparison_report(
 
     doc.add_paragraph()
 
-    # ── 1. Method ────────────────────────────────────────────────────────────
-    doc.add_heading("1. Method", level=1)
+    # ── 1. Purpose ───────────────────────────────────────────────────────────
+    doc.add_heading("1. Purpose", level=1)
+    _p = doc.add_paragraph(
+        f"This report compares the two-phase pressure drop along two branch pipelines: "
+        f"{label_a} and {label_b}. Both carry gas–liquid flow from electrolyzer stacks "
+        f"to a separator. The comparison supports pipe sizing — selecting the smallest "
+        f"bore that keeps ΔP within budget and velocity below the erosion threshold — "
+        f"and identifies which line governs the required stack outlet pressure. "
+        f"The sensitivity analysis (if run) quantifies the uncertainty in ΔP due to "
+        f"correlation choice across all 12 method combinations."
+    )
+    _p.paragraph_format.space_after = Pt(4)
+    if _p.runs:
+        _p.runs[0].font.size = Pt(9)
+    doc.add_paragraph()
+
+    # ── 2. Method ────────────────────────────────────────────────────────────
+    doc.add_heading("2. Method", level=1)
     for _txt in [
         ("Six two-phase ΔP correlations are available: Beggs & Brill (1973, default), "
          "Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm, and Kim-Mudawar. "
@@ -394,8 +430,8 @@ def generate_comparison_report(
          "for horizontal, Wallis/Taitel (1980) for vertical segments. "
          "Gas properties: ideal-gas law, CoolProp viscosities, Dalton's Law for water vapour. "
          "Minor losses: Crane TP-410. Erosion: API RP 14E, C = 100."),
-        ("Where a sensitivity analysis was run, Section 8 shows total ΔP and flow regimes "
-         "across all 12 method combinations (6 correlations × 2 void-fraction models). "
+        ("Where a sensitivity analysis was run, the final section shows total ΔP and flow "
+         "regimes across all 12 method combinations (6 correlations × 2 void-fraction models). "
          "Packages: fluids · CoolProp · python-docx."),
     ]:
         _p = doc.add_paragraph(_txt)
@@ -674,17 +710,18 @@ def generate_comparison_report(
             else:
                 doc.add_paragraph("(sensitivity chart rendering timed out)")
 
-    # ── Disclaimer ───────────────────────────────────────────────────────────
+    # ── Engineering note ──────────────────────────────────────────────────────
     doc.add_paragraph()
     _sp_a = " / ".join(results_a["gas_flows_kgh"].keys())
     _sp_b = " / ".join(results_b["gas_flows_kgh"].keys())
     _sp_str = _sp_a if _sp_a == _sp_b else f"{_sp_a}  |  {_sp_b}"
     note = doc.add_paragraph(
-        f"Disclaimer: The correlations implemented were developed primarily for oil/gas "
-        f"systems. Application to {_sp_str} duty carries an estimated uncertainty of "
-        f"±20–30 %. Use the sensitivity analysis (Section 8, if present) to bracket the "
-        f"range across all available methods. Treat as an engineering estimate and validate "
-        f"against plant data before use in safety-critical design."
+        f"Engineering Note: The two-phase correlations used here were developed primarily "
+        f"for oil/gas systems. Their application to electrolysis duty ({_sp_str}) carries "
+        f"an estimated uncertainty of ±20–30 %. Use the sensitivity analysis (if present) "
+        f"to bracket the ΔP range across all available methods. Treat as a first-pass "
+        f"engineering estimate; validate against commissioning data before use in "
+        f"safety-critical design."
     )
     if note.runs:
         note.runs[0].font.size      = Pt(8)
@@ -727,7 +764,7 @@ def generate_combined_report(
     sec.top_margin    = Inches(0.9);   sec.bottom_margin = Inches(0.9)
 
     # ── Title ────────────────────────────────────────────────────────────────
-    h = doc.add_heading("Multiphase Pipe Hydraulic Engine — Combined Study Report", level=0)
+    h = doc.add_heading("Electrolyzer Piping Hydraulic Study — Combined Report", level=0)
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
     sub = doc.add_paragraph(
         "  ·  ".join(case_labels)
@@ -752,7 +789,33 @@ def generate_combined_report(
     def _nt(rows):
         return _kv_n_table(doc, _headers, rows, col_widths=_col_w)
 
-    # ── 1. Method ────────────────────────────────────────────────────────────
+    # ── 1. Purpose ───────────────────────────────────────────────────────────
+    _h1("Purpose")
+    _lbl_branch = "  ·  ".join(case_labels[:2]) if n >= 2 else case_labels[0]
+    _lbl_header = "  ·  ".join(case_labels[2:]) if n >= 3 else ""
+    _p_lines = [
+        f"This study sizes the individual branch pipelines ({_lbl_branch}) and "
+        f"{'collecting headers (' + _lbl_header + ') ' if _lbl_header else ''}"
+        f"for an electrolyzer system. Each branch carries a two-phase gas–lye mixture "
+        f"from one electrolyzer stack to a collecting header, which conveys the combined "
+        f"flow to the gas–liquid separator."
+    ]
+    if n >= 3:
+        _p_lines.append(
+            f"The goal-seek function finds the required branch-line inlet pressure "
+            f"(= electrolyzer stack outlet pressure) such that the separator arrives at "
+            f"the target operating pressure. For a full H₂/O₂ system, the difference "
+            f"between the H₂ and O₂ branch inlet pressures gives the differential "
+            f"pressure across the electrolyzer stack."
+        )
+    for _txt in _p_lines:
+        _pp = doc.add_paragraph(_txt)
+        _pp.paragraph_format.space_after = Pt(4)
+        if _pp.runs:
+            _pp.runs[0].font.size = Pt(9)
+    doc.add_paragraph()
+
+    # ── 2. Method ────────────────────────────────────────────────────────────
     _h1("Method")
     for _txt in [
         ("Six two-phase ΔP correlations are available: Beggs & Brill (1973, default), "
@@ -846,58 +909,47 @@ def generate_combined_report(
     _nt(_tot)
     doc.add_paragraph()
 
-    # ── 5. System Total ΔP — Header (C) + Branch (A / B) ─────────────────────
-    # Only rendered when at least 3 cases (C = header, A and B = branches)
+    # ── 5. System Total ΔP — Header + Branch ─────────────────────────────────
+    # Only rendered when at least 3 cases (cases[2] = header, cases[0] = branch A)
     if n >= 3:
-        _h1("System Total ΔP — Header (C) + Branch")
-        _dp_c    = cases[2]["total_dp_kpa"]   # Case C = header
-        _dp_a    = cases[0]["total_dp_kpa"]   # Case A = branch A
-        _dp_b    = cases[1]["total_dp_kpa"]   # Case B = branch B
-        _total_a = _dp_c + _dp_a
-        _total_b = _dp_c + _dp_b
+        _h1(f"System Total ΔP — {case_labels[2]} + {case_labels[0]}")
+
+        _dp_hdr  = cases[2]["total_dp_kpa"]   # header (worst-arm + T-seg)
+        _dp_br   = cases[0]["total_dp_kpa"]   # branch A
+        _total   = _dp_hdr + _dp_br
         _p_in_c  = cases[2]["P_bara"]
-        _p_out_a = _p_in_c - _total_a / 100.0
-        _p_out_b = _p_in_c - _total_b / 100.0
-        _worst   = max(_total_a, _total_b)
-        _worst_lbl = f"{case_labels[2]} + {case_labels[0]}" if _total_a >= _total_b \
-                     else f"{case_labels[2]} + {case_labels[1]}"
-        _p_out_worst = _p_in_c - _worst / 100.0
+        _p_sep   = cases[2].get("P_separator_bara",
+                                cases[2]["outlet_pressure_bara"])
+        _p_br_in = cases[0]["P_bara"]
+        _p_br_out = cases[0]["outlet_pressure_bara"]
 
         _sys_intro = doc.add_paragraph(
-            f"The header ({case_labels[2]}) feeds both branch pipelines. "
-            f"The governing (worst-case) path is the one with the higher combined ΔP — "
-            f"it sets the minimum required inlet pressure."
+            f"The {case_labels[2]} collecting header receives flow from n × {case_labels[0]} "
+            f"branch lines, combines them at the T-junction, and delivers the total flow "
+            f"to the separator via the T-segment. "
+            f"Pressure marches from the branch inlet → header taps → T-junction → "
+            f"T-segment → separator. "
+            f"The worst arm (longest tap distance) governs the header ΔP."
         )
         if _sys_intro.runs:
             _sys_intro.runs[0].font.size = Pt(9)
         doc.add_paragraph()
 
         _sys_rows = [
-            ("System inlet pressure (bara)",                  "—",
-             "—", f"{_p_in_c:.4f}"),
-            (f"Header ΔP — {case_labels[2]} (kPa)",          "—",
-             "—", f"{_dp_c:.4f}"),
-            (f"Branch ΔP — {case_labels[0]} (kPa)",          f"{_dp_a:.4f}",
-             "—", "—"),
-            (f"Branch ΔP — {case_labels[1]} (kPa)",          "—",
-             f"{_dp_b:.4f}", "—"),
-            (f"Total path  {case_labels[2]}+{case_labels[0]} (kPa)",  f"{_total_a:.4f}",
-             "—", "—"),
-            (f"Total path  {case_labels[2]}+{case_labels[1]} (kPa)",  "—",
-             f"{_total_b:.4f}", "—"),
-            (f"Worst-case path  ({_worst_lbl})",              f"{_worst:.4f}" if _total_a >= _total_b else "—",
-             f"{_worst:.4f}" if _total_b > _total_a else "—", "—"),
-            (f"System outlet pressure — path A (bara)",       f"{_p_out_a:.4f}",
-             "—", "—"),
-            (f"System outlet pressure — path B (bara)",       "—",
-             f"{_p_out_b:.4f}", "—"),
-            (f"Min. outlet pressure / worst case (bara)",
-             f"{_p_out_worst:.4f}" if _total_a >= _total_b else "—",
-             f"{_p_out_worst:.4f}" if _total_b > _total_a else "—", "—"),
+            (f"Branch inlet pressure — {case_labels[0]} (bara)",
+             f"{_p_br_in:.4f}"),
+            (f"Branch ΔP — {case_labels[0]} (kPa)",
+             f"{_dp_br:.4f}"),
+            (f"Branch outlet / header inlet pressure (bara)",
+             f"{_p_br_out:.4f}"),
+            (f"Header ΔP (worst arm + T-segment) — {case_labels[2]} (kPa)",
+             f"{_dp_hdr:.4f}"),
+            (f"Total system ΔP — {case_labels[0]} + {case_labels[2]} (kPa)",
+             f"{_total:.4f}"),
+            ("Separator connection pressure (bara)",
+             f"{_p_sep:.4f}"),
         ]
-        # Four-column table: Parameter | Case A | Case B | Case C
-        _sys_headers = ["Parameter", case_labels[0], case_labels[1], case_labels[2]]
-        _kv_n_table(doc, _sys_headers, _sys_rows, col_widths=(2.4, 1.3, 1.3, 1.3))
+        _kv_table(doc, _sys_rows)
         doc.add_paragraph()
 
     # ── 6+. Segment Analysis (one section per case) ───────────────────────────
@@ -996,6 +1048,9 @@ def generate_combined_report(
                    "Chisholm": "Chisholm", "Kim_Mudawar": "Kim-M"}
         _VOID_S = {"Homogeneous": "Homo", "Rouhani-1 (slip)": "Rouhani-1"}
 
+        _lbl_sa = case_labels[0] if len(case_labels) > 0 else "Case A"
+        _lbl_sb = case_labels[1] if len(case_labels) > 1 else "Case B"
+
         _va = [r["total_dp_kpa"] for r in _sa if r["ok"]]
         _vb = [r["total_dp_kpa"] for r in _sb if r["ok"]]
         if _va and _vb:
@@ -1003,18 +1058,18 @@ def generate_combined_report(
             _b_sel = cases[1]["total_dp_kpa"]
             _overlap = min(_va) <= max(_vb) and min(_vb) <= max(_va)
             _sum = [
-                ("Case A — minimum ΔP (kPa)",       f"{min(_va):.3f}",  "—"),
-                ("Case A — selected method (kPa)",  f"{_a_sel:.3f}",    "—"),
-                ("Case A — maximum ΔP (kPa)",       f"{max(_va):.3f}",  "—"),
-                ("Case A — spread (kPa)",            f"{max(_va)-min(_va):.3f}", "—"),
-                ("Case B — minimum ΔP (kPa)",       "—",               f"{min(_vb):.3f}"),
-                ("Case B — selected method (kPa)",  "—",               f"{_b_sel:.3f}"),
-                ("Case B — maximum ΔP (kPa)",       "—",               f"{max(_vb):.3f}"),
-                ("Case B — spread (kPa)",            "—",               f"{max(_vb)-min(_vb):.3f}"),
+                (f"{_lbl_sa} — minimum ΔP (kPa)",       f"{min(_va):.3f}",  "—"),
+                (f"{_lbl_sa} — selected method (kPa)",  f"{_a_sel:.3f}",    "—"),
+                (f"{_lbl_sa} — maximum ΔP (kPa)",       f"{max(_va):.3f}",  "—"),
+                (f"{_lbl_sa} — spread (kPa)",            f"{max(_va)-min(_va):.3f}", "—"),
+                (f"{_lbl_sb} — minimum ΔP (kPa)",       "—",               f"{min(_vb):.3f}"),
+                (f"{_lbl_sb} — selected method (kPa)",  "—",               f"{_b_sel:.3f}"),
+                (f"{_lbl_sb} — maximum ΔP (kPa)",       "—",               f"{max(_vb):.3f}"),
+                (f"{_lbl_sb} — spread (kPa)",            "—",               f"{max(_vb)-min(_vb):.3f}"),
                 ("Ranges overlap?",
                  "Yes — ordering method-dependent" if _overlap else "No — unambiguous", ""),
             ]
-            _kv3_table(doc, _sum)
+            _kv3_table(doc, _sum, label_a=_lbl_sa, label_b=_lbl_sb)
             doc.add_paragraph()
 
         _det = []
@@ -1026,7 +1081,7 @@ def generate_combined_report(
                 f"{_ra['total_dp_kpa']:.3f}" if _ra["ok"] else f"FAIL: {_ra['error']}",
                 f"{_rb['total_dp_kpa']:.3f}" if _rb["ok"] else f"FAIL: {_rb['error']}",
             ))
-        _kv3_table(doc, _det)
+        _kv3_table(doc, _det, label_a=_lbl_sa, label_b=_lbl_sb)
         doc.add_paragraph()
 
         if _fig_s is not None:
@@ -1036,17 +1091,18 @@ def generate_combined_report(
             else:
                 doc.add_paragraph("(sensitivity chart rendering timed out)")
 
-    # ── Disclaimer ───────────────────────────────────────────────────────────
+    # ── Engineering note ──────────────────────────────────────────────────────
     doc.add_paragraph()
     _all_gas = sorted({sp for c in cases for sp in c["gas_flows_kgh"]})
     _all_liq = sorted({c["liquid_type"] for c in cases})
     note = doc.add_paragraph(
-        f"Disclaimer: The correlations implemented were developed primarily for oil/gas "
-        f"systems. Application to {' / '.join(_all_gas)} / {' / '.join(_all_liq)} duty "
-        f"carries an estimated uncertainty of ±20–30 %. Use the sensitivity analysis "
-        f"(if present above) to bracket the range across all available methods. "
-        f"Treat as an engineering estimate and validate against plant data before "
-        f"use in safety-critical design."
+        f"Engineering Note: The two-phase correlations used here were developed primarily "
+        f"for oil/gas systems. Their application to electrolysis duty "
+        f"({' / '.join(_all_gas)} / {' / '.join(_all_liq)}) carries an estimated "
+        f"uncertainty of ±20–30 %. Use the sensitivity analysis (if present above) to "
+        f"bracket the ΔP range across all available methods. Treat as a first-pass "
+        f"engineering estimate; validate against commissioning data before use in "
+        f"safety-critical design."
     )
     if note.runs:
         note.runs[0].font.size      = Pt(8)
