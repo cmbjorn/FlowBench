@@ -325,12 +325,13 @@ def _kv_n_table(doc, headers, rows_data, col_widths=None):
     return tbl
 
 
-def _kv3_table(doc, rows_data, col_widths=(2.2, 2.1, 2.1)):
-    """Three-column comparison table: Parameter | Case A | Case B."""
+def _kv3_table(doc, rows_data, col_widths=(2.2, 2.1, 2.1),
+               label_a="Case A", label_b="Case B"):
+    """Three-column comparison table: Parameter | <label_a> | <label_b>."""
     tbl = doc.add_table(rows=len(rows_data) + 1, cols=3)
     tbl.style = "Table Grid"
     _style_header(tbl.rows[0])
-    for j, label in enumerate(["Parameter", "Case A", "Case B"]):
+    for j, label in enumerate(["Parameter", label_a, label_b]):
         tbl.rows[0].cells[j].text = label
     for i, (label, va, vb) in enumerate(rows_data, start=1):
         row = tbl.rows[i]
@@ -348,13 +349,15 @@ def _kv3_table(doc, rows_data, col_widths=(2.2, 2.1, 2.1)):
 
 def generate_comparison_report(
     results_a, results_b,
+    label_a="Case A", label_b="Case B",
     fig_cmp=None, fig_bar=None,
     sensitivity_data=None,
 ):
     """
-    Generate a Word report comparing Case A and Case B side by side.
+    Generate a Word report comparing two cases side by side.
 
     results_a / results_b: dicts returned by run_case() in app.py.
+    label_a / label_b: custom case names used throughout the report.
     sensitivity_data: optional dict {"sa": [...], "sb": [...], "fig": Figure}
                       from run_sensitivity(); adds a Method Sensitivity section.
     """
@@ -369,7 +372,7 @@ def generate_comparison_report(
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     sub = doc.add_paragraph(
-        f"Case A  vs.  Case B  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
+        f"{label_a}  vs.  {label_b}  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
     )
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if sub.runs:
@@ -383,7 +386,7 @@ def generate_comparison_report(
     for _txt in [
         ("Six two-phase ΔP correlations are available: Beggs & Brill (1973, default), "
          "Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm, and Kim-Mudawar. "
-         "Case A and Case B may use different correlations and void-fraction models. "
+         f"{label_a} and {label_b} may use different correlations and void-fraction models. "
          "Gas density is re-evaluated at each segment inlet (pressure marching); each "
          "segment's ΔP is split into frictional, gravitational, and accelerational components."),
         ("Void fraction: homogeneous model or Rouhani-1 slip-flow model. "
@@ -431,7 +434,7 @@ def generate_comparison_report(
          f"{results_a['q_lye']:.3f}",
          f"{results_b['q_lye']:.3f}"),
     ]
-    _kv3_table(doc, _cond_rows)
+    _kv3_table(doc, _cond_rows, label_a=label_a, label_b=label_b)
     doc.add_paragraph()
 
     # ── 3. Phase Thermodynamics ──────────────────────────────────────────────
@@ -456,7 +459,7 @@ def generate_comparison_report(
              f"{pa.get('m_vapor_h2o_kgh',0):.4f}" if pa.get('P_sat_H2O_pa',0) > 0 else "—",
              f"{pb.get('m_vapor_h2o_kgh',0):.4f}" if pb.get('P_sat_H2O_pa',0) > 0 else "—"),
         ]
-    _kv3_table(doc, _thermo_rows)
+    _kv3_table(doc, _thermo_rows, label_a=label_a, label_b=label_b)
     doc.add_paragraph()
 
     # ── 4. System Totals ─────────────────────────────────────────────────────
@@ -474,7 +477,7 @@ def generate_comparison_report(
         ("Total ΔP (bar)",
          f"{results_a['total_dp_kpa']/100:.6f}",
          f"{results_b['total_dp_kpa']/100:.6f}"),
-        ("ΔP difference B − A (kPa)",
+        (f"ΔP difference {label_b} − {label_a} (kPa)",
          "—",
          f"{_dp_delta:+.4f}"),
         ("Pipe length (m)",
@@ -487,7 +490,7 @@ def generate_comparison_report(
          f"{_max_ve_a:.3f}",
          f"{_max_ve_b:.3f}"),
     ]
-    _kv3_table(doc, _tot_rows)
+    _kv3_table(doc, _tot_rows, label_a=label_a, label_b=label_b)
     doc.add_paragraph()
 
     # ── 5. Segment Analysis ──────────────────────────────────────────────────
@@ -513,10 +516,10 @@ def generate_comparison_report(
                 _cell_font(row.cells[j], size_pt=8)
         _set_col_widths(tbl, _WIDTHS)
 
-    doc.add_heading("5. Segment Analysis — Case A", level=1)
+    doc.add_heading(f"5. Segment Analysis — {label_a}", level=1)
     _seg_table(doc, results_a["grid_records"])
     doc.add_paragraph()
-    doc.add_heading("6. Segment Analysis — Case B", level=1)
+    doc.add_heading(f"6. Segment Analysis — {label_b}", level=1)
     _seg_table(doc, results_b["grid_records"])
     doc.add_paragraph()
 
@@ -525,7 +528,7 @@ def generate_comparison_report(
         doc.add_page_break()
         doc.add_heading("7. Visualisations", level=1)
         if fig_cmp is not None:
-            doc.add_heading("Pressure Profiles — Case A vs B", level=2)
+            doc.add_heading(f"Pressure Profiles — {label_a} vs {label_b}", level=2)
             img = _fig_to_png(fig_cmp, width=900, height=400, scale=2)
             if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
@@ -533,7 +536,7 @@ def generate_comparison_report(
                 doc.add_paragraph("(chart rendering timed out)")
             doc.add_paragraph()
         if fig_bar is not None:
-            doc.add_heading("ΔP by Segment — Case A vs B", level=2)
+            doc.add_heading(f"ΔP by Segment — {label_a} vs {label_b}", level=2)
             img = _fig_to_png(fig_bar, width=900, height=340, scale=2)
             if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
@@ -578,19 +581,19 @@ def generate_comparison_report(
             _b_sel = results_b["total_dp_kpa"]
             _overlap = _a_min <= _b_max and _b_min <= _a_max
             _sum_rows = [
-                ("Case A — minimum ΔP (kPa)",        f"{_a_min:.3f}",   "—"),
-                ("Case A — selected method (kPa)",   f"{_a_sel:.3f}",   "—"),
-                ("Case A — maximum ΔP (kPa)",        f"{_a_max:.3f}",   "—"),
-                ("Case A — spread (kPa)",             f"{_a_max-_a_min:.3f}", "—"),
-                ("Case B — minimum ΔP (kPa)",        "—",               f"{_b_min:.3f}"),
-                ("Case B — selected method (kPa)",   "—",               f"{_b_sel:.3f}"),
-                ("Case B — maximum ΔP (kPa)",        "—",               f"{_b_max:.3f}"),
-                ("Case B — spread (kPa)",             "—",               f"{_b_max-_b_min:.3f}"),
+                (f"{label_a} — minimum ΔP (kPa)",        f"{_a_min:.3f}",   "—"),
+                (f"{label_a} — selected method (kPa)",   f"{_a_sel:.3f}",   "—"),
+                (f"{label_a} — maximum ΔP (kPa)",        f"{_a_max:.3f}",   "—"),
+                (f"{label_a} — spread (kPa)",             f"{_a_max-_a_min:.3f}", "—"),
+                (f"{label_b} — minimum ΔP (kPa)",        "—",               f"{_b_min:.3f}"),
+                (f"{label_b} — selected method (kPa)",   "—",               f"{_b_sel:.3f}"),
+                (f"{label_b} — maximum ΔP (kPa)",        "—",               f"{_b_max:.3f}"),
+                (f"{label_b} — spread (kPa)",             "—",               f"{_b_max-_b_min:.3f}"),
                 ("Ranges overlap?",
                  "Yes — ordering depends on method" if _overlap else "No — unambiguous",
                  ""),
             ]
-            _kv3_table(doc, _sum_rows)
+            _kv3_table(doc, _sum_rows, label_a=label_a, label_b=label_b)
             doc.add_paragraph()
 
         # Per-method ΔP detail table
@@ -602,7 +605,7 @@ def generate_comparison_report(
             _va_str = f"{_r_a['total_dp_kpa']:.3f}" if _r_a["ok"] else f"FAIL: {_r_a['error']}"
             _vb_str = f"{_r_b['total_dp_kpa']:.3f}" if _r_b["ok"] else f"FAIL: {_r_b['error']}"
             _detail_rows.append((_label, _va_str, _vb_str))
-        _kv3_table(doc, _detail_rows)
+        _kv3_table(doc, _detail_rows, label_a=label_a, label_b=label_b)
         doc.add_paragraph()
 
         # Flow regime consistency tables
@@ -656,11 +659,11 @@ def generate_comparison_report(
                     _cell_font(cell, size_pt=8)
             _set_col_widths(tbl, [0.30, 0.70, 0.90] + [1.60] * len(void_keys) + [0.50])
 
-        doc.add_paragraph(f"Case A — Flow Regime by Method")
-        _regime_report_table(doc, _sa, results_a.get("segments", []), "A")
+        doc.add_paragraph(f"{label_a} — Flow Regime by Method")
+        _regime_report_table(doc, _sa, results_a.get("segments", []), label_a)
         doc.add_paragraph()
-        doc.add_paragraph(f"Case B — Flow Regime by Method")
-        _regime_report_table(doc, _sb, results_b.get("segments", []), "B")
+        doc.add_paragraph(f"{label_b} — Flow Regime by Method")
+        _regime_report_table(doc, _sb, results_b.get("segments", []), label_b)
         doc.add_paragraph()
 
         # Chart
@@ -795,15 +798,20 @@ def generate_combined_report(
     # ── 3. Phase Thermodynamics ──────────────────────────────────────────────
     _h1("Phase Thermodynamics  (inlet conditions)")
     _ps = [c["props"] for c in cases]
+
+    def _pfmt(p, key, scale=1.0, fmt=".4f"):
+        v = p.get(key)
+        return f"{v * scale:{fmt}}" if v is not None else "—"
+
     _thm = [
-        ("Gas density ρ_g (kg/m³)",)      + tuple(f"{p['rho_g']:.4f}"        for p in _ps),
-        ("Gas mixture MW (g/mol)",)        + tuple(f"{p['MW_mix_gmol']:.3f}"  for p in _ps),
-        ("Liquid density ρ_l (kg/m³)",)    + tuple(f"{p['rho_l']:.2f}"        for p in _ps),
-        ("Liquid viscosity μ_l (mPa·s)",)  + tuple(f"{p['mu_l']*1e3:.4f}"     for p in _ps),
-        ("Gas viscosity μ_g (µPa·s)",)     + tuple(f"{p['mu_g']*1e6:.2f}"     for p in _ps),
-        ("Surface tension σ (mN/m)",)      + tuple(f"{p['sigma']*1e3:.3f}"    for p in _ps),
-        ("Mass quality x (%)",)            + tuple(f"{p['x_gas']*100:.4f}"    for p in _ps),
-        ("Void fraction α (%)",)           + tuple(f"{p['alpha']*100:.2f}"    for p in _ps),
+        ("Gas density ρ_g (kg/m³)",)      + tuple(_pfmt(p, "rho_g")                    for p in _ps),
+        ("Gas mixture MW (g/mol)",)        + tuple(_pfmt(p, "MW_mix_gmol", fmt=".3f")   for p in _ps),
+        ("Liquid density ρ_l (kg/m³)",)    + tuple(_pfmt(p, "rho_l", fmt=".2f")         for p in _ps),
+        ("Liquid viscosity μ_l (mPa·s)",)  + tuple(_pfmt(p, "mu_l", 1e3)               for p in _ps),
+        ("Gas viscosity μ_g (µPa·s)",)     + tuple(_pfmt(p, "mu_g", 1e6, ".2f")        for p in _ps),
+        ("Surface tension σ (mN/m)",)      + tuple(_pfmt(p, "sigma", 1e3, ".3f")        for p in _ps),
+        ("Mass quality x (%)",)            + tuple(_pfmt(p, "x_gas", 100)              for p in _ps),
+        ("Void fraction α (%)",)           + tuple(_pfmt(p, "alpha", 100, ".2f")        for p in _ps),
     ]
     if any(p.get("P_sat_H2O_pa", 0) > 0 for p in _ps):
         _thm += [

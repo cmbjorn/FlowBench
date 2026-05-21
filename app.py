@@ -1588,12 +1588,25 @@ def run_header_case(cid: str = "c", accent: str = "#059669") -> dict:
     }
 
 
-tab_a, tab_b, tab_c, tab_cmp = st.tabs(["Case A", "Case B", "Case C — Header", "Compare A vs B"])
+if "label_a" not in st.session_state:
+    st.session_state["label_a"] = "Case A"
+if "label_b" not in st.session_state:
+    st.session_state["label_b"] = "Case B"
+
+_la = st.session_state["label_a"]
+_lb = st.session_state["label_b"]
+
+tab_a, tab_b, tab_c, tab_cmp = st.tabs(
+    [_la, _lb, "Case C — Header", f"Compare {_la} vs {_lb}"])
 
 with tab_a:
+    st.text_input("Case label", key="label_a", max_chars=40,
+                  help="Custom name shown in tabs, charts, and reports.")
     results_a = run_case("a", accent="#2563EB")
 
 with tab_b:
+    st.text_input("Case label", key="label_b", max_chars=40,
+                  help="Custom name shown in tabs, charts, and reports.")
     results_b = run_case("b", accent="#D97706")
 
 with tab_c:
@@ -1647,7 +1660,9 @@ _VOID_SHORT = {
 }
 
 with tab_cmp:
-    st.subheader("Case A  vs.  Case B")
+    _la = st.session_state.get("label_a", "Case A")
+    _lb = st.session_state.get("label_b", "Case B")
+    st.subheader(f"{_la}  vs.  {_lb}")
 
     ra, rb = results_a, results_b
 
@@ -1656,8 +1671,8 @@ with tab_cmp:
         _lc, _mc, _rc = st.columns([2, 2, 2])
 
         _lc.markdown("**Metric**")
-        _mc.markdown(f"**Case A**")
-        _rc.markdown(f"**Case B**")
+        _mc.markdown(f"**{_la}**")
+        _rc.markdown(f"**{_lb}**")
         st.divider()
 
         def _cmp_row(label, va, vb, fmt="{}", better="lower", unit=""):
@@ -1678,8 +1693,8 @@ with tab_cmp:
                 _delta_str = "—"
                 _color = "off"
             _lc.markdown(label)
-            _mc.metric("Case A", f"{fmt.format(va)} {unit}", label_visibility="collapsed")
-            _rc.metric("Case B", f"{fmt.format(vb)} {unit}", delta=_delta_str,
+            _mc.metric(_la, f"{fmt.format(va)} {unit}", label_visibility="collapsed")
+            _rc.metric(_lb, f"{fmt.format(vb)} {unit}", delta=_delta_str,
                        delta_color=_color, label_visibility="collapsed")
 
         _cmp_row("Inlet pressure",        ra["P_bara"],               rb["P_bara"],               fmt="{:.2f}", unit="bara", better="neutral")
@@ -1827,7 +1842,7 @@ with tab_cmp:
             st.info(
                 f"**To achieve {_gs_target_shown:.3f} bara at the worst-case branch outlet**, "
                 f"set **Case C inlet pressure to {_gsr['P_c_in']:.4f} bara**.  "
-                f"Branch {'A' if _gsr['P_a_out'] > _gsr['P_b_out'] else 'B'} has "
+                f"Branch {_la if _gsr['P_a_out'] > _gsr['P_b_out'] else _lb} has "
                 f"{abs(_gsr['P_a_out'] - _gsr['P_b_out'])*1000:.1f} mbar of pressure margin."
             )
 
@@ -1836,14 +1851,14 @@ with tab_cmp:
     fig_cmp = go.Figure()
     fig_cmp.add_trace(go.Scatter(
         x=ra["pressure_profile_x"], y=ra["pressure_profile_y"],
-        mode="lines+markers", name="Case A",
+        mode="lines+markers", name=_la,
         line=dict(color="#2563EB", width=2.5), marker=dict(size=7, color="#2563EB"),
-        hovertemplate="Case A  |  Distance: %{x:.2f} m<br>Pressure: %{y:.4f} bara<extra></extra>"))
+        hovertemplate=f"{_la}  |  Distance: %{{x:.2f}} m<br>Pressure: %{{y:.4f}} bara<extra></extra>"))
     fig_cmp.add_trace(go.Scatter(
         x=rb["pressure_profile_x"], y=rb["pressure_profile_y"],
-        mode="lines+markers", name="Case B",
+        mode="lines+markers", name=_lb,
         line=dict(color="#D97706", width=2.5, dash="dash"), marker=dict(size=7, color="#D97706"),
-        hovertemplate="Case B  |  Distance: %{x:.2f} m<br>Pressure: %{y:.4f} bara<extra></extra>"))
+        hovertemplate=f"{_lb}  |  Distance: %{{x:.2f}} m<br>Pressure: %{{y:.4f}} bara<extra></extra>"))
     fig_cmp.update_layout(
         xaxis_title="Pipeline Distance (m)", yaxis_title="Pressure (bara)",
         template="plotly_white", height=360, margin=dict(l=60,r=20,t=30,b=50),
@@ -1861,9 +1876,9 @@ with tab_cmp:
     _dp_a   = [r["ΔP (kPa)"] for r in ra["grid_records"]]
     _dp_b   = [r["ΔP (kPa)"] for r in rb["grid_records"]]
     fig_bar = go.Figure()
-    fig_bar.add_trace(go.Bar(name="Case A", x=_segs_a, y=_dp_a,
+    fig_bar.add_trace(go.Bar(name=_la, x=_segs_a, y=_dp_a,
                              marker_color="#2563EB", opacity=0.85))
-    fig_bar.add_trace(go.Bar(name="Case B", x=_segs_b, y=_dp_b,
+    fig_bar.add_trace(go.Bar(name=_lb, x=_segs_b, y=_dp_b,
                              marker_color="#D97706", opacity=0.85))
     fig_bar.update_layout(
         barmode="group", yaxis_title="ΔP (kPa)", xaxis_title="Segment",
@@ -1894,7 +1909,7 @@ with tab_cmp:
         else:
             st.caption(
                 "Runs all 12 combinations (6 correlations × 2 void-fraction models). "
-                "Quantifies the full ΔP range for Case A and B due to method uncertainty.")
+                f"Quantifies the full ΔP range for {_la} and {_lb} due to method uncertainty.")
 
     if _run_sens:
         with st.spinner("Running 24 calculations (12 per case)…"):
@@ -1933,12 +1948,12 @@ with tab_cmp:
         if len(_va) >= 2:
             fig_sens.add_vrect(x0=min(_va), x1=max(_va),
                                fillcolor="rgba(37,99,235,0.07)", line_width=0,
-                               annotation_text="A range", annotation_position="top left",
+                               annotation_text=f"{_la} range", annotation_position="top left",
                                annotation_font=dict(size=9, color="#2563EB"))
         if len(_vb) >= 2:
             fig_sens.add_vrect(x0=min(_vb), x1=max(_vb),
                                fillcolor="rgba(217,119,6,0.07)", line_width=0,
-                               annotation_text="B range", annotation_position="bottom right",
+                               annotation_text=f"{_lb} range", annotation_position="bottom right",
                                annotation_font=dict(size=9, color="#D97706"))
 
         # Connecting lines — one trace with None separators
@@ -1957,19 +1972,19 @@ with tab_cmp:
         _xb_p = [_dp_b_vals[_ci] for _ci in range(len(_ylabels)) if _ok_b[_ci]]
         _yb_p = [_ylabels[_ci]   for _ci in range(len(_ylabels)) if _ok_b[_ci]]
         fig_sens.add_trace(go.Scatter(
-            x=_xb_p, y=_yb_p, mode="markers", name="Case B",
+            x=_xb_p, y=_yb_p, mode="markers", name=_lb,
             marker=dict(color="#D97706", size=11, symbol="diamond",
                         line=dict(color="#92400E", width=1.5)),
-            hovertemplate="Case B  |  %{y}<br>Total ΔP: %{x:.3f} kPa<extra></extra>"))
+            hovertemplate=f"{_lb}  |  %{{y}}<br>Total ΔP: %{{x:.3f}} kPa<extra></extra>"))
 
-        # Case A dots (blue circles)
+        # dots (blue circles)
         _xa_p = [_dp_a_vals[_ci] for _ci in range(len(_ylabels)) if _ok_a[_ci]]
         _ya_p = [_ylabels[_ci]   for _ci in range(len(_ylabels)) if _ok_a[_ci]]
         fig_sens.add_trace(go.Scatter(
-            x=_xa_p, y=_ya_p, mode="markers", name="Case A",
+            x=_xa_p, y=_ya_p, mode="markers", name=_la,
             marker=dict(color="#2563EB", size=11, symbol="circle",
                         line=dict(color="#1E40AF", width=1.5)),
-            hovertemplate="Case A  |  %{y}<br>Total ΔP: %{x:.3f} kPa<extra></extra>"))
+            hovertemplate=f"{_la}  |  %{{y}}<br>Total ΔP: %{{x:.3f}} kPa<extra></extra>"))
 
         # Dashed reference lines for the currently-selected method in each case
         _sel_lbl_a = (f"{_CORR_SHORT.get(ra['correlation'], ra['correlation'])} / "
@@ -1987,18 +2002,18 @@ with tab_cmp:
         if _sel_a_dp is not None:
             fig_sens.add_vline(x=_sel_a_dp,
                                line=dict(color="#2563EB", width=1.5, dash="dash"),
-                               annotation_text=f"A selected: {_sel_a_dp:.2f} kPa",
+                               annotation_text=f"{_la} selected: {_sel_a_dp:.2f} kPa",
                                annotation_position="top right",
                                annotation_font=dict(size=9, color="#2563EB"))
         if _sel_b_dp is not None:
             fig_sens.add_vline(x=_sel_b_dp,
                                line=dict(color="#D97706", width=1.5, dash="dot"),
-                               annotation_text=f"B selected: {_sel_b_dp:.2f} kPa",
+                               annotation_text=f"{_lb} selected: {_sel_b_dp:.2f} kPa",
                                annotation_position="bottom right",
                                annotation_font=dict(size=9, color="#D97706"))
 
         fig_sens.update_layout(
-            title=dict(text="Total ΔP — all 12 method combinations  (● Case A  ◆ Case B)",
+            title=dict(text=f"Total ΔP — all 12 method combinations  (● {_la}  ◆ {_lb})",
                        font=dict(size=12), x=0),
             xaxis_title="Total ΔP (kPa)", yaxis_title=None,
             template="plotly_white", height=460,
@@ -2023,12 +2038,12 @@ with tab_cmp:
             _b_min, _b_max = min(_vb), max(_vb)
             _overlap = _a_min <= _b_max and _b_min <= _a_max
             st.dataframe(pd.DataFrame([
-                {"": "Case A",
+                {"": _la,
                  "Min (kPa)":      f"{_a_min:.3f}",
                  "Selected (kPa)": f"{ra['total_dp_kpa']:.3f}",
                  "Max (kPa)":      f"{_a_max:.3f}",
                  "Spread (kPa)":   f"{_a_max - _a_min:.3f}"},
-                {"": "Case B",
+                {"": _lb,
                  "Min (kPa)":      f"{_b_min:.3f}",
                  "Selected (kPa)": f"{rb['total_dp_kpa']:.3f}",
                  "Max (kPa)":      f"{_b_max:.3f}",
@@ -2036,7 +2051,7 @@ with tab_cmp:
             ]), hide_index=True, use_container_width=True)
             if _overlap:
                 st.warning(
-                    "Ranges **overlap** — the relative ordering of Case A vs B depends on "
+                    f"Ranges **overlap** — the relative ordering of {_la} vs {_lb} depends on "
                     "which correlation is chosen.")
             else:
                 st.success(
@@ -2084,18 +2099,18 @@ with tab_cmp:
                 rows.append(row)
             return pd.DataFrame(rows)
 
-        _rt_a = _regime_table(_sa, ra["segments"], "Case A")
-        _rt_b = _regime_table(_sb, rb["segments"], "Case B")
+        _rt_a = _regime_table(_sa, ra["segments"], _la)
+        _rt_b = _regime_table(_sb, rb["segments"], _lb)
 
         _rca, _rcb = st.columns(2)
         with _rca:
-            st.markdown("**Case A**")
+            st.markdown(f"**{_la}**")
             if _rt_a is not None:
                 st.dataframe(_rt_a, hide_index=True, use_container_width=True)
             else:
                 st.caption("No regime data available.")
         with _rcb:
-            st.markdown("**Case B**")
+            st.markdown(f"**{_lb}**")
             if _rt_b is not None:
                 st.dataframe(_rt_b, hide_index=True, use_container_width=True)
             else:
@@ -2118,6 +2133,7 @@ with tab_cmp:
                         }
                     _cbuf = report_generator.generate_comparison_report(
                         results_a=ra, results_b=rb,
+                        label_a=_la, label_b=_lb,
                         fig_cmp=fig_cmp, fig_bar=fig_bar,
                         sensitivity_data=_sens_report_data)
                     st.session_state["cmp_rpt_bytes"] = _cbuf.getvalue()
@@ -2153,7 +2169,7 @@ with tab_cmp:
                         }
                     _combined_buf = report_generator.generate_combined_report(
                         cases=[ra, rb, results_c],
-                        case_labels=["Case A", "Case B", "Case C"],
+                        case_labels=[_la, _lb, "Case C"],
                         fig_cmp=fig_cmp,
                         fig_bar=fig_bar,
                         sensitivity_data=_sens_data,
@@ -2191,10 +2207,10 @@ with tab_cmp:
                  "P_in (bara)","P_out (bara)"]
     _ta, _tb = st.columns(2)
     with _ta:
-        st.markdown("**Case A**")
+        st.markdown(f"**{_la}**")
         st.dataframe(pd.DataFrame(ra["grid_records"])[_cmp_cols],
                      column_config=_col_cfg, hide_index=True, use_container_width=True)
     with _tb:
-        st.markdown("**Case B**")
+        st.markdown(f"**{_lb}**")
         st.dataframe(pd.DataFrame(rb["grid_records"])[_cmp_cols],
                      column_config=_col_cfg, hide_index=True, use_container_width=True)
