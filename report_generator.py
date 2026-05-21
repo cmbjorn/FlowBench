@@ -124,7 +124,7 @@ def generate_report(
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     sub = doc.add_paragraph(
-        f"Electrolyzer gas–liquid piping  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
+        f"Gas–Liquid Piping  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
     )
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if sub.runs:
@@ -147,11 +147,11 @@ def generate_report(
     doc.add_heading("1. Purpose", level=1)
     _purpose = doc.add_paragraph(
         f"This calculation determines the two-phase pressure drop along the {case_label} "
-        f"branch pipeline, which carries {_gas_label} and {liquid_type} from an "
-        f"electrolyzer stack to a gas–liquid separator. "
+        f"branch pipeline, which carries {_gas_label} and {liquid_type} from a "
+        f"process unit to a gas–liquid separator. "
         f"The result — inlet pressure, outlet pressure, and total ΔP — is used to "
         f"size the pipe and, in combination with the collecting header calculation, "
-        f"to establish the required electrolyzer stack outlet pressure."
+        f"to establish the required equipment outlet pressure."
     )
     _purpose.paragraph_format.space_after = Pt(4)
     if _purpose.runs:
@@ -303,7 +303,7 @@ def generate_report(
     _gas_str = " / ".join(gas_flows_kgh.keys())
     note = doc.add_paragraph(
         f"Engineering Note: The two-phase correlations used here were developed primarily "
-        f"for oil/gas systems. Their application to electrolysis duty ({_gas_str} / "
+        f"for oil/gas systems. Their application to this service ({_gas_str} / "
         f"{liquid_type}) carries an estimated uncertainty of ±20–30 %. Use the sensitivity "
         f"analysis (Compare tab) to bracket the ΔP range across all available methods. "
         f"Treat as a first-pass engineering estimate; validate against commissioning data "
@@ -393,7 +393,7 @@ def generate_comparison_report(
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     sub = doc.add_paragraph(
-        f"Electrolyzer gas–liquid piping  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
+        f"Gas–Liquid Piping  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
     )
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if sub.runs:
@@ -406,10 +406,10 @@ def generate_comparison_report(
     doc.add_heading("1. Purpose", level=1)
     _p = doc.add_paragraph(
         f"This report compares the two-phase pressure drop along two branch pipelines: "
-        f"{label_a} and {label_b}. Both carry gas–liquid flow from electrolyzer stacks "
+        f"{label_a} and {label_b}. Both carry gas–liquid flow from an upstream process unit "
         f"to a separator. The comparison supports pipe sizing — selecting the smallest "
         f"bore that keeps ΔP within budget and velocity below the erosion threshold — "
-        f"and identifies which line governs the required stack outlet pressure. "
+        f"and identifies which line governs the required equipment outlet pressure. "
         f"The sensitivity analysis (if run) quantifies the uncertainty in ΔP due to "
         f"correlation choice across all 12 method combinations."
     )
@@ -730,36 +730,36 @@ def generate_comparison_report(
 
         doc.add_heading("Target Conditions", level=2)
         _kv_table(doc, [
-            ("H₂ separator target pressure (bara)", f"{_ph:.3f}" if _ph is not None else "—"),
-            ("O₂ separator target pressure (bara)", f"{_po:.3f}" if _po is not None else "—"),
+            (f"{_la_s} system — separator target pressure (bara)", f"{_ph:.3f}" if _ph is not None else "—"),
+            (f"{_lb_s} system — separator target pressure (bara)", f"{_po:.3f}" if _po is not None else "—"),
         ])
         doc.add_paragraph()
 
-        doc.add_heading(f"H₂ System  ({_la_s} → Header C → Separator)", level=2)
+        doc.add_heading(f"{_la_s} System  (Branch → Header C → Separator)", level=2)
         _kv_table(doc, [
             (f"{_la_s} line inlet pressure (bara)",       f"{_gsh.get('P_line_in', 0):.4f}"),
             (f"{_la_s} line ΔP (kPa)",                    f"{_gsh.get('dp_line', 0):.3f}"),
             (f"{_la_s} outlet / Header C inlet (bara)",   f"{_gsh.get('P_line_out', 0):.4f}"),
             ("Header C + T-seg ΔP (kPa)",                 f"{_gsh.get('dp_hdr', 0):.3f}"),
-            ("H₂ separator pressure (bara)",              f"{_gsh.get('P_sep', 0):.4f}"),
+            (f"{_la_s} system separator pressure (bara)", f"{_gsh.get('P_sep', 0):.4f}"),
         ])
         doc.add_paragraph()
 
-        doc.add_heading(f"O₂ System  ({_lb_s} → Header D → Separator)", level=2)
+        doc.add_heading(f"{_lb_s} System  (Branch → Header D → Separator)", level=2)
         _kv_table(doc, [
             (f"{_lb_s} line inlet pressure (bara)",       f"{_gso.get('P_line_in', 0):.4f}"),
             (f"{_lb_s} line ΔP (kPa)",                    f"{_gso.get('dp_line', 0):.3f}"),
             (f"{_lb_s} outlet / Header D inlet (bara)",   f"{_gso.get('P_line_out', 0):.4f}"),
             ("Header D + T-seg ΔP (kPa)",                 f"{_gso.get('dp_hdr', 0):.3f}"),
-            ("O₂ separator pressure (bara)",              f"{_gso.get('P_sep', 0):.4f}"),
+            (f"{_lb_s} system separator pressure (bara)", f"{_gso.get('P_sep', 0):.4f}"),
         ])
         doc.add_paragraph()
 
-        doc.add_heading("Stack ΔP Result  (P_inlet_H₂ − P_inlet_O₂)", level=2)
+        doc.add_heading(f"ΔP Result  (P_inlet_{_la_s} − P_inlet_{_lb_s})", level=2)
         _kv_table(doc, [
-            ("Stack ΔP (bara)",  f"{_dp_s:.4f}"),
-            ("Stack ΔP (kPa)",   f"{_dp_kpa:.2f}"),
-            ("Stack ΔP (mbar)",  f"{_dp_mbar:.1f}"),
+            (f"ΔP  {_la_s} − {_lb_s}  (bara)",  f"{_dp_s:.4f}"),
+            (f"ΔP  {_la_s} − {_lb_s}  (kPa)",   f"{_dp_kpa:.2f}"),
+            (f"ΔP  {_la_s} − {_lb_s}  (mbar)",  f"{_dp_mbar:.1f}"),
         ])
         doc.add_paragraph()
 
@@ -770,7 +770,7 @@ def generate_comparison_report(
     _sp_str = _sp_a if _sp_a == _sp_b else f"{_sp_a}  |  {_sp_b}"
     note = doc.add_paragraph(
         f"Engineering Note: The two-phase correlations used here were developed primarily "
-        f"for oil/gas systems. Their application to electrolysis duty ({_sp_str}) carries "
+        f"for oil/gas systems. Their application to this service ({_sp_str}) carries "
         f"an estimated uncertainty of ±20–30 %. Use the sensitivity analysis (if present) "
         f"to bracket the ΔP range across all available methods. Treat as a first-pass "
         f"engineering estimate; validate against commissioning data before use in "
@@ -818,7 +818,7 @@ def generate_combined_report(
     sec.top_margin    = Inches(0.9);   sec.bottom_margin = Inches(0.9)
 
     # ── Title ────────────────────────────────────────────────────────────────
-    h = doc.add_heading("Electrolyzer Piping Hydraulic Study — Combined Report", level=0)
+    h = doc.add_heading("Gas–Liquid Piping Hydraulic Study — Combined Report", level=0)
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
     sub = doc.add_paragraph(
         "  ·  ".join(case_labels)
@@ -850,17 +850,17 @@ def generate_combined_report(
     _p_lines = [
         f"This study sizes the individual branch pipelines ({_lbl_branch}) and "
         f"{'collecting headers (' + _lbl_header + ') ' if _lbl_header else ''}"
-        f"for an electrolyzer system. Each branch carries a two-phase gas–lye mixture "
-        f"from one electrolyzer stack to a collecting header, which conveys the combined "
+        f"for a gas–liquid piping system. Each branch carries a two-phase mixture "
+        f"from a process unit to a collecting header, which conveys the combined "
         f"flow to the gas–liquid separator."
     ]
     if n >= 3:
         _p_lines.append(
             f"The goal-seek function finds the required branch-line inlet pressure "
-            f"(= electrolyzer stack outlet pressure) such that the separator arrives at "
-            f"the target operating pressure. For a full H₂/O₂ system, the difference "
-            f"between the H₂ and O₂ branch inlet pressures gives the differential "
-            f"pressure across the electrolyzer stack."
+            f"(= upstream equipment outlet pressure) such that the separator arrives at "
+            f"the target operating pressure. For a two-line system, the difference "
+            f"between the two branch inlet pressures gives the differential "
+            f"pressure across the upstream process unit."
         )
     for _txt in _p_lines:
         _pp = doc.add_paragraph(_txt)
@@ -1164,36 +1164,36 @@ def generate_combined_report(
 
         doc.add_heading("Target Conditions", level=2)
         _kv_table(doc, [
-            ("H₂ separator target pressure (bara)", f"{_ph:.3f}" if _ph is not None else "—"),
-            ("O₂ separator target pressure (bara)", f"{_po:.3f}" if _po is not None else "—"),
+            (f"{_la_s} system — separator target pressure (bara)", f"{_ph:.3f}" if _ph is not None else "—"),
+            (f"{_lb_s} system — separator target pressure (bara)", f"{_po:.3f}" if _po is not None else "—"),
         ])
         doc.add_paragraph()
 
-        doc.add_heading(f"H₂ System  ({_la_s} → Header C → Separator)", level=2)
+        doc.add_heading(f"{_la_s} System  (Branch → Header C → Separator)", level=2)
         _kv_table(doc, [
             (f"{_la_s} line inlet pressure (bara)",       f"{_gsh.get('P_line_in', 0):.4f}"),
             (f"{_la_s} line ΔP (kPa)",                    f"{_gsh.get('dp_line', 0):.3f}"),
             (f"{_la_s} outlet / Header C inlet (bara)",   f"{_gsh.get('P_line_out', 0):.4f}"),
             ("Header C + T-seg ΔP (kPa)",                 f"{_gsh.get('dp_hdr', 0):.3f}"),
-            ("H₂ separator pressure (bara)",              f"{_gsh.get('P_sep', 0):.4f}"),
+            (f"{_la_s} system separator pressure (bara)", f"{_gsh.get('P_sep', 0):.4f}"),
         ])
         doc.add_paragraph()
 
-        doc.add_heading(f"O₂ System  ({_lb_s} → Header D → Separator)", level=2)
+        doc.add_heading(f"{_lb_s} System  (Branch → Header D → Separator)", level=2)
         _kv_table(doc, [
             (f"{_lb_s} line inlet pressure (bara)",       f"{_gso.get('P_line_in', 0):.4f}"),
             (f"{_lb_s} line ΔP (kPa)",                    f"{_gso.get('dp_line', 0):.3f}"),
             (f"{_lb_s} outlet / Header D inlet (bara)",   f"{_gso.get('P_line_out', 0):.4f}"),
             ("Header D + T-seg ΔP (kPa)",                 f"{_gso.get('dp_hdr', 0):.3f}"),
-            ("O₂ separator pressure (bara)",              f"{_gso.get('P_sep', 0):.4f}"),
+            (f"{_lb_s} system separator pressure (bara)", f"{_gso.get('P_sep', 0):.4f}"),
         ])
         doc.add_paragraph()
 
-        doc.add_heading("Stack ΔP Result  (P_inlet_H₂ − P_inlet_O₂)", level=2)
+        doc.add_heading(f"ΔP Result  (P_inlet_{_la_s} − P_inlet_{_lb_s})", level=2)
         _kv_table(doc, [
-            ("Stack ΔP (bara)",  f"{_dp_s:.4f}"),
-            ("Stack ΔP (kPa)",   f"{_dp_kpa:.2f}"),
-            ("Stack ΔP (mbar)",  f"{_dp_mbar:.1f}"),
+            (f"ΔP  {_la_s} − {_lb_s}  (bara)",  f"{_dp_s:.4f}"),
+            (f"ΔP  {_la_s} − {_lb_s}  (kPa)",   f"{_dp_kpa:.2f}"),
+            (f"ΔP  {_la_s} − {_lb_s}  (mbar)",  f"{_dp_mbar:.1f}"),
         ])
         doc.add_paragraph()
 
@@ -1203,7 +1203,7 @@ def generate_combined_report(
     _all_liq = sorted({c["liquid_type"] for c in cases})
     note = doc.add_paragraph(
         f"Engineering Note: The two-phase correlations used here were developed primarily "
-        f"for oil/gas systems. Their application to electrolysis duty "
+        f"for oil/gas systems. Their application to this service "
         f"({' / '.join(_all_gas)} / {' / '.join(_all_liq)}) carries an estimated "
         f"uncertainty of ±20–30 %. Use the sensitivity analysis (if present above) to "
         f"bracket the ΔP range across all available methods. Treat as a first-pass "

@@ -1694,7 +1694,7 @@ _la = st.session_state["label_a"]
 _lb = st.session_state["label_b"]
 
 tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_stack = st.tabs(
-    [_la, _lb, "Case C — H₂ Header", "Case D — O₂ Header",
+    [_la, _lb, "Case C — Header", "Case D — Header",
      f"Compare {_la} vs {_lb}", "Stack ΔP"])
 
 with tab_a:
@@ -1709,9 +1709,9 @@ with tab_b:
 
 with tab_c:
     st.info(
-        "**Case C — H₂ Collecting Header**  "
+        "**Case C — Collecting Header**  "
         "A uniform pipe with n A-line taps on each side of a central T-junction. "
-        "Each tap feeds one copy of Case A's (H₂ branch) flow. "
+        "Each tap feeds one copy of Case A's branch flow. "
         "Worst-arm ΔP = farthest tap → T → separator.",
         icon="ℹ️",
     )
@@ -1719,9 +1719,9 @@ with tab_c:
 
 with tab_d:
     st.info(
-        "**Case D — O₂ Collecting Header**  "
+        "**Case D — Collecting Header**  "
         "A uniform pipe with n B-line taps on each side of a central T-junction. "
-        "Each tap feeds one copy of Case B's (O₂ branch) flow. "
+        "Each tap feeds one copy of Case B's branch flow. "
         "Worst-arm ΔP = farthest tap → T → separator.",
         icon="ℹ️",
     )
@@ -2367,12 +2367,12 @@ with tab_stack:
     _la = st.session_state.get("label_a", "Case A")
     _lb = st.session_state.get("label_b", "Case B")
 
-    st.subheader("Electrolyzer Stack Differential Pressure")
+    st.subheader("Stack Differential Pressure")
     st.caption(
-        f"Goal-seek both the H₂ system ({_la} + C) and O₂ system ({_lb} + D) "
+        f"Goal-seek both the {_la} system ({_la} + C) and {_lb} system ({_lb} + D) "
         "to find the required line inlet pressures for given separator pressures. "
         "The **Stack ΔP** = P_inlet_A − P_inlet_B is the differential pressure "
-        "across the electrolyzer stack."
+        "across the process unit."
     )
 
     with st.container(border=True):
