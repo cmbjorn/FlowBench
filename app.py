@@ -1839,6 +1839,9 @@ with tab_cmp:
             st.session_state["gs_target"] = _p_target
 
         _gsr = st.session_state.get("gs_result")
+        if _gsr and "P_sep" not in _gsr:   # stale result from old function shape
+            _gsr = None
+            st.session_state.pop("gs_result", None)
         if _gsr:
             _gs_target_shown = st.session_state.get("gs_target", _p_target)
             with _gs_col2:
@@ -2148,75 +2151,119 @@ with tab_cmp:
             else:
                 st.caption("No regime data available.")
 
-    # ── Comparison report export ──────────────────────────────────────────────
+    # ── Generate All Reports ──────────────────────────────────────────────────
     st.divider()
-    _cr1, _cr2 = st.columns([1, 2])
-    with _cr1:
-        if st.button("Generate Comparison Report", type="primary",
-                     use_container_width=True, key="gen_cmp_rpt"):
-            with st.spinner("Building comparison document…"):
+    st.markdown("#### Reports")
+    _sens_avail = ("sens_a" in st.session_state and "sens_b" in st.session_state
+                   and fig_sens is not None)
+
+    def _build_sens_data():
+        if _sens_avail:
+            return {"sa": st.session_state["sens_a"],
+                    "sb": st.session_state["sens_b"],
+                    "fig": fig_sens}
+        return None
+
+    _all_col1, _all_col2 = st.columns([1, 2])
+    with _all_col1:
+        if st.button("Generate All Reports", type="primary",
+                     use_container_width=True, key="gen_all_rpts"):
+            _errors = []
+            with st.spinner("Building all reports…"):
                 try:
-                    _sens_report_data = None
-                    if "sens_a" in st.session_state and "sens_b" in st.session_state and fig_sens is not None:
-                        _sens_report_data = {
-                            "sa":  st.session_state["sens_a"],
-                            "sb":  st.session_state["sens_b"],
-                            "fig": fig_sens,
-                        }
+                    _buf_a_rpt = report_generator.generate_report(
+                        P_bara=ra["P_bara"], T_C=ra["T_C"],
+                        gas_flows_kgh=ra["gas_flows_kgh"],
+                        liquid_type=ra["liquid_type"], q_lye=ra["q_lye"],
+                        props=ra["props"], grid_records=ra["grid_records"],
+                        segments=ra["segments"],
+                        total_dp_kpa=ra["total_dp_kpa"],
+                        outlet_pressure_bara=ra["outlet_pressure_bara"],
+                        pipe_length_m=ra["pipe_length_m"],
+                        cumulative_distance=ra["cumulative_distance"],
+                        fig_sch=ra.get("fig_sch"), fig_prof=ra.get("fig_prof"),
+                        case_label=_la)
+                    st.session_state["rpt_a_bytes"] = _buf_a_rpt.getvalue()
+                except Exception as _e:
+                    _errors.append(f"{_la}: {_e}")
+
+                try:
+                    _buf_b_rpt = report_generator.generate_report(
+                        P_bara=rb["P_bara"], T_C=rb["T_C"],
+                        gas_flows_kgh=rb["gas_flows_kgh"],
+                        liquid_type=rb["liquid_type"], q_lye=rb["q_lye"],
+                        props=rb["props"], grid_records=rb["grid_records"],
+                        segments=rb["segments"],
+                        total_dp_kpa=rb["total_dp_kpa"],
+                        outlet_pressure_bara=rb["outlet_pressure_bara"],
+                        pipe_length_m=rb["pipe_length_m"],
+                        cumulative_distance=rb["cumulative_distance"],
+                        fig_sch=rb.get("fig_sch"), fig_prof=rb.get("fig_prof"),
+                        case_label=_lb)
+                    st.session_state["rpt_b_bytes"] = _buf_b_rpt.getvalue()
+                except Exception as _e:
+                    _errors.append(f"{_lb}: {_e}")
+
+                try:
                     _cbuf = report_generator.generate_comparison_report(
                         results_a=ra, results_b=rb,
                         label_a=_la, label_b=_lb,
                         fig_cmp=fig_cmp, fig_bar=fig_bar,
-                        sensitivity_data=_sens_report_data)
+                        sensitivity_data=_build_sens_data())
                     st.session_state["cmp_rpt_bytes"] = _cbuf.getvalue()
-                except Exception as _ce:
-                    st.error(f"Report failed: {_ce}")
-    with _cr2:
-        if st.session_state.get("cmp_rpt_bytes"):
-            st.download_button(
-                "Download Comparison Report  (.docx)",
-                data=st.session_state["cmp_rpt_bytes"],
-                file_name="hydraulic_comparison_report.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True, key="dl_cmp_rpt")
+                except Exception as _e:
+                    _errors.append(f"Comparison: {_e}")
 
-    # ── Combined report (A + B + C + sensitivity in one document) ─────────────
-    st.markdown("#### Combined Report — A + B + C")
-    st.caption(
-        "Single document: one Method section, side-by-side conditions/totals for all three cases, "
-        "individual segment analyses, comparison charts, and sensitivity (if run)."
-    )
-    _combined_c1, _combined_c2 = st.columns([1, 2])
-    with _combined_c1:
-        if st.button("Generate Combined Report", type="primary",
-                     use_container_width=True, key="gen_combined_rpt"):
-            with st.spinner("Building combined report (A + B + C)…"):
                 try:
-                    _sens_data = None
-                    if "sens_a" in st.session_state and "sens_b" in st.session_state and fig_sens is not None:
-                        _sens_data = {
-                            "sa":  st.session_state["sens_a"],
-                            "sb":  st.session_state["sens_b"],
-                            "fig": fig_sens,
-                        }
                     _combined_buf = report_generator.generate_combined_report(
                         cases=[ra, rb, results_c],
-                        case_labels=[_la, _lb, "Case C"],
-                        fig_cmp=fig_cmp,
-                        fig_bar=fig_bar,
-                        sensitivity_data=_sens_data,
-                    )
+                        case_labels=[_la, _lb, "Case C — H₂ Header"],
+                        fig_cmp=fig_cmp, fig_bar=fig_bar,
+                        sensitivity_data=_build_sens_data())
                     st.session_state["combined_rpt_bytes"] = _combined_buf.getvalue()
-                except Exception as _combined_err:
-                    st.error(f"Combined report failed: {_combined_err}")
-    with _combined_c2:
+                except Exception as _e:
+                    _errors.append(f"Combined: {_e}")
+
+            if _errors:
+                for _err in _errors:
+                    st.error(f"Report failed: {_err}")
+            else:
+                st.success("All reports ready — download below.")
+
+    with _all_col2:
+        _dl_cols = st.columns(2)
+        if st.session_state.get("rpt_a_bytes"):
+            _dl_cols[0].download_button(
+                f"Download {_la}  (.docx)",
+                data=st.session_state["rpt_a_bytes"],
+                file_name=f"report_{_la.replace(' ', '_')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True, key="dl_rpt_a_all")
+        if st.session_state.get("rpt_b_bytes"):
+            _dl_cols[1].download_button(
+                f"Download {_lb}  (.docx)",
+                data=st.session_state["rpt_b_bytes"],
+                file_name=f"report_{_lb.replace(' ', '_')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True, key="dl_rpt_b_all")
+        _dl_cols2 = st.columns(2)
+        if st.session_state.get("cmp_rpt_bytes"):
+            _dl_cols2[0].download_button(
+                f"Download Comparison  (.docx)",
+                data=st.session_state["cmp_rpt_bytes"],
+                file_name="report_comparison.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True, key="dl_cmp_rpt")
         if st.session_state.get("combined_rpt_bytes"):
-            st.download_button(
-                "Download Combined Report  (.docx)",
+            _dl_cols2[1].download_button(
+                "Download Combined  (.docx)",
                 data=st.session_state["combined_rpt_bytes"],
-                file_name="hydraulic_combined_report.docx",
+                file_name="report_combined.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True, key="dl_combined_rpt")
+
+    if not _sens_avail:
+        st.caption("ℹ Run the Sensitivity Analysis above first to include it in the reports.")
 
     st.divider()
 
