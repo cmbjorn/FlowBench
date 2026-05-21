@@ -1325,14 +1325,17 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
         with st.container(border=True):
             st.markdown("**Process Conditions**")
             p1, p2 = st.columns(2)
-            P_bara = p1.number_input("Header inlet pressure (bara)",
-                                     min_value=1.0, max_value=100.0,
-                                     value=float(st.session_state.get(k("P_bara"), 30.0)),
-                                     step=1.0, key=k("P_bara"))
-            T_C    = p2.number_input("Temperature (°C)",
-                                     min_value=5.0, max_value=95.0,
-                                     value=float(st.session_state.get(k("T_C"), T_C_a)),
-                                     step=5.0, key=k("T_C"))
+            P_target_sep = p1.number_input(
+                "Target separator pressure (bara)",
+                min_value=1.0, max_value=200.0,
+                value=float(st.session_state.get(k("P_target_sep"), 16.5)),
+                step=0.5, format="%.2f", key=k("P_target_sep"),
+                help="Pressure required at the T-junction / separator connection. "
+                     "The required tap inlet pressure is found automatically.")
+            T_C = p2.number_input("Temperature (°C)",
+                                  min_value=5.0, max_value=95.0,
+                                  value=float(st.session_state.get(k("T_C"), T_C_a)),
+                                  step=5.0, key=k("T_C"))
 
         with st.container(border=True):
             st.markdown("**Header Pipe** — uniform along full length")
@@ -1454,7 +1457,48 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
     with col_out:
         st.subheader("Results")
 
-        P_start = P_bara * 1e5
+        n_left  = len(left_positions)
+        n_right = len(right_positions)
+        n_total = n_left + n_right
+        total_gas = {sp: kgh * n_total for sp, kgh in gas_per_tap.items()}
+        total_liq = liq_per_tap * n_total
+
+        # ── Goal-seek: find tap inlet pressure for target separator pressure ──
+        _hdr_for_gs = {
+            "header_pipe":    hdr_spec,
+            "gas_per_tap":    gas_per_tap,
+            "liq_per_tap":    liq_per_tap,
+            "T_C":            T_C,
+            "liquid_type":    liquid_type,
+            "left_taps":      left_positions,
+            "right_taps":     right_positions,
+            "t_seg":          t_seg_spec,
+            "correlation":    correlation,
+            "voidage_method": voidage_method,
+            "gas_flows_kgh":  total_gas,
+            "q_lye":          total_liq,
+            "total_dp_kpa":   0.5,   # coarse starting offset; converges regardless
+        }
+        if left_positions or right_positions:
+            _gs = _goal_seek_header(_hdr_for_gs, P_target_sep)
+            P_inlet_bara = _gs["P_hdr_in"]
+            _gs_resid    = abs(_gs["P_sep"] - P_target_sep) * 1000
+            if _gs["converged"]:
+                st.success(
+                    f"Goal-seek converged in {_gs['iterations']} iter  ·  "
+                    f"residual {_gs_resid:.2f} mbar"
+                )
+            else:
+                st.warning(
+                    f"Goal-seek did not fully converge ({_gs['iterations']} iter, "
+                    f"residual {_gs_resid:.1f} mbar)"
+                )
+        else:
+            P_inlet_bara = P_target_sep
+            st.info("Add taps to compute the required inlet pressure.")
+
+        # ── Forward march at the found inlet pressure ─────────────────────────
+        P_start = P_inlet_bara * 1e5
         dp_l_Pa, P_T_l, fric_l, grav_l, rec_l = _march_header_simple(
             left_positions,  gas_per_tap, liq_per_tap,
             hdr_spec, P_start, T_C, liquid_type, correlation, voidage_method)
@@ -1469,12 +1513,6 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
         worst_arm  = "Left" if dp_l_kpa >= dp_r_kpa else "Right"
         dp_worst   = max(dp_l_kpa, dp_r_kpa)
         P_T_worst  = min(P_T_l_bara, P_T_r_bara)
-
-        n_left  = len(left_positions)
-        n_right = len(right_positions)
-        n_total = n_left + n_right
-        total_gas = {sp: kgh * n_total for sp, kgh in gas_per_tap.items()}
-        total_liq = liq_per_tap * n_total
 
         # T-segment calculation
         dp_t_kpa   = 0.0
@@ -1493,17 +1531,18 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
         with st.container(border=True):
             st.subheader("T-Junction")
             _c1, _c2, _c3, _c4 = st.columns(4)
-            _c1.metric("Left arm ΔP",
+            _c1.metric("Required tap inlet pressure",
+                       f"{P_inlet_bara:.4f} bara",
+                       delta=f"Target sep: {P_target_sep:.2f} bara",
+                       delta_color="off",
+                       help="Pressure required at each header tap = branch line outlet pressure")
+            _c2.metric("Left arm ΔP",
                        f"{dp_l_kpa:.3f} kPa",
-                       delta=f"{P_bara:.2f} → {P_T_l_bara:.4f} bara",
+                       delta=f"{P_inlet_bara:.4f} → {P_T_l_bara:.4f} bara",
                        delta_color="off")
-            _c2.metric("Right arm ΔP",
+            _c3.metric("Right arm ΔP",
                        f"{dp_r_kpa:.3f} kPa",
-                       delta=f"{P_bara:.2f} → {P_T_r_bara:.4f} bara",
-                       delta_color="off")
-            _c3.metric("T-junction pressure  (worst arm)",
-                       f"{P_T_worst:.4f} bara",
-                       delta=f"Governing: {worst_arm} arm",
+                       delta=f"{P_inlet_bara:.4f} → {P_T_r_bara:.4f} bara",
                        delta_color="off")
             _c4.metric("Separator connection pressure",
                        f"{P_sep_bara:.4f} bara",
@@ -1565,7 +1604,7 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
                     return
                 dists_sorted = sorted(positions, reverse=True)
                 xs = [dists_sorted[0]] if dists_sorted else [0.0]
-                ys = [P_bara]
+                ys = [P_inlet_bara]
                 for r in records:
                     xs.append(r["To T (m)"])
                     ys.append(r["P_out (bara)"])
@@ -1599,7 +1638,8 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
     _total_dp_grav = (grav_l + grav_r) / 1000.0
 
     return {
-        "P_bara":               P_bara,
+        "P_bara":               P_inlet_bara,
+        "P_target_sep":         P_target_sep,
         "T_C":                  T_C,
         "total_dp_kpa":         dp_worst + dp_t_kpa,
         "outlet_pressure_bara": P_sep_bara,
@@ -1775,16 +1815,18 @@ with tab_cmp:
     # ── System Total ΔP  (Header C + Branch A) ───────────────────────────────
     st.markdown(f"#### System Total ΔP — Header (C) + {_la}")
     with st.container(border=True):
-        _dp_c   = results_c["total_dp_kpa"]
-        _dp_a   = ra["total_dp_kpa"]
-        _total  = _dp_c + _dp_a
-        _p_in_c = results_c["P_bara"]
-        _p_out  = _p_in_c - _total / 100.0
-        _n_taps = results_c.get("n_left", 0) + results_c.get("n_right", 0)
+        _dp_c      = results_c["total_dp_kpa"]
+        _dp_a      = ra["total_dp_kpa"]
+        _total     = _dp_c + _dp_a
+        _p_in_c    = results_c["P_bara"]          # required tap inlet (= branch outlet)
+        _p_sep_c   = results_c.get("P_separator_bara", results_c["outlet_pressure_bara"])
+        _p_tgt_c   = results_c.get("P_target_sep", _p_sep_c)
+        _n_taps    = results_c.get("n_left", 0) + results_c.get("n_right", 0)
 
         st.caption(
-            f"Header inlet pressure: **{_p_in_c:.2f} bara**  ·  "
-            f"Header ΔP (worst arm): **{_dp_c:.3f} kPa**  ·  "
+            f"Required tap inlet: **{_p_in_c:.4f} bara**  ·  "
+            f"Target separator: **{_p_tgt_c:.2f} bara**  ·  "
+            f"Header ΔP (worst arm + T-seg): **{_dp_c:.3f} kPa**  ·  "
             f"{_la} branch ΔP: **{_dp_a:.3f} kPa**  ·  "
             f"{_n_taps} total A-line taps"
         )
@@ -1792,9 +1834,9 @@ with tab_cmp:
         _s1.metric(
             f"C + {_la}  total ΔP",
             f"{_total:.3f} kPa",
-            delta=f"{_p_in_c:.2f} → {_p_out:.4f} bara",
+            delta=f"Tap inlet {_p_in_c:.4f} → sep {_p_sep_c:.4f} bara",
             delta_color="off",
-            help=f"Header ΔP + {_la} branch ΔP from header inlet to branch outlet",
+            help=f"Header ΔP + {_la} branch ΔP from header tap inlet to branch outlet",
         )
         _s2.metric(
             f"Total flow at T-junction",
@@ -1817,7 +1859,7 @@ with tab_cmp:
             _p_target = st.number_input(
                 "Target separator pressure (bara)",
                 min_value=0.1,
-                max_value=float(results_c["P_bara"]) * 2.0,
+                max_value=float(results_c.get("P_target_sep", results_c["P_bara"])) * 3.0,
                 value=float(round(results_c.get("P_separator_bara",
                                                 ra["outlet_pressure_bara"]), 2)),
                 step=0.05,
