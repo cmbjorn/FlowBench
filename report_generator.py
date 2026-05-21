@@ -372,6 +372,7 @@ def generate_comparison_report(
     label_a="Case A", label_b="Case B",
     fig_cmp=None, fig_bar=None,
     sensitivity_data=None,
+    stack_dp=None,
 ):
     """
     Generate a Word report comparing two cases side by side.
@@ -710,6 +711,58 @@ def generate_comparison_report(
             else:
                 doc.add_paragraph("(sensitivity chart rendering timed out)")
 
+    # ── Stack ΔP ──────────────────────────────────────────────────────────────
+    if stack_dp is not None:
+        _gsh  = stack_dp.get("gsr_h2") or {}
+        _gso  = stack_dp.get("gsr_o2") or {}
+        _ph   = stack_dp.get("P_sep_h2")
+        _po   = stack_dp.get("P_sep_o2")
+        _la_s = stack_dp.get("label_a", label_a)
+        _lb_s = stack_dp.get("label_b", label_b)
+        _p_in_a  = _gsh.get("P_line_in", 0.0)
+        _p_in_b  = _gso.get("P_line_in", 0.0)
+        _dp_s    = _p_in_a - _p_in_b
+        _dp_kpa  = _dp_s * 100.0
+        _dp_mbar = _dp_kpa * 10.0
+
+        doc.add_page_break()
+        doc.add_heading("Stack Differential Pressure", level=1)
+
+        doc.add_heading("Target Conditions", level=2)
+        _kv_table(doc, [
+            ("H₂ separator target pressure (bara)", f"{_ph:.3f}" if _ph is not None else "—"),
+            ("O₂ separator target pressure (bara)", f"{_po:.3f}" if _po is not None else "—"),
+        ])
+        doc.add_paragraph()
+
+        doc.add_heading(f"H₂ System  ({_la_s} → Header C → Separator)", level=2)
+        _kv_table(doc, [
+            (f"{_la_s} line inlet pressure (bara)",       f"{_gsh.get('P_line_in', 0):.4f}"),
+            (f"{_la_s} line ΔP (kPa)",                    f"{_gsh.get('dp_line', 0):.3f}"),
+            (f"{_la_s} outlet / Header C inlet (bara)",   f"{_gsh.get('P_line_out', 0):.4f}"),
+            ("Header C + T-seg ΔP (kPa)",                 f"{_gsh.get('dp_hdr', 0):.3f}"),
+            ("H₂ separator pressure (bara)",              f"{_gsh.get('P_sep', 0):.4f}"),
+        ])
+        doc.add_paragraph()
+
+        doc.add_heading(f"O₂ System  ({_lb_s} → Header D → Separator)", level=2)
+        _kv_table(doc, [
+            (f"{_lb_s} line inlet pressure (bara)",       f"{_gso.get('P_line_in', 0):.4f}"),
+            (f"{_lb_s} line ΔP (kPa)",                    f"{_gso.get('dp_line', 0):.3f}"),
+            (f"{_lb_s} outlet / Header D inlet (bara)",   f"{_gso.get('P_line_out', 0):.4f}"),
+            ("Header D + T-seg ΔP (kPa)",                 f"{_gso.get('dp_hdr', 0):.3f}"),
+            ("O₂ separator pressure (bara)",              f"{_gso.get('P_sep', 0):.4f}"),
+        ])
+        doc.add_paragraph()
+
+        doc.add_heading("Stack ΔP Result  (P_inlet_H₂ − P_inlet_O₂)", level=2)
+        _kv_table(doc, [
+            ("Stack ΔP (bara)",  f"{_dp_s:.4f}"),
+            ("Stack ΔP (kPa)",   f"{_dp_kpa:.2f}"),
+            ("Stack ΔP (mbar)",  f"{_dp_mbar:.1f}"),
+        ])
+        doc.add_paragraph()
+
     # ── Engineering note ──────────────────────────────────────────────────────
     doc.add_paragraph()
     _sp_a = " / ".join(results_a["gas_flows_kgh"].keys())
@@ -743,6 +796,7 @@ def generate_combined_report(
     fig_cmp=None,
     fig_bar=None,
     sensitivity_data=None,
+    stack_dp=None,
 ):
     """
     Generate a single Word report combining all cases, comparison, and sensitivity.
@@ -1090,6 +1144,58 @@ def generate_combined_report(
                 doc.add_picture(BytesIO(_img_s), width=Inches(6.2))
             else:
                 doc.add_paragraph("(sensitivity chart rendering timed out)")
+
+    # ── Stack ΔP ──────────────────────────────────────────────────────────────
+    if stack_dp is not None:
+        _gsh  = stack_dp.get("gsr_h2") or {}
+        _gso  = stack_dp.get("gsr_o2") or {}
+        _ph   = stack_dp.get("P_sep_h2")
+        _po   = stack_dp.get("P_sep_o2")
+        _la_s = stack_dp.get("label_a", case_labels[0] if case_labels else "Case A")
+        _lb_s = stack_dp.get("label_b", case_labels[1] if len(case_labels) > 1 else "Case B")
+        _p_in_a  = _gsh.get("P_line_in", 0.0)
+        _p_in_b  = _gso.get("P_line_in", 0.0)
+        _dp_s    = _p_in_a - _p_in_b
+        _dp_kpa  = _dp_s * 100.0
+        _dp_mbar = _dp_kpa * 10.0
+
+        doc.add_page_break()
+        _h1("Stack Differential Pressure")
+
+        doc.add_heading("Target Conditions", level=2)
+        _kv_table(doc, [
+            ("H₂ separator target pressure (bara)", f"{_ph:.3f}" if _ph is not None else "—"),
+            ("O₂ separator target pressure (bara)", f"{_po:.3f}" if _po is not None else "—"),
+        ])
+        doc.add_paragraph()
+
+        doc.add_heading(f"H₂ System  ({_la_s} → Header C → Separator)", level=2)
+        _kv_table(doc, [
+            (f"{_la_s} line inlet pressure (bara)",       f"{_gsh.get('P_line_in', 0):.4f}"),
+            (f"{_la_s} line ΔP (kPa)",                    f"{_gsh.get('dp_line', 0):.3f}"),
+            (f"{_la_s} outlet / Header C inlet (bara)",   f"{_gsh.get('P_line_out', 0):.4f}"),
+            ("Header C + T-seg ΔP (kPa)",                 f"{_gsh.get('dp_hdr', 0):.3f}"),
+            ("H₂ separator pressure (bara)",              f"{_gsh.get('P_sep', 0):.4f}"),
+        ])
+        doc.add_paragraph()
+
+        doc.add_heading(f"O₂ System  ({_lb_s} → Header D → Separator)", level=2)
+        _kv_table(doc, [
+            (f"{_lb_s} line inlet pressure (bara)",       f"{_gso.get('P_line_in', 0):.4f}"),
+            (f"{_lb_s} line ΔP (kPa)",                    f"{_gso.get('dp_line', 0):.3f}"),
+            (f"{_lb_s} outlet / Header D inlet (bara)",   f"{_gso.get('P_line_out', 0):.4f}"),
+            ("Header D + T-seg ΔP (kPa)",                 f"{_gso.get('dp_hdr', 0):.3f}"),
+            ("O₂ separator pressure (bara)",              f"{_gso.get('P_sep', 0):.4f}"),
+        ])
+        doc.add_paragraph()
+
+        doc.add_heading("Stack ΔP Result  (P_inlet_H₂ − P_inlet_O₂)", level=2)
+        _kv_table(doc, [
+            ("Stack ΔP (bara)",  f"{_dp_s:.4f}"),
+            ("Stack ΔP (kPa)",   f"{_dp_kpa:.2f}"),
+            ("Stack ΔP (mbar)",  f"{_dp_mbar:.1f}"),
+        ])
+        doc.add_paragraph()
 
     # ── Engineering note ──────────────────────────────────────────────────────
     doc.add_paragraph()

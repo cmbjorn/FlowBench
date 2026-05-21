@@ -2211,6 +2211,20 @@ with tab_cmp:
                     "fig": fig_sens}
         return None
 
+    def _build_stack_dp_data():
+        _sh = st.session_state.get("stack_gsr_h2")
+        _so = st.session_state.get("stack_gsr_o2")
+        if _sh and _so:
+            return {
+                "label_a": _la,
+                "label_b": _lb,
+                "gsr_h2":  _sh,
+                "gsr_o2":  _so,
+                "P_sep_h2": st.session_state.get("stack_sep_h2"),
+                "P_sep_o2": st.session_state.get("stack_sep_o2"),
+            }
+        return None
+
     _all_col1, _all_col2 = st.columns([1, 2])
     with _all_col1:
         if st.button("Generate All Reports", type="primary",
@@ -2256,7 +2270,8 @@ with tab_cmp:
                         results_a=ra, results_b=rb,
                         label_a=_la, label_b=_lb,
                         fig_cmp=fig_cmp, fig_bar=fig_bar,
-                        sensitivity_data=_build_sens_data())
+                        sensitivity_data=_build_sens_data(),
+                        stack_dp=_build_stack_dp_data())
                     st.session_state["cmp_rpt_bytes"] = _cbuf.getvalue()
                 except Exception as _e:
                     _errors.append(f"Comparison: {_e}")
@@ -2266,7 +2281,8 @@ with tab_cmp:
                         cases=[ra, rb, results_c],
                         case_labels=[_la, _lb, "Case C — H₂ Header"],
                         fig_cmp=fig_cmp, fig_bar=fig_bar,
-                        sensitivity_data=_build_sens_data())
+                        sensitivity_data=_build_sens_data(),
+                        stack_dp=_build_stack_dp_data())
                     st.session_state["combined_rpt_bytes"] = _combined_buf.getvalue()
                 except Exception as _e:
                     _errors.append(f"Combined: {_e}")
@@ -2311,6 +2327,8 @@ with tab_cmp:
 
     if not _sens_avail:
         st.caption("ℹ Run the Sensitivity Analysis above first to include it in the reports.")
+    if not st.session_state.get("stack_gsr_h2"):
+        st.caption("ℹ Run the Stack ΔP calculation (Stack ΔP tab) first to include it in the reports.")
 
     st.divider()
 
