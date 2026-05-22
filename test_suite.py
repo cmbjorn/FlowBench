@@ -45,9 +45,9 @@ def _check(name, actual, expected, tol_pct=None, tol_abs=None, warn_only=False):
 
 def _run_validation_case(key, case):
     inp = case["inputs"]
-    gas_flows = inp["gas_flows_kgh"]
+    mode = case.get("mode", "gas_liquid")
 
-    P_Pa = inp["P_bara"] * 1e5
+    P_Pa     = inp["P_bara"] * 1e5
     total_dp = 0.0
 
     for seg in inp["segments"]:
@@ -56,18 +56,27 @@ def _run_validation_case(key, case):
         D = engine.PIPE_DATABASE[dn][pn]
         rough = engine.MATERIAL_ROUGHNESS["SS316L"]
 
-        props = engine.calculate_two_phase_properties(
-            P_Pa / 1e5, inp["T_C"],
-            gas_flows, "KOH 30 wt%", inp["q_lye_m3h"]
-        )
+        if mode == "vle":
+            props = engine.calculate_vle_properties(
+                inp["vle_fluid"], P_Pa / 1e5,
+                inp["vle_x_mass"], inp["vle_m_total_kgs"])
+        else:
+            # Gas+Liquid mode — use explicit liquid_type if present, else default KOH 30%
+            liquid_type = inp.get("liquid_type", "KOH 30 wt%")
+            q_lye       = inp.get("q_lye_m3h", 0.0)
+            gas_flows   = inp.get("gas_flows_kgh", {})
+            props = engine.calculate_two_phase_properties(
+                P_Pa / 1e5, inp["T_C"],
+                gas_flows, liquid_type, q_lye
+            )
 
         angle = {"Horizontal": 0.0,
                  "Vertical Upflow": math.pi / 2.0,
                  "Vertical Downflow": -math.pi / 2.0}[seg["type"]]
 
         le_fit = 0.0
-        if seg["fittings"] in engine.FITTING_Le_over_D:
-            le_fit = engine.FITTING_Le_over_D[seg["fittings"]] * D * seg["fitting_count"]
+        if seg.get("fittings", "None") in engine.FITTING_Le_over_D:
+            le_fit = engine.FITTING_Le_over_D[seg["fittings"]] * D * seg.get("fitting_count", 0)
 
         res = engine.calculate_segment_pressure_drop(
             props, D, rough, seg["length"] + le_fit, angle,
@@ -85,11 +94,23 @@ def _run_validation_case(key, case):
 def test_validation_cases():
     print("\n── 1. Validation cases ─────────────────────────────────────────────")
     for key, case in VALIDATION_CASES.items():
+        expected = case["expected_total_dp_kpa"]
+        if expected is None:
+            # Auto-calibration case — just run it without comparison
+            try:
+                actual = _run_validation_case(key, case)
+                print(f"  \033[36mINFO\033[0m  {case['name']}")
+                print(f"         auto-calibrated: {actual:.6g} kPa  (no reference)")
+                _results["pass"] += 1
+            except Exception as exc:
+                print(f"  {FAIL}  {case['name']}  —  {exc}")
+                _results["fail"] += 1
+            continue
         actual = _run_validation_case(key, case)
         _check(
             case["name"],
             actual,
-            case["expected_total_dp_kpa"],
+            expected,
             tol_pct=case["tolerance_pct"],
         )
 

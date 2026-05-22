@@ -268,10 +268,12 @@ def generate_report(
         sub.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
         sub.runs[0].font.size = Pt(10)
 
-    _gas_label = " + ".join(gas_flows_kgh.keys())
+    _gas_label = " + ".join(gas_flows_kgh.keys()) if gas_flows_kgh else liquid_type
+    _fluid_desc = (f"{_gas_label} / {liquid_type}"
+                   if gas_flows_kgh else f"{liquid_type}  (saturated VLE)")
     desc = doc.add_paragraph(
         f"Two-phase pressure drop  ·  "
-        f"{_gas_label} / {liquid_type}  ·  Steady-state"
+        f"{_fluid_desc}  ·  Steady-state"
     )
     desc.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if desc.runs:
@@ -284,7 +286,7 @@ def generate_report(
     doc.add_heading("1. Purpose", level=1)
     _purpose = doc.add_paragraph(
         f"This calculation determines the two-phase pressure drop along the {case_label} "
-        f"branch pipeline, which carries {_gas_label} and {liquid_type} from a "
+        f"branch pipeline, which carries {_fluid_desc} from a "
         f"process unit to a gas–liquid separator. "
         f"The result — inlet pressure, outlet pressure, and total ΔP — is used to "
         f"size the pipe and, in combination with the collecting header calculation, "
@@ -333,18 +335,32 @@ def generate_report(
 
     # ── 3. Process Conditions ────────────────────────────────────────────────
     doc.add_heading("3. Process Conditions", level=1)
+    _T_display = (f"{T_C:.1f} °C" if T_C is not None
+                  else f"{props.get('T_sat_C', props.get('T_C', 0.0)):.1f} °C  (T_sat)")
     _cond_rows = [
         ("Case",               case_label),
         ("Inlet Pressure",     f"{P_bara:.2f} bara"),
-        ("Temperature",        f"{T_C:.1f} °C"),
+        ("Temperature",        _T_display),
     ]
-    for _sp, _flow in gas_flows_kgh.items():
-        _cond_rows.append((f"{_sp} Mass Flow", f"{_flow:.3f} kg/h"))
-    _cond_rows += [
-        ("Liquid Type",        liquid_type),
-        ("Liquid Volume Flow", f"{q_lye:.3f} m³/h"),
-        ("Number of Segments", str(len(segments))),
-    ]
+    if gas_flows_kgh:
+        for _sp, _flow in gas_flows_kgh.items():
+            _cond_rows.append((f"{_sp} Mass Flow", f"{_flow:.3f} kg/h"))
+        _cond_rows += [
+            ("Liquid Type",        liquid_type),
+            ("Liquid Volume Flow", f"{q_lye:.3f} m³/h"),
+        ]
+    else:
+        # VLE mode
+        _vle_fl = props.get("vle_fluid", liquid_type)
+        _vle_x  = props.get("x_gas", 0.0)
+        _m_tot  = props["m_total_kgs"] * 3600.0
+        _cond_rows += [
+            ("Fluid (VLE)",            _vle_fl),
+            ("Total Mass Flow",        f"{_m_tot:.2f} kg/h"),
+            ("Inlet Quality x",        f"{_vle_x:.3f}"),
+            ("Saturated T at P_inlet", _T_display),
+        ]
+    _cond_rows.append(("Number of Segments", str(len(segments))))
     _kv_table(doc, _cond_rows)
     doc.add_paragraph()
 
@@ -649,13 +665,20 @@ def generate_comparison_report(
         list(results_a["gas_flows_kgh"].keys()) +
         list(results_b["gas_flows_kgh"].keys())
     ))
+    def _tc_str(res):
+        tc = res.get("T_C")
+        if tc is not None:
+            return f"{tc:.1f}"
+        tsat = res.get("props", {}).get("T_sat_C", res.get("props", {}).get("T_C", 0.0))
+        return f"{tsat:.1f}  (T_sat)"
+
     _cond_rows = [
         ("Inlet Pressure (bara)",
          f"{results_a['P_bara']:.2f}",
          f"{results_b['P_bara']:.2f}"),
         ("Temperature (°C)",
-         f"{results_a['T_C']:.1f}",
-         f"{results_b['T_C']:.1f}"),
+         _tc_str(results_a),
+         _tc_str(results_b)),
     ]
     for _sp in _all_species:
         _cond_rows.append((
@@ -664,7 +687,7 @@ def generate_comparison_report(
             f"{results_b['gas_flows_kgh'].get(_sp, 0.0):.3f}",
         ))
     _cond_rows += [
-        ("Liquid type",
+        ("Fluid / Liquid type",
          results_a["liquid_type"],
          results_b["liquid_type"]),
         ("Liquid volume flow (m³/h)",
@@ -1298,7 +1321,10 @@ def generate_combined_report(
     _all_sp = list(dict.fromkeys(sp for c in cases for sp in c["gas_flows_kgh"]))
     _cond = [
         ("Inlet pressure (bara)",)   + tuple(f"{c['P_bara']:.2f}"  for c in cases),
-        ("Temperature (°C)",)        + tuple(f"{c['T_C']:.1f}"     for c in cases),
+        ("Temperature (°C)",)        + tuple(
+            f"{c['T_C']:.1f}" if c.get("T_C") is not None
+            else f"{c.get('props',{}).get('T_sat_C', 0.0):.1f}  (T_sat)"
+            for c in cases),
     ]
     for _sp in _all_sp:
         _cond.append(

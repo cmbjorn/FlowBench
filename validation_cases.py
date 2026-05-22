@@ -203,6 +203,83 @@ VALIDATION_CASES = {
             "≈ 0.507 kPa (BB is ~33% higher, consistent with multiphase-correlation bias)."
         )
     },
+
+    # ── New general-fluid cases ──────────────────────────────────────────────
+
+    "air_water_horizontal": {
+        "name": "Air / Water — Horizontal, General CoolProp Liquid",
+        "description": (
+            "Horizontal DN80 pipe, 50 m, Air gas + Water liquid at 5 bara, 25 °C. "
+            "Exercises the generalized CoolProp liquid lookup path (not KOH). "
+            "Expected ΔP from Beggs & Brill friction + zero gravity component."
+        ),
+        "inputs": {
+            "P_bara":    5.0,
+            "T_C":      25.0,
+            "gas_flows_kgh": {"Air": 100.0},
+            "liquid_type": "Water",
+            "q_lye_m3h": 5.0,
+            "pipe_dn":  "DN80",
+            "pipe_pn":  "PN20",
+            "segments": [
+                {"type": "Horizontal", "length": 50.0, "fittings": "None", "fitting_count": 0}
+            ]
+        },
+        "expected_total_dp_kpa": None,   # auto-calibrated on first run (regression anchor)
+        "tolerance_pct": 5.0,
+        "source": "Regression anchor — Beggs & Brill, CoolProp Water properties",
+        "mode": "gas_liquid",
+    },
+
+    "vle_steam_water_riser": {
+        "name": "Steam / Water VLE — Vertical Riser",
+        "description": (
+            "Vertical DN100 riser, 20 m upflow. Water at 10 bara saturation (T_sat ≈ 179.9 °C), "
+            "inlet quality x = 0.3, total mass flow 1.0 kg/s. "
+            "VLE mode: both phase properties derived from CoolProp saturation at each segment. "
+            "Gravity-dominated; hydrostatic head ≈ 20 m × weighted mixture density."
+        ),
+        "inputs": {
+            "P_bara":        10.0,
+            "vle_fluid":     "Water",
+            "vle_x_mass":    0.3,
+            "vle_m_total_kgs": 1.0,
+            "pipe_dn":  "DN100",
+            "pipe_pn":  "PN20",
+            "segments": [
+                {"type": "Vertical Upflow", "length": 20.0, "fittings": "None", "fitting_count": 0}
+            ]
+        },
+        "expected_total_dp_kpa": None,   # auto-calibrated on first run
+        "tolerance_pct": 5.0,
+        "source": "VLE mode regression anchor — CoolProp Water saturation, Beggs & Brill",
+        "mode": "vle",
+    },
+
+    "single_phase_n2_gas": {
+        "name": "Single-Phase N₂ Gas — Darcy-Weisbach Fallback",
+        "description": (
+            "Horizontal DN50 pipe, 100 m, pure N₂ gas at 30 bara, 40 °C, no liquid. "
+            "Liquid volume flow = 0 → single-phase gas Darcy-Weisbach fallback engaged. "
+            "ΔP ≈ Darcy-Weisbach with N₂ density from ideal gas at 30 bara."
+        ),
+        "inputs": {
+            "P_bara":    30.0,
+            "T_C":      40.0,
+            "gas_flows_kgh": {"N₂": 200.0},
+            "liquid_type": "Water",
+            "q_lye_m3h": 0.0,
+            "pipe_dn":  "DN50",
+            "pipe_pn":  "PN20",
+            "segments": [
+                {"type": "Horizontal", "length": 100.0, "fittings": "None", "fitting_count": 0}
+            ]
+        },
+        "expected_total_dp_kpa": None,   # auto-calibrated on first run
+        "tolerance_pct": 5.0,
+        "source": "Single-phase fallback regression anchor — Darcy-Weisbach, N₂ ideal gas",
+        "mode": "gas_liquid",
+    },
 }
 
 

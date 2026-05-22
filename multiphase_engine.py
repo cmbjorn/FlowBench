@@ -6,6 +6,7 @@ from fluids.two_phase import (
     Taitel_Dukler_regime, Mandhane_Gregory_Aziz_regime,
 )
 from fluids.two_phase_voidage import liquid_gas_voidage
+from fluids.friction import friction_factor as _darcy_friction_factor
 
 _g = 9.80665
 
@@ -111,33 +112,145 @@ VOIDAGE_METHODS = [
 # 3. GAS SPECIES DATABASE
 # ============================================================================
 # MW in kg/mol; coolprop_id used for CoolProp viscosity lookup; mu_ref is
-# a temperature-independent fallback (Pa·s).
+# a temperature-independent fallback (Pa·s at ~25 °C).
 GAS_SPECIES = {
-    "H₂":     {"MW": 2.016e-3,   "coolprop_id": "Hydrogen",       "mu_ref": 8.9e-6},
-    "O₂":     {"MW": 31.998e-3,  "coolprop_id": "Oxygen",         "mu_ref": 20.4e-6},
-    "N₂":     {"MW": 28.014e-3,  "coolprop_id": "Nitrogen",       "mu_ref": 17.8e-6},
-    "CO₂":    {"MW": 44.010e-3,  "coolprop_id": "CarbonDioxide",  "mu_ref": 15.0e-6},
-    "CH₄":    {"MW": 16.043e-3,  "coolprop_id": "Methane",        "mu_ref": 11.1e-6},
-    "Ar":     {"MW": 39.948e-3,  "coolprop_id": "Argon",          "mu_ref": 22.6e-6},
-    "He":     {"MW": 4.003e-3,   "coolprop_id": "Helium",         "mu_ref": 19.7e-6},
-    "Air":    {"MW": 28.97e-3,   "coolprop_id": None,             "mu_ref": 18.5e-6},
-    "Custom": {"MW": None,        "coolprop_id": None,             "mu_ref": None},
+    # ── Common process gases ─────────────────────────────────────────────────
+    "H₂":          {"MW": 2.016e-3,   "coolprop_id": "Hydrogen",         "mu_ref": 8.9e-6},
+    "O₂":          {"MW": 31.998e-3,  "coolprop_id": "Oxygen",           "mu_ref": 20.4e-6},
+    "N₂":          {"MW": 28.014e-3,  "coolprop_id": "Nitrogen",         "mu_ref": 17.8e-6},
+    "CO₂":         {"MW": 44.010e-3,  "coolprop_id": "CarbonDioxide",    "mu_ref": 15.0e-6},
+    "CO":          {"MW": 28.010e-3,  "coolprop_id": "CarbonMonoxide",   "mu_ref": 17.6e-6},
+    "Air":         {"MW": 28.97e-3,   "coolprop_id": None,               "mu_ref": 18.5e-6},
+    "Ar":          {"MW": 39.948e-3,  "coolprop_id": "Argon",            "mu_ref": 22.6e-6},
+    "He":          {"MW": 4.003e-3,   "coolprop_id": "Helium",           "mu_ref": 19.7e-6},
+    "NH₃":         {"MW": 17.031e-3,  "coolprop_id": "Ammonia",          "mu_ref": 10.0e-6},
+    "H₂S":         {"MW": 34.081e-3,  "coolprop_id": "HydrogenSulfide",  "mu_ref": 12.5e-6},
+    "SO₂":         {"MW": 64.066e-3,  "coolprop_id": "SulfurDioxide",    "mu_ref": 12.5e-6},
+    "Cl₂":         {"MW": 70.906e-3,  "coolprop_id": "Chlorine",         "mu_ref": 13.5e-6},
+    "N₂O":         {"MW": 44.013e-3,  "coolprop_id": "NitrousOxide",     "mu_ref": 14.5e-6},
+    "H₂O (steam)": {"MW": 18.015e-3,  "coolprop_id": "Water",            "mu_ref": 9.6e-6},
+    # ── Hydrocarbons ─────────────────────────────────────────────────────────
+    "CH₄":         {"MW": 16.043e-3,  "coolprop_id": "Methane",          "mu_ref": 11.1e-6},
+    "C₂H₆":        {"MW": 30.069e-3,  "coolprop_id": "Ethane",           "mu_ref": 9.0e-6},
+    "C₃H₈":        {"MW": 44.096e-3,  "coolprop_id": "Propane",          "mu_ref": 8.0e-6},
+    "n-C₄H₁₀":     {"MW": 58.122e-3,  "coolprop_id": "n-Butane",         "mu_ref": 7.4e-6},
+    "i-C₄H₁₀":     {"MW": 58.122e-3,  "coolprop_id": "IsoButane",        "mu_ref": 7.6e-6},
+    "C₂H₄":        {"MW": 28.054e-3,  "coolprop_id": "Ethylene",         "mu_ref": 10.0e-6},
+    "C₃H₆":        {"MW": 42.080e-3,  "coolprop_id": "Propylene",        "mu_ref": 8.2e-6},
+    "n-C₅H₁₂":     {"MW": 72.148e-3,  "coolprop_id": "n-Pentane",        "mu_ref": 6.8e-6},
+    # ── Refrigerants (vapour phase) ──────────────────────────────────────────
+    "R-134a":      {"MW": 102.032e-3, "coolprop_id": "R134a",            "mu_ref": 11.2e-6},
+    "R-22":        {"MW": 86.468e-3,  "coolprop_id": "R22",              "mu_ref": 12.0e-6},
+    "R-32":        {"MW": 52.023e-3,  "coolprop_id": "R32",              "mu_ref": 12.9e-6},
+    "R-125":       {"MW": 120.022e-3, "coolprop_id": "R125",             "mu_ref": 14.0e-6},
+    # ── Custom ───────────────────────────────────────────────────────────────
+    "Custom":      {"MW": None,        "coolprop_id": None,               "mu_ref": None},
+}
+
+# UI groupings for the gas species selector.
+GAS_CATEGORIES = {
+    "Common Process": [
+        "H₂", "O₂", "N₂", "CO₂", "CO", "Air", "Ar", "He",
+        "NH₃", "H₂S", "SO₂", "Cl₂", "N₂O", "H₂O (steam)",
+    ],
+    "Hydrocarbons": [
+        "CH₄", "C₂H₆", "C₃H₈", "n-C₄H₁₀", "i-C₄H₁₀",
+        "C₂H₄", "C₃H₆", "n-C₅H₁₂",
+    ],
+    "Refrigerants": ["R-134a", "R-22", "R-32", "R-125"],
+    "Custom": ["Custom"],
 }
 
 # ============================================================================
 # 3. LIQUID PHASE DATABASE
 # ============================================================================
 
-LIQUID_PHASES = ["KOH 30 wt%", "KOH 15 wt%", "Water", "Methanol", "Ethanol", "Custom"]
+LIQUID_PHASES = [
+    # Water-based
+    "KOH 30 wt%", "KOH 15 wt%", "Water",
+    # Organic solvents
+    "Methanol", "Ethanol", "Acetone", "Benzene", "Toluene",
+    # Hydrocarbons (liquid)
+    "n-Pentane", "n-Hexane", "n-Heptane", "Cyclohexane",
+    # LPG / cryogenic
+    "Propane (liq.)", "n-Butane (liq.)", "Ammonia (liq.)",
+    # Refrigerants (liquid)
+    "R-134a (liq.)", "CO₂ (liq.)",
+    # Custom
+    "Custom",
+]
+
+# UI groupings for the liquid selector.
+LIQUID_CATEGORIES = {
+    "Water-based":          ["KOH 30 wt%", "KOH 15 wt%", "Water"],
+    "Organic solvents":     ["Methanol", "Ethanol", "Acetone", "Benzene", "Toluene"],
+    "Hydrocarbons (liq.)":  ["n-Pentane", "n-Hexane", "n-Heptane", "Cyclohexane"],
+    "LPG / cryogenic":      ["Propane (liq.)", "n-Butane (liq.)", "Ammonia (liq.)"],
+    "Refrigerants (liq.)":  ["R-134a (liq.)", "CO₂ (liq.)"],
+    "Custom":               ["Custom"],
+}
+
+# CoolProp fluid IDs for CoolProp-backed liquids.
+LIQUID_COOLPROP_ID = {
+    "Water":           "Water",
+    "Methanol":        "Methanol",
+    "Ethanol":         "Ethanol",
+    "Acetone":         "Acetone",
+    "Benzene":         "Benzene",
+    "Toluene":         "Toluene",
+    "n-Pentane":       "n-Pentane",
+    "n-Hexane":        "n-Hexane",
+    "n-Heptane":       "n-Heptane",
+    "Cyclohexane":     "CycloHexane",
+    "Propane (liq.)":  "Propane",
+    "n-Butane (liq.)": "n-Butane",
+    "Ammonia (liq.)":  "Ammonia",
+    "R-134a (liq.)":   "R134a",
+    "CO₂ (liq.)":      "CarbonDioxide",
+}
+
+# Surface tension fallbacks (N/m) used when CoolProp cannot provide it.
+LIQUID_SIGMA_FALLBACK = {
+    "Water":           0.072,
+    "Methanol":        0.022,
+    "Ethanol":         0.022,
+    "Acetone":         0.023,
+    "Benzene":         0.029,
+    "Toluene":         0.028,
+    "n-Pentane":       0.016,
+    "n-Hexane":        0.018,
+    "n-Heptane":       0.020,
+    "Cyclohexane":     0.025,
+    "Propane (liq.)":  0.007,
+    "n-Butane (liq.)": 0.012,
+    "Ammonia (liq.)":  0.021,
+    "R-134a (liq.)":   0.008,
+    "CO₂ (liq.)":      0.003,
+    "KOH 30 wt%":      0.072,
+    "KOH 15 wt%":      0.072,
+    "Custom":          0.020,
+}
 
 # Aqueous liquids add H₂O vapour to the gas phase via Dalton's Law.
 LIQUID_AQUEOUS = {
-    "KOH 30 wt%": True,
-    "KOH 15 wt%": True,
-    "Water":       True,
-    "Methanol":    False,
-    "Ethanol":     False,
-    "Custom":      False,
+    "KOH 30 wt%":      True,
+    "KOH 15 wt%":      True,
+    "Water":            True,
+    "Methanol":         False,
+    "Ethanol":          False,
+    "Acetone":          False,
+    "Benzene":          False,
+    "Toluene":          False,
+    "n-Pentane":        False,
+    "n-Hexane":         False,
+    "n-Heptane":        False,
+    "Cyclohexane":      False,
+    "Propane (liq.)":   False,
+    "n-Butane (liq.)":  False,
+    "Ammonia (liq.)":   False,
+    "R-134a (liq.)":    False,
+    "CO₂ (liq.)":       False,
+    "Custom":           False,
 }
 
 # ============================================================================
@@ -196,30 +309,31 @@ def koh15_surface_tension_nm(T_C):
 # 3C. LIQUID PROPERTIES VIA COOLPROP AND GAS VISCOSITY HELPER
 # ============================================================================
 
-# CoolProp fluid ID and surface-tension fallback (N/m) for each supported liquid.
-_COOLPROP_LIQUID = {
-    "Water":    ("Water",    0.072),
-    "Methanol": ("Methanol", 0.022),
-    "Ethanol":  ("Ethanol",  0.022),
-}
-
-
-def _coolprop_liquid_properties(liquid_type, T_C, P_bara):
-    """Density (kg/m³), dynamic viscosity (Pa·s), surface tension (N/m) via CoolProp."""
-    fluid, sigma_fallback = _COOLPROP_LIQUID[liquid_type]
-    T_K  = T_C + 273.15
-    P_pa = P_bara * 1e5
+def _coolprop_liquid_by_id(fluid_id, T_K, P_pa, sigma_fallback=0.020):
+    """
+    Density (kg/m³), dynamic viscosity (Pa·s), surface tension (N/m) for any
+    CoolProp-backed liquid.  Surface tension uses the saturation curve at T
+    (acceptable engineering approximation for subcooled liquids).
+    """
     try:
-        rho = CP.PropsSI('D', 'T', T_K, 'P', P_pa, fluid)
-        mu  = CP.PropsSI('V', 'T', T_K, 'P', P_pa, fluid)
+        rho = CP.PropsSI('D', 'T', T_K, 'P', P_pa, fluid_id)
+        mu  = CP.PropsSI('V', 'T', T_K, 'P', P_pa, fluid_id)
     except Exception:
         rho = 800.0
         mu  = 1e-3
     try:
-        sigma = CP.PropsSI('surface_tension', 'T', T_K, 'Q', 0, fluid)
+        sigma = CP.PropsSI('surface_tension', 'T', T_K, 'Q', 0, fluid_id)
     except Exception:
         sigma = sigma_fallback
     return rho, mu, sigma
+
+
+def _coolprop_liquid_properties(liquid_type, T_C, P_bara):
+    """Density (kg/m³), dynamic viscosity (Pa·s), surface tension (N/m) via CoolProp.
+    Kept for back-compat; now delegates to _coolprop_liquid_by_id."""
+    fluid_id = LIQUID_COOLPROP_ID.get(liquid_type, liquid_type)
+    sigma_fb = LIQUID_SIGMA_FALLBACK.get(liquid_type, 0.020)
+    return _coolprop_liquid_by_id(fluid_id, T_C + 273.15, P_bara * 1e5, sigma_fb)
 
 
 def _water_properties(T_C, P_bara):
@@ -353,8 +467,10 @@ def calculate_two_phase_properties(
         rho_l = koh15_density_kgm3(T_C)
         mu_l  = koh15_viscosity_pas(T_C)
         sigma = koh15_surface_tension_nm(T_C)
-    elif liquid_type in _COOLPROP_LIQUID:   # Water, Methanol, Ethanol
-        rho_l, mu_l, sigma = _coolprop_liquid_properties(liquid_type, T_C, P_bara)
+    elif liquid_type in LIQUID_COOLPROP_ID:
+        fluid_id  = LIQUID_COOLPROP_ID[liquid_type]
+        sigma_fb  = LIQUID_SIGMA_FALLBACK.get(liquid_type, 0.020)
+        rho_l, mu_l, sigma = _coolprop_liquid_by_id(fluid_id, T_K, P_pa, sigma_fb)
     else:  # Custom
         cl    = custom_liquid or {}
         rho_l = cl.get("rho_kgm3", 1000.0)
@@ -513,8 +629,164 @@ def validate_input_bounds(P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h):
 
 
 # ============================================================================
+# 4A. VLE (SINGLE-COMPONENT SATURATED TWO-PHASE) MODE
+# ============================================================================
+
+# Fluids with reliable CoolProp saturation data available for VLE mode.
+VLE_FLUIDS = [
+    "Water", "Ammonia", "Propane", "n-Butane", "n-Pentane", "n-Hexane",
+    "n-Heptane", "Ethanol", "Methanol", "Benzene", "Toluene",
+    "CycloHexane", "R134a", "R22", "R32", "R125", "CarbonDioxide",
+    "Ethane", "Ethylene", "Acetone",
+]
+
+# Human-readable display names → CoolProp IDs for VLE selector.
+VLE_FLUID_DISPLAY = {
+    "Water (steam/water)":     "Water",
+    "Ammonia (NH₃)":           "Ammonia",
+    "Propane":                 "Propane",
+    "n-Butane":                "n-Butane",
+    "n-Pentane":               "n-Pentane",
+    "n-Hexane":                "n-Hexane",
+    "n-Heptane":               "n-Heptane",
+    "Ethanol":                 "Ethanol",
+    "Methanol":                "Methanol",
+    "Benzene":                 "Benzene",
+    "Toluene":                 "Toluene",
+    "Cyclohexane":             "CycloHexane",
+    "R-134a":                  "R134a",
+    "R-22":                    "R22",
+    "R-32":                    "R32",
+    "R-125":                   "R125",
+    "CO₂ (supercritical)":     "CarbonDioxide",
+    "Ethane":                  "Ethane",
+    "Ethylene":                "Ethylene",
+    "Acetone":                 "Acetone",
+}
+
+
+def calculate_vle_properties(fluid_id, P_bara, x_mass, m_total_kgs):
+    """
+    Single-component saturated two-phase properties via CoolProp.
+
+    Args:
+        fluid_id:      CoolProp fluid name (e.g. "Water", "Propane", "R134a")
+        P_bara:        Inlet pressure (bara)
+        x_mass:        Mass quality (0 = all liquid, 1 = all vapour)
+        m_total_kgs:   Total mass flow (kg/s)
+
+    Returns the same dict shape as calculate_two_phase_properties() so the
+    pressure-drop solver and pressure-marching loop are unchanged.
+    At each segment the caller re-invokes this function at the updated inlet
+    pressure, so T_sat and all phase properties track the saturation curve.
+    """
+    P_pa   = P_bara * 1e5
+    x_mass = max(0.0, min(1.0, x_mass))
+
+    try:
+        T_sat = CP.PropsSI('T',  'P', P_pa, 'Q', 0.5, fluid_id)
+        rho_l = CP.PropsSI('D',  'P', P_pa, 'Q', 0,   fluid_id)
+        rho_g = CP.PropsSI('D',  'P', P_pa, 'Q', 1,   fluid_id)
+        mu_l  = CP.PropsSI('V',  'P', P_pa, 'Q', 0,   fluid_id)
+        mu_g  = CP.PropsSI('V',  'P', P_pa, 'Q', 1,   fluid_id)
+        MW    = CP.PropsSI('M',  'P', P_pa, 'Q', 1,   fluid_id)   # kg/mol
+        try:
+            sigma = CP.PropsSI('surface_tension', 'T', T_sat, 'Q', 0, fluid_id)
+        except Exception:
+            sigma = 0.020  # generic fallback
+    except Exception as exc:
+        raise ValueError(
+            f"CoolProp VLE lookup failed for '{fluid_id}' at {P_bara:.2f} bara: {exc}"
+        )
+
+    T_C       = T_sat - 273.15
+    m_gas_kgh = x_mass * m_total_kgs * 3600.0
+    m_liq_kgh = (1.0 - x_mass) * m_total_kgs * 3600.0
+
+    alpha = 0.0
+    if x_mass > 0 and rho_g > 0 and rho_l > 0:
+        alpha = (x_mass / rho_g) / (x_mass / rho_g + (1.0 - x_mass) / rho_l)
+
+    composition = {
+        fluid_id: {
+            "mol_h":       m_gas_kgh / MW if MW > 0 else 0.0,
+            "kg_h":        m_gas_kgh,
+            "mol_frac":    1.0,
+            "coolprop_id": fluid_id,
+        }
+    }
+
+    return {
+        "m_total_kgs":        m_total_kgs,
+        "x_gas":              x_mass,
+        "alpha":              alpha,
+        "rho_l":              rho_l,
+        "rho_g":              rho_g,
+        "mu_l":               mu_l,
+        "mu_g":               mu_g,
+        "sigma":              sigma,
+        "m_vapor_h2o_kgh":    0.0,
+        "P_sat_H2O_pa":       0.0,
+        "T_C":                T_C,
+        "P_pa":               P_pa,
+        "composition":        composition,
+        "MW_mix_gmol":        MW * 1000.0,
+        "liquid_type":        f"{fluid_id} (VLE)",
+        "m_gas_total_kgh":    m_gas_kgh,
+        "m_lye_kgh":          m_liq_kgh,
+        "m_liquid_total_kgh": m_liq_kgh,
+        # VLE-specific bookkeeping
+        "vle_fluid":          fluid_id,
+        "T_sat_C":            T_C,
+    }
+
+
+# ============================================================================
 # 5. PRESSURE DROP SOLVER
 # ============================================================================
+
+_SINGLE_PHASE_V_THRESHOLD = 1e-4  # m/s — below this superficial velocity, treat phase as absent
+
+
+def _single_phase_dp(props, D, roughness, L_eff, angle_rad, phase):
+    """
+    Darcy-Weisbach pressure drop for single-phase gas or liquid flow.
+    Used when the other phase is negligible (superficial velocity < threshold).
+    """
+    if phase == 'gas':
+        rho = props["rho_g"]
+        mu  = props["mu_g"]
+    else:
+        rho = props["rho_l"]
+        mu  = props["mu_l"]
+
+    m   = props["m_total_kgs"]
+    A   = 0.25 * np.pi * D ** 2
+    V   = m / (rho * A) if rho > 0 and A > 0 else 0.0
+    Re  = max(1.0, rho * V * D / mu) if mu > 0 else 1e6
+    eD  = roughness / D if D > 0 else 0.0
+
+    f        = _darcy_friction_factor(Re=Re, eD=eD)
+    dP_fric  = f * (L_eff / D) * 0.5 * rho * V ** 2
+    dP_grav  = rho * _g * L_eff * np.sin(angle_rad)
+    dP_total = dP_fric + dP_grav
+
+    regime   = "Single-phase gas" if phase == 'gas' else "Single-phase liquid"
+    Vsg = V if phase == 'gas'   else 0.0
+    Vsl = V if phase == 'liquid' else 0.0
+
+    return {
+        "dP_Pa":       dP_total,
+        "dP_fric_Pa":  dP_fric,
+        "dP_grav_Pa":  dP_grav,
+        "dP_accel_Pa": 0.0,
+        "regime":      regime,
+        "dP_per_dz":   dP_total / L_eff if L_eff > 0 else 0.0,
+        "Vsg":         Vsg,
+        "Vsl":         Vsl,
+        "alpha":       1.0 if phase == 'gas' else 0.0,
+    }
+
 
 def _classify_regime(m, x, rhol, rhog, mul, mug, sigma, alpha, D, roughness, angle_deg):
     """
@@ -622,8 +894,14 @@ def calculate_segment_pressure_drop(
 
         angle_deg = np.degrees(angle_rad)
         A_cs = 0.25 * np.pi * D_inner ** 2
-        Vsg  = (x * m / rhog) / A_cs       if rhog > 0 else 0.0
+        Vsg  = (x * m / rhog) / A_cs         if rhog > 0 else 0.0
         Vsl  = ((1.0 - x) * m / rhol) / A_cs if rhol > 0 else 0.0
+
+        # ── Single-phase fallback (one phase absent) ──────────────────────────
+        if Vsg < _SINGLE_PHASE_V_THRESHOLD:
+            return _single_phase_dp(props, D_inner, roughness, L_eff, angle_rad, 'liquid')
+        if Vsl < _SINGLE_PHASE_V_THRESHOLD:
+            return _single_phase_dp(props, D_inner, roughness, L_eff, angle_rad, 'gas')
 
         # ── Void fraction ─────────────────────────────────────────────────────
         if voidage_method == "Rouhani-1 (slip)" and 0 < x < 1:
@@ -705,10 +983,15 @@ def calculate_segment_pressure_drop(
 def run_sensitivity(
     P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h, segments,
     custom_gas=None, custom_liquid=None,
+    # VLE mode — when set, gas_flows_kgh / liquid_type / q_lye_m3h are ignored
+    vle_fluid=None, vle_x_mass=None, vle_m_total_kgs=None,
 ):
     """
     Run all 12 combinations (6 correlations × 2 void-fraction models) and
     return the total ΔP for each using pressure marching.
+
+    Supports both Gas+Liquid and VLE modes.  Pass vle_fluid / vle_x_mass /
+    vle_m_total_kgs to activate VLE mode.
 
     Returns list of dicts — one per combination, ordered as in TWO_PHASE_CORRELATIONS
     (outer) × VOIDAGE_METHODS (inner):
@@ -719,6 +1002,11 @@ def run_sensitivity(
         ok           bool
         error        str | None
     """
+    _angle_map = {
+        "Horizontal":        0.0,
+        "Vertical Upflow":   np.pi / 2.0,
+        "Vertical Downflow": -np.pi / 2.0,
+    }
     results = []
     for corr in TWO_PHASE_CORRELATIONS:
         for void in VOIDAGE_METHODS:
@@ -734,12 +1022,14 @@ def run_sensitivity(
                     D_eff     = D_seg - 2 * lthk_m if lined else D_seg
                     roughness = (LINER_ROUGHNESS[lmat] if lined
                                  else MATERIAL_ROUGHNESS[seg.get("material", "SS316L")])
-                    props_seg = calculate_two_phase_properties(
-                        current_P / 1e5, T_C, gas_flows_kgh, liquid_type, q_lye_m3h,
-                        custom_gas=custom_gas, custom_liquid=custom_liquid)
-                    angle  = {"Horizontal":        0.0,
-                              "Vertical Upflow":   np.pi / 2.0,
-                              "Vertical Downflow": -np.pi / 2.0}[seg["type"]]
+                    if vle_fluid is not None:
+                        props_seg = calculate_vle_properties(
+                            vle_fluid, current_P / 1e5, vle_x_mass, vle_m_total_kgs)
+                    else:
+                        props_seg = calculate_two_phase_properties(
+                            current_P / 1e5, T_C, gas_flows_kgh, liquid_type, q_lye_m3h,
+                            custom_gas=custom_gas, custom_liquid=custom_liquid)
+                    angle  = _angle_map[seg["type"]]
                     le_fit = _seg_le_fit(seg, D_eff)
                     L_eff  = seg["length"] + le_fit
                     res    = calculate_segment_pressure_drop(
@@ -747,6 +1037,7 @@ def run_sensitivity(
                         correlation=corr, voidage_method=void)
                     total_dp  += res["dP_Pa"]
                     current_P -= res["dP_Pa"]
+                    current_P  = max(1e4, current_P)
                     seg_regimes.append(res["regime"])
                 results.append({
                     "label":           f"{corr} / {void}",
