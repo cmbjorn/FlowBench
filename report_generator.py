@@ -1899,7 +1899,7 @@ def generate_combined_report(
                     f"but estimated V_m/V_e may exceed 1.0 — verify erosion before selecting {_dn_a}.")
         else:
             _rec = (f"{_dn_p} (primary) gives lower Generator |ΔP| "
-                    f"({_dp_p:.1f} vs {_dp_a:.1f} mbar). {_dn_a} appears oversized.")
+                    f"({_dp_p:.1f} vs {_dp_a:.1f} mbar). {_dn_a} appears undersized.")
         _p_rec = doc.add_paragraph(_rec)
         if _p_rec.runs:
             _p_rec.runs[0].font.size = Pt(9)
@@ -2104,8 +2104,8 @@ def generate_dn_study_report(
         _rec = (
             f"{dn_primary} (primary) gives a lower Generator |ΔP| "
             f"({dp_gen_primary_mbar:.1f} mbar vs {dp_gen_alt_mbar:.1f} mbar). "
-            f"{dn_alt} appears oversized for this duty; the additional pipe cross-section "
-            f"does not meaningfully reduce the system differential pressure."
+            f"{dn_alt} appears undersized for this duty; the reduced pipe cross-section "
+            f"does not improve the system differential pressure."
         )
     _p_rec = doc.add_paragraph(_rec)
     if _p_rec.runs:
