@@ -285,15 +285,6 @@ with st.sidebar:
                     st.warning(f"Failed — {_sb_err:.2f}% exceeds ±{_sb_tol:.0f}%")
 
     st.divider()
-    st.markdown("**Report Settings**")
-    st.checkbox(
-        "Include charts in reports",
-        value=False,
-        key="reports_include_charts",
-        help="Requires kaleido and Node.js. Disable if report generation crashes or hangs.",
-    )
-
-    st.divider()
     st.header("Session")
 
     # ── Save ──────────────────────────────────────────────────────────────────
@@ -1114,39 +1105,59 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                      for s in st.session_state[k("segments")]],
         }, sort_keys=True).encode()).hexdigest()
         if st.session_state.get(k("rpt_hash")) != _rpt_hash:
-            st.session_state[k("rpt_hash")]  = None
-            st.session_state[k("rpt_bytes")] = None
-        _wc1, _wc2 = st.columns([1,2])
-        with _wc1:
-            if st.button("Generate Report", type="primary",
+            st.session_state[k("rpt_hash")]    = None
+            st.session_state[k("rpt_bytes")]   = None
+            st.session_state[k("rpt_hash_ch")] = None
+            st.session_state[k("rpt_bytes_ch")]= None
+        def _rpt_kwargs():
+            return dict(
+                P_bara=P_bara, T_C=T_C,
+                gas_flows_kgh=gas_flows_kgh, liquid_type=liquid_type, q_lye=q_lye,
+                props=props, grid_records=grid_records,
+                segments=st.session_state[k("segments")],
+                total_dp_kpa=total_dp_kpa,
+                outlet_pressure_bara=outlet_pressure_bara,
+                pipe_length_m=pipe_length_m,
+                cumulative_distance=cumulative_distance,
+                case_label=st.session_state.get(f"label_{cid}", f"Case {cid.upper()}"))
+        _wg1, _wg2 = st.columns(2)
+        with _wg1:
+            if st.button("Generate (tables only)", type="primary",
                          use_container_width=True, key=k("gen_rpt")):
                 with st.spinner("Building document…"):
-                    _inc_ch = st.session_state.get("reports_include_charts", False)
                     _buf = report_generator.generate_report(
-                        P_bara=P_bara, T_C=T_C,
-                        gas_flows_kgh=gas_flows_kgh, liquid_type=liquid_type, q_lye=q_lye,
-                        props=props, grid_records=grid_records,
-                        segments=st.session_state[k("segments")],
-                        total_dp_kpa=total_dp_kpa,
-                        outlet_pressure_bara=outlet_pressure_bara,
-                        pipe_length_m=pipe_length_m,
-                        cumulative_distance=cumulative_distance,
-                        fig_sch=fig_sch if _inc_ch else None,
-                        fig_prof=fig_prof if _inc_ch else None,
-                        case_label=st.session_state.get(
-                            f"label_{cid}", f"Case {cid.upper()}"))
+                        **_rpt_kwargs(), fig_sch=None, fig_prof=None)
                     st.session_state[k("rpt_bytes")] = _buf.getvalue()
                     st.session_state[k("rpt_hash")]  = _rpt_hash
-        with _wc2:
+        with _wg2:
+            if st.button("Generate with charts", use_container_width=True,
+                         key=k("gen_rpt_ch")):
+                with st.spinner("Building document with charts…"):
+                    _buf = report_generator.generate_report(
+                        **_rpt_kwargs(), fig_sch=fig_sch, fig_prof=fig_prof)
+                    st.session_state[k("rpt_bytes_ch")] = _buf.getvalue()
+                    st.session_state[k("rpt_hash_ch")]  = _rpt_hash
+        _wd1, _wd2 = st.columns(2)
+        with _wd1:
             if st.session_state.get(k("rpt_bytes")) and \
                st.session_state.get(k("rpt_hash")) == _rpt_hash:
-                st.download_button("Download  (.docx)",
+                st.download_button("Download tables only  (.docx)",
                     data=st.session_state[k("rpt_bytes")],
                     file_name=f"hydraulic_report_case_{cid}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     use_container_width=True, key=k("dl_rpt"))
             elif st.session_state.get(k("rpt_bytes")):
-                st.info("Inputs changed — regenerate report.")
+                st.info("Inputs changed — regenerate.")
+        with _wd2:
+            if st.session_state.get(k("rpt_bytes_ch")) and \
+               st.session_state.get(k("rpt_hash_ch")) == _rpt_hash:
+                st.download_button("Download with charts  (.docx)",
+                    data=st.session_state[k("rpt_bytes_ch")],
+                    file_name=f"hydraulic_report_case_{cid}_charts.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True, key=k("dl_rpt_ch"))
+            elif st.session_state.get(k("rpt_bytes_ch")):
+                st.info("Inputs changed — regenerate.")
 
     with ex_tab_x:
         def _build_xlsx_case():
@@ -2723,65 +2734,100 @@ with tab_cmp:
     # ── Comparison report ─────────────────────────────────────────────────────
     _cmp_btn_col, _cmp_dl_col = st.columns(2)
     with _cmp_btn_col:
-        if st.button("Generate Comparison Report", type="primary",
+        if st.button("Generate Comparison (tables only)", type="primary",
                      use_container_width=True, key="gen_cmp_rpt"):
-            _inc_ch = st.session_state.get("reports_include_charts", False)
             with st.spinner("Building comparison report…"):
                 try:
                     _sd = _build_sens_data()
                     _cbuf = report_generator.generate_comparison_report(
                         results_a=ra, results_b=rb,
                         label_a=_la, label_b=_lb,
-                        fig_cmp=fig_cmp if _inc_ch else None,
-                        fig_bar=fig_bar if _inc_ch else None,
-                        sensitivity_data=(
-                            {**_sd, "fig": None} if _sd and not _inc_ch else _sd),
+                        fig_cmp=None, fig_bar=None,
+                        sensitivity_data={**_sd, "fig": None} if _sd else None,
                         stack_dp=_build_stack_dp_data())
                     st.session_state["cmp_rpt_bytes"] = _cbuf.getvalue()
-                    st.success("Comparison report ready.")
+                    st.success("Ready.")
                 except Exception as _e:
-                    st.error(f"Comparison report failed: {_e}")
+                    st.error(f"Failed: {_e}")
+        if st.button("Generate Comparison with charts", use_container_width=True,
+                     key="gen_cmp_rpt_ch"):
+            with st.spinner("Building comparison report with charts…"):
+                try:
+                    _cbuf = report_generator.generate_comparison_report(
+                        results_a=ra, results_b=rb,
+                        label_a=_la, label_b=_lb,
+                        fig_cmp=fig_cmp, fig_bar=fig_bar,
+                        sensitivity_data=_build_sens_data(),
+                        stack_dp=_build_stack_dp_data())
+                    st.session_state["cmp_rpt_bytes_ch"] = _cbuf.getvalue()
+                    st.success("Ready.")
+                except Exception as _e:
+                    st.error(f"Failed: {_e}")
     with _cmp_dl_col:
         if st.session_state.get("cmp_rpt_bytes"):
             st.download_button(
-                "Download Comparison  (.docx)",
+                "Download Comparison tables  (.docx)",
                 data=st.session_state["cmp_rpt_bytes"],
                 file_name="report_comparison.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True, key="dl_cmp_rpt")
+        if st.session_state.get("cmp_rpt_bytes_ch"):
+            st.download_button(
+                "Download Comparison with charts  (.docx)",
+                data=st.session_state["cmp_rpt_bytes_ch"],
+                file_name="report_comparison_charts.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True, key="dl_cmp_rpt_ch")
 
     # ── Combined report ───────────────────────────────────────────────────────
     _cmb_btn_col, _cmb_dl_col = st.columns(2)
     with _cmb_btn_col:
-        if st.button("Generate Combined Report", type="primary",
+        if st.button("Generate Combined (tables only)", type="primary",
                      use_container_width=True, key="gen_combined_rpt"):
-            _inc_ch = st.session_state.get("reports_include_charts", False)
-            _spinner_msg = ("Building combined report…" if not _inc_ch
-                            else "Building combined report (charts enabled — may take a minute)…")
-            with st.spinner(_spinner_msg):
+            with st.spinner("Building combined report…"):
                 try:
                     _sd = _build_sens_data()
                     _combined_buf = report_generator.generate_combined_report(
                         cases=[ra, rb, results_c, results_d],
                         case_labels=[_la, _lb, _lc, _ld],
-                        fig_cmp=fig_cmp if _inc_ch else None,
-                        fig_bar=fig_bar if _inc_ch else None,
-                        sensitivity_data=(
-                            {**_sd, "fig": None} if _sd and not _inc_ch else _sd),
+                        fig_cmp=None, fig_bar=None,
+                        sensitivity_data={**_sd, "fig": None} if _sd else None,
                         stack_dp=_build_stack_dp_data(),
                         dn_study_data=_build_dn_study_data())
                     st.session_state["combined_rpt_bytes"] = _combined_buf.getvalue()
-                    st.success("Combined report ready.")
+                    st.success("Ready.")
                 except Exception as _e:
-                    st.error(f"Combined report failed: {_e}")
+                    st.error(f"Failed: {_e}")
+        if st.button("Generate Combined with charts", use_container_width=True,
+                     key="gen_combined_rpt_ch"):
+            with st.spinner("Building combined report with charts…"):
+                try:
+                    _combined_buf = report_generator.generate_combined_report(
+                        cases=[ra, rb, results_c, results_d],
+                        case_labels=[_la, _lb, _lc, _ld],
+                        fig_cmp=fig_cmp, fig_bar=fig_bar,
+                        sensitivity_data=_build_sens_data(),
+                        stack_dp=_build_stack_dp_data(),
+                        dn_study_data=_build_dn_study_data())
+                    st.session_state["combined_rpt_bytes_ch"] = _combined_buf.getvalue()
+                    st.success("Ready.")
+                except Exception as _e:
+                    st.error(f"Failed: {_e}")
     with _cmb_dl_col:
         if st.session_state.get("combined_rpt_bytes"):
             st.download_button(
-                "Download Combined  (.docx)",
+                "Download Combined tables  (.docx)",
                 data=st.session_state["combined_rpt_bytes"],
                 file_name="report_combined.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True, key="dl_combined_rpt")
+        if st.session_state.get("combined_rpt_bytes_ch"):
+            st.download_button(
+                "Download Combined with charts  (.docx)",
+                data=st.session_state["combined_rpt_bytes_ch"],
+                file_name="report_combined_charts.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True, key="dl_combined_rpt_ch")
 
     st.caption("ℹ Individual case reports (A, B) are available in their respective tabs.")
     if not _sens_avail:
