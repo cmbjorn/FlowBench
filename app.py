@@ -10,8 +10,8 @@ import hashlib
 import json
 
 st.set_page_config(
-    page_title="Multiphase Hydraulic Calculator",
-    page_icon="⚙️",
+    page_title="Electrolyzer Piping Calculator",
+    page_icon="⚗️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -36,18 +36,23 @@ hr { margin: 0.5rem 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Multiphase Pipe Hydraulic Calculator")
-st.caption("Two-phase pressure drop · Six correlations · Generic gas + liquid · Steady-state")
+st.title("Electrolyzer Gas Piping Calculator")
+st.caption("H₂ · O₂ · KOH · Two-phase pressure drop · Six correlations · Steady-state")
 
 with st.expander("About this calculator", expanded=False):
     st.markdown("""
-    Calculates steady-state pressure drops for piping networks carrying a **two-phase mixture of gas and liquid** — a gas (H₂, O₂, N₂, CO₂, CH₄, Ar, He, Air, or custom) entrained in a liquid (KOH 30 wt%, KOH 15 wt%, Water, Methanol, Ethanol, or custom).
+    Sizes the **hydrogen and oxygen gas pipelines** from an alkaline or PEM electrolyzer to the gas–liquid separator. Each pipeline carries a two-phase mixture of gas (H₂ or O₂) entrained in electrolyte (KOH 30 wt%, KOH 15 wt%, Water, or custom) at elevated pressure.
 
-    **Method** — Beggs & Brill (1973) two-phase correlation as the default, with Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm, and Kim-Mudawar available for cross-checking. Gas density is updated at every segment inlet (pressure marching). Each segment's pressure drop is decomposed into frictional, gravitational, and accelerational components. Flow regime is classified automatically — Taitel-Dukler + Mandhane for horizontal segments, Wallis/Taitel (1980) for vertical. Erosion velocity checked against API RP 14E, C = 100.
+    **Typical workflow**
+    1. **Hydrogen pipe** tab — set inlet pressure, temperature, H₂ mass flow, and electrolyte flow; build the pipe geometry segment by segment (DN, PN, material, length, fittings, optional FEP/PTFE/PFA liner).
+    2. **Oxygen pipe** tab — same for the O₂ side (gas is heavier, ΔP differs).
+    3. **H₂ Header / O₂ Header** tabs — configure the collecting manifold (tap positions, header pipe, T-segment) for each gas.
+    4. **Generator ΔP** tab — goal-seek both systems simultaneously; the difference in branch inlet pressures is the **differential pressure across the electrolyzer stack**.
+    5. **Compare** tab — overlay pressure profiles and export a combined Word or Excel report.
 
-    **Workflow** — Set inlet pressure, temperature, and flow rates → build the pipe geometry segment by segment (DN, PN, material, length, fittings, optional fluoropolymer liner) → read the segment analysis table and pressure profile → compare two alternative configurations side by side (Case A vs B) → export a Word or Excel report.
+    **Method** — Beggs & Brill (1973) default, with Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm, and Kim-Mudawar for cross-checking. Pressure marching: gas density updated at every segment inlet. ΔP split into frictional, gravitational, and accelerational components. Flow regime classified automatically (Taitel-Dukler + Mandhane for horizontal; Wallis/Taitel for vertical). Erosion check: API RP 14E, C = 100.
 
-    **Accuracy note** — Beggs & Brill was developed for oil/gas systems. Uncertainty for H₂/KOH is ±20–30 %. Use results for design guidance and relative comparison between alternatives, not as a substitute for detailed simulation or regulatory compliance.
+    **Accuracy note** — Correlations were developed for oil/gas systems. Uncertainty for H₂/O₂ over KOH is ±20–30 %. Use for design guidance and relative comparison; validate against commissioning data.
     """)
 
 # ============================================================================
@@ -152,7 +157,7 @@ with st.sidebar:
     st.header("Documentation")
     with st.expander("Capabilities", expanded=False):
         st.markdown("""
-        **Cases** — Run Case A and Case B independently, then compare side by side.
+        **Cases** — Run the Hydrogen pipe and Oxygen pipe independently, then compare side by side.
         Useful for: alternative pipe routings, diameter studies, full-flow vs. turndown.
 
         **Gas species** — H₂, O₂, N₂, CO₂, CH₄, Ar, He, Air, or Custom (user-defined MW and viscosity).
@@ -1492,6 +1497,218 @@ def _goal_seek_stack(res_line, res_hdr, P_target_sep, tol=0.0005, max_iter=30):
 
 
 # ============================================================================
+# HEADER PIPING SCHEMATIC
+# ============================================================================
+def _make_header_schematic(
+        left_positions, right_positions, t_seg_spec,
+        P_inlet_bara, worst_arm,
+        dp_l_kpa, dp_r_kpa,
+        P_T_l_bara, P_T_r_bara, P_sep_bara):
+    """Return a Plotly figure showing the physical header piping layout."""
+
+    PIPE_Y  = 1.8   # header pipe y-level
+    TAP_TOP = 3.1   # top of tap risers (flow enters from branch above)
+    TSEG_Y  = 0.5   # T-segment / separator level
+
+    max_l  = max(left_positions,  default=0.5)
+    max_r  = max(right_positions, default=0.5)
+    t_len  = float(t_seg_spec.get("length", 1.0))
+    pad    = max((max_l + max_r) * 0.06, 0.5)
+
+    LEFT_C  = "#2563EB"
+    RIGHT_C = "#D97706"
+    TSEG_C  = "#475569"
+    JOINT_C = "#1E293B"
+
+    shapes = []
+
+    # ── Header pipe: left arm ─────────────────────────────────────────────────
+    x_left_end  = -max_l if left_positions  else -0.7
+    x_right_end =  max_r if right_positions else  0.7
+    shapes.append(dict(type="line",
+        x0=x_left_end, y0=PIPE_Y, x1=0, y1=PIPE_Y,
+        line=dict(color=LEFT_C if left_positions else "#CBD5E1", width=9)))
+
+    # ── Header pipe: right arm ────────────────────────────────────────────────
+    shapes.append(dict(type="line",
+        x0=0, y0=PIPE_Y, x1=x_right_end, y1=PIPE_Y,
+        line=dict(color=RIGHT_C if right_positions else "#CBD5E1", width=9)))
+
+    # ── T-segment: vertical drop then horizontal to separator ─────────────────
+    shapes.append(dict(type="line",
+        x0=0, y0=PIPE_Y, x1=0, y1=TSEG_Y,
+        line=dict(color=TSEG_C, width=14)))
+    if t_len > 0:
+        shapes.append(dict(type="line",
+            x0=0, y0=TSEG_Y, x1=t_len, y1=TSEG_Y,
+            line=dict(color=TSEG_C, width=14)))
+
+    # ── Separator box ─────────────────────────────────────────────────────────
+    sep_x = t_len if t_len > 0 else 0
+    sep_w, sep_h = 1.3, 0.75
+    shapes.append(dict(type="rect",
+        x0=sep_x, y0=TSEG_Y - sep_h / 2, x1=sep_x + sep_w, y1=TSEG_Y + sep_h / 2,
+        line=dict(color=JOINT_C, width=2), fillcolor="#DBEAFE"))
+
+    # ── Tap risers ────────────────────────────────────────────────────────────
+    left_sorted  = sorted(left_positions,  reverse=True)   # farthest first
+    right_sorted = sorted(right_positions)                  # nearest first
+    for pos in left_sorted:
+        shapes.append(dict(type="line",
+            x0=-pos, y0=PIPE_Y, x1=-pos, y1=TAP_TOP,
+            line=dict(color=LEFT_C, width=3)))
+    for pos in right_sorted:
+        shapes.append(dict(type="line",
+            x0=pos, y0=PIPE_Y, x1=pos, y1=TAP_TOP,
+            line=dict(color=RIGHT_C, width=3)))
+
+    fig = go.Figure()
+
+    # ── Tap inlet markers (triangles pointing down = flow direction) ──────────
+    tap_xs   = [-p for p in left_sorted] + list(right_sorted)
+    tap_cs   = [LEFT_C] * len(left_sorted) + [RIGHT_C] * len(right_sorted)
+    tap_lbls = (
+        [f"L{len(left_sorted) - i}<br>{p:.1f} m" for i, p in enumerate(left_sorted)] +
+        [f"R{i + 1}<br>{p:.1f} m"                for i, p in enumerate(right_sorted)]
+    )
+    if tap_xs:
+        fig.add_trace(go.Scatter(
+            x=tap_xs, y=[TAP_TOP] * len(tap_xs),
+            mode="markers+text",
+            marker=dict(symbol="triangle-down", size=14, color=tap_cs,
+                        line=dict(color="white", width=1)),
+            text=tap_lbls,
+            textposition="top center",
+            textfont=dict(size=9),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+    # ── T-junction marker ─────────────────────────────────────────────────────
+    fig.add_trace(go.Scatter(
+        x=[0], y=[PIPE_Y],
+        mode="markers+text",
+        marker=dict(symbol="circle", size=20, color=JOINT_C,
+                    line=dict(color="white", width=2)),
+        text=["<b>T</b>"],
+        textposition="middle center",
+        textfont=dict(size=11, color="white"),
+        hoverinfo="skip", showlegend=False,
+    ))
+
+    # ── Annotations ───────────────────────────────────────────────────────────
+    anns = []
+
+    # Tap inlet pressure banner (top-left)
+    anns.append(dict(
+        x=x_left_end, y=TAP_TOP + 0.55,
+        text=f"<b>Tap inlet pressure: {P_inlet_bara:.3f} bara</b>",
+        showarrow=False, xanchor="left",
+        font=dict(size=10, color="#1E293B"),
+        xref="x", yref="y",
+    ))
+
+    # Left arm: ΔP label + flow arrow
+    if left_positions:
+        w_mark = "  ⚠ governing" if worst_arm == "Left" else ""
+        anns.append(dict(
+            x=-max_l * 0.5, y=PIPE_Y - 0.35,
+            text=f"ΔP = {dp_l_kpa:.2f} kPa{w_mark}",
+            showarrow=False, xanchor="center",
+            font=dict(size=9, color=LEFT_C),
+            xref="x", yref="y",
+        ))
+        anns.append(dict(
+            x=-max_l * 0.18, y=PIPE_Y + 0.28,
+            ax=-max_l * 0.72, ay=PIPE_Y + 0.28,
+            xref="x", yref="y", axref="x", ayref="y",
+            showarrow=True, arrowhead=3, arrowsize=1.3,
+            arrowwidth=2, arrowcolor=LEFT_C,
+        ))
+        anns.append(dict(
+            x=x_left_end + 0.1, y=PIPE_Y + 0.28,
+            text="<i>← Left arm</i>",
+            showarrow=False, xanchor="left",
+            font=dict(size=9, color=LEFT_C),
+            xref="x", yref="y",
+        ))
+
+    # Right arm: ΔP label + flow arrow
+    if right_positions:
+        w_mark = "  ⚠ governing" if worst_arm == "Right" else ""
+        anns.append(dict(
+            x=max_r * 0.5, y=PIPE_Y - 0.35,
+            text=f"ΔP = {dp_r_kpa:.2f} kPa{w_mark}",
+            showarrow=False, xanchor="center",
+            font=dict(size=9, color=RIGHT_C),
+            xref="x", yref="y",
+        ))
+        anns.append(dict(
+            x=max_r * 0.18, y=PIPE_Y + 0.28,
+            ax=max_r * 0.72, ay=PIPE_Y + 0.28,
+            xref="x", yref="y", axref="x", ayref="y",
+            showarrow=True, arrowhead=3, arrowsize=1.3,
+            arrowwidth=2, arrowcolor=RIGHT_C,
+        ))
+        anns.append(dict(
+            x=x_right_end - 0.1, y=PIPE_Y + 0.28,
+            text="<i>Right arm →</i>",
+            showarrow=False, xanchor="right",
+            font=dict(size=9, color=RIGHT_C),
+            xref="x", yref="y",
+        ))
+
+    # T-segment: pressure at T and flow arrow down
+    anns.append(dict(
+        x=0.25, y=(PIPE_Y + TSEG_Y) / 2,
+        text=f"P_T ≈ {min(P_T_l_bara, P_T_r_bara):.3f} bara",
+        showarrow=False, xanchor="left",
+        font=dict(size=9, color=TSEG_C),
+        xref="x", yref="y",
+    ))
+    anns.append(dict(
+        x=0, y=TSEG_Y + 0.18,
+        ax=0, ay=PIPE_Y - 0.18,
+        xref="x", yref="y", axref="x", ayref="y",
+        showarrow=True, arrowhead=3, arrowsize=1.2,
+        arrowwidth=2, arrowcolor=TSEG_C,
+    ))
+    if t_len > 0:
+        anns.append(dict(
+            x=t_len * 0.5, y=TSEG_Y + 0.22,
+            text=f"T-seg  {t_len:.1f} m",
+            showarrow=False, xanchor="center",
+            font=dict(size=9, color=TSEG_C),
+            xref="x", yref="y",
+        ))
+
+    # Separator label
+    anns.append(dict(
+        x=sep_x + sep_w / 2, y=TSEG_Y,
+        text=f"<b>SEP</b><br>{P_sep_bara:.3f} bara",
+        showarrow=False, xanchor="center",
+        font=dict(size=9, color="#1E40AF"),
+        xref="x", yref="y",
+    ))
+
+    x_lo = x_left_end  - pad - 4.0   # extra room for inlet pressure label
+    x_hi = sep_x + sep_w + pad + 0.5
+
+    fig.update_layout(
+        shapes=shapes,
+        annotations=anns,
+        showlegend=False,
+        height=340,
+        margin=dict(l=10, r=10, t=35, b=10),
+        xaxis=dict(visible=False, range=[x_lo, x_hi]),
+        yaxis=dict(visible=False, range=[-0.3, TAP_TOP + 1.4]),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        title=dict(text="Header piping layout", font=dict(size=13, color="#1E293B"), x=0.5),
+    )
+    return fig
+
+
+# ============================================================================
 # HEADER CASE RUNNER  (Case C — uniform header with n A-line taps on each side)
 # ============================================================================
 def run_header_case(cid: str = "c", accent: str = "#059669",
@@ -1789,6 +2006,15 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
                 + f"  ·  ({n_left}L + {n_right}R = {n_total} taps)"
             )
 
+        # ── Piping schematic ──────────────────────────────────────────────────
+        fig_sch_hdr = _make_header_schematic(
+            left_positions, right_positions, t_seg_spec,
+            P_inlet_bara, worst_arm,
+            dp_l_kpa, dp_r_kpa,
+            P_T_l_bara, P_T_r_bara, P_sep_bara)
+        st.plotly_chart(fig_sch_hdr, use_container_width=True,
+                        key=f"{cid}_hdr_schematic")
+
         _col_hdr = ["Seg", "Taps in seg", "From T (m)", "To T (m)", "L (m)",
                     "Pipe", "ID (mm)", "Regime",
                     "Q_gas_kgh", "Q_liq_m3h",
@@ -1831,6 +2057,7 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
             st.dataframe(_df_t[_t_cols], column_config=_col_cfg_hdr,
                          hide_index=True, use_container_width=True)
 
+        fig_hdr = None
         if rec_l or rec_r:
             fig_hdr = go.Figure()
             def _arm_trace(records, label, color, positions):
@@ -1853,6 +2080,9 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
                 yaxis_title="Pressure (bara)",
                 height=300, margin=dict(l=40, r=20, t=30, b=40),
                 legend=dict(orientation="h", y=1.1),
+                template="plotly_white",
+                paper_bgcolor="white", plot_bgcolor="white",
+                xaxis_gridcolor="#F1F5F9", yaxis_gridcolor="#F1F5F9",
             )
             st.plotly_chart(fig_hdr, use_container_width=True,
                             key=f"{cid}_hdr_pressure_profile")
@@ -1894,8 +2124,8 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
         "grid_records":         _all_recs,
         "correlation":          correlation,
         "voidage_method":       voidage_method,
-        "fig_sch":              None,
-        "fig_prof":             None,
+        "fig_sch":              fig_sch_hdr,
+        "fig_prof":             fig_hdr,
         # Fields for goal-seek re-run
         "left_taps":            left_positions,
         "right_taps":           right_positions,
@@ -2407,8 +2637,8 @@ with tab_cmp:
 
                 try:
                     _combined_buf = report_generator.generate_combined_report(
-                        cases=[ra, rb, results_c],
-                        case_labels=[_la, _lb, _lc],
+                        cases=[ra, rb, results_c, results_d],
+                        case_labels=[_la, _lb, _lc, _ld],
                         fig_cmp=fig_cmp, fig_bar=fig_bar,
                         sensitivity_data=_build_sens_data(),
                         stack_dp=_build_stack_dp_data())

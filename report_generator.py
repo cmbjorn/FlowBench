@@ -64,6 +64,17 @@ def _set_col_widths(table, widths_inches):
             cell.width = Inches(w)
 
 
+def _fig_caption(doc, text):
+    """Add a small grey italic caption paragraph below a figure."""
+    p = doc.add_paragraph(text)
+    p.paragraph_format.space_before = Pt(2)
+    p.paragraph_format.space_after  = Pt(6)
+    if p.runs:
+        p.runs[0].font.size      = Pt(8)
+        p.runs[0].font.italic    = True
+        p.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+
+
 def _cell_font(cell, size_pt=9):
     for para in cell.paragraphs:
         para.paragraph_format.space_before = Pt(1)
@@ -830,20 +841,37 @@ def generate_combined_report(
         sub.runs[0].font.size = Pt(10)
     doc.add_paragraph()
 
-    # Section counter
+    # ── Helpers ───────────────────────────────────────────────────────────────
     _sec = [0]
     def _h1(title):
         _sec[0] += 1
         doc.add_heading(f"{_sec[0]}. {title}", level=1)
 
-    # Column widths: 4-col for 3 cases, 3-col for 2 cases (fit within 6.47" text area)
-    _col_w = (1.9, 1.5, 1.5, 1.5) if n >= 3 else (2.2, 2.1, 2.1)
+    # Column widths fit within 6.47" text area
+    if n >= 4:
+        _col_w = (1.6, 1.2, 1.2, 1.2, 1.2)
+    elif n >= 3:
+        _col_w = (1.9, 1.5, 1.5, 1.5)
+    else:
+        _col_w = (2.2, 2.1, 2.1)
     _headers = ["Parameter"] + case_labels[:n]
 
     def _nt(rows):
         return _kv_n_table(doc, _headers, rows, col_widths=_col_w)
 
-    # ── 1. Purpose ───────────────────────────────────────────────────────────
+    def _body_para(text):
+        p = doc.add_paragraph(text)
+        p.paragraph_format.space_after = Pt(4)
+        if p.runs:
+            p.runs[0].font.size = Pt(9)
+        return p
+
+    # Identify header vs branch cases once up front
+    _is_hdr = [not c.get("segments") for c in cases]
+
+    # ════════════════════════════════════════════════════════════════════════
+    # 1. PURPOSE
+    # ════════════════════════════════════════════════════════════════════════
     _h1("Purpose")
     _lbl_branch = "  ·  ".join(case_labels[:2]) if n >= 2 else case_labels[0]
     _lbl_header = "  ·  ".join(case_labels[2:]) if n >= 3 else ""
@@ -854,22 +882,108 @@ def generate_combined_report(
         f"from a process unit to a collecting header, which conveys the combined "
         f"flow to the gas–liquid separator."
     ]
-    if n >= 3:
+    if n >= 4:
         _p_lines.append(
-            f"The goal-seek function finds the required branch-line inlet pressure "
-            f"(= upstream equipment outlet pressure) such that the separator arrives at "
-            f"the target operating pressure. For a two-line system, the difference "
-            f"between the two branch inlet pressures gives the differential "
+            f"Two independent collecting systems are evaluated: "
+            f"{case_labels[0]} branches feed {case_labels[2]}, and "
+            f"{case_labels[1]} branches feed {case_labels[3]}. "
+            f"The goal-seek function finds the required branch inlet pressures for each "
+            f"system such that each separator arrives at its target operating pressure. "
+            f"The difference between the two branch inlet pressures is the differential "
             f"pressure across the upstream process unit."
         )
+    elif n >= 3:
+        _p_lines.append(
+            f"The goal-seek function finds the required branch-line inlet pressure "
+            f"such that the separator arrives at the target operating pressure. "
+            f"For a two-line system, the difference between the two branch inlet "
+            f"pressures gives the differential pressure across the upstream process unit."
+        )
     for _txt in _p_lines:
-        _pp = doc.add_paragraph(_txt)
-        _pp.paragraph_format.space_after = Pt(4)
-        if _pp.runs:
-            _pp.runs[0].font.size = Pt(9)
+        _body_para(_txt)
     doc.add_paragraph()
 
-    # ── 2. Method ────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # 2. KEY RESULTS
+    # ════════════════════════════════════════════════════════════════════════
+    _h1("Key Results")
+
+    # Per-case summary row (inlet P, total ΔP, outlet/separator P)
+    _kr_rows = [
+        ("Inlet / tap inlet pressure (bara)",)
+            + tuple(f"{c['P_bara']:.4f}" for c in cases),
+        ("Total ΔP (kPa)",)
+            + tuple(f"{c['total_dp_kpa']:.3f}" for c in cases),
+        ("Outlet / separator pressure (bara)",)
+            + tuple(f"{c['outlet_pressure_bara']:.4f}" for c in cases),
+    ]
+    _nt(_kr_rows)
+    doc.add_paragraph()
+
+    # Combined system totals (branch + header)
+    if n >= 3:
+        _systems = []
+        if n >= 3 and not _is_hdr[2]:
+            pass  # case 2 is not a header — skip
+        elif n >= 3 and _is_hdr[2]:
+            _dp_br_1  = cases[0]["total_dp_kpa"]
+            _dp_hd_1  = cases[2]["total_dp_kpa"]
+            _p_sep_1  = cases[2].get("P_separator_bara", cases[2]["outlet_pressure_bara"])
+            _systems.append((f"{case_labels[0]}+{case_labels[2]}",
+                              _dp_br_1, _dp_hd_1, _dp_br_1 + _dp_hd_1, _p_sep_1))
+        if n >= 4 and _is_hdr[3]:
+            _dp_br_2  = cases[1]["total_dp_kpa"]
+            _dp_hd_2  = cases[3]["total_dp_kpa"]
+            _p_sep_2  = cases[3].get("P_separator_bara", cases[3]["outlet_pressure_bara"])
+            _systems.append((f"{case_labels[1]}+{case_labels[3]}",
+                              _dp_br_2, _dp_hd_2, _dp_br_2 + _dp_hd_2, _p_sep_2))
+        if _systems:
+            doc.add_heading("Combined System ΔP", level=2)
+            if len(_systems) == 1:
+                _sc_hdrs = ["Parameter", _systems[0][0]]
+                _sc_cw   = (3.5, 3.0)
+                _sc_data = [
+                    ("Branch ΔP (kPa)",                              f"{_systems[0][1]:.3f}"),
+                    ("Header ΔP — worst arm + T-seg (kPa)",          f"{_systems[0][2]:.3f}"),
+                    ("System total ΔP (kPa)",                        f"{_systems[0][3]:.3f}"),
+                    ("Separator pressure (bara)",                     f"{_systems[0][4]:.4f}"),
+                ]
+            else:
+                _sc_hdrs = ["Parameter"] + [s[0] for s in _systems]
+                _sc_cw   = (2.47, 2.0, 2.0)
+                _sc_data = [
+                    ("Branch ΔP (kPa)",)
+                        + tuple(f"{s[1]:.3f}" for s in _systems),
+                    ("Header ΔP — worst arm + T-seg (kPa)",)
+                        + tuple(f"{s[2]:.3f}" for s in _systems),
+                    ("System total ΔP (kPa)",)
+                        + tuple(f"{s[3]:.3f}" for s in _systems),
+                    ("Separator pressure (bara)",)
+                        + tuple(f"{s[4]:.4f}" for s in _systems),
+                ]
+            _kv_n_table(doc, _sc_hdrs, _sc_data, col_widths=_sc_cw)
+            doc.add_paragraph()
+
+    # Generator ΔP summary (branch A inlet − branch B inlet)
+    if n >= 2 and not _is_hdr[0] and not _is_hdr[1]:
+        _p_in_a   = cases[0]["P_bara"]
+        _p_in_b   = cases[1]["P_bara"]
+        _gen_dp   = _p_in_a - _p_in_b
+        _gen_kpa  = _gen_dp * 100.0
+        _gen_mbar = _gen_kpa * 10.0
+        doc.add_heading("Generator Differential Pressure", level=2)
+        _kv_table(doc, [
+            (f"{case_labels[0]} branch inlet pressure (bara)",              f"{_p_in_a:.4f}"),
+            (f"{case_labels[1]} branch inlet pressure (bara)",              f"{_p_in_b:.4f}"),
+            (f"Generator ΔP  [{case_labels[0]} − {case_labels[1]}]  (bara)", f"{_gen_dp:.4f}"),
+            (f"Generator ΔP  [{case_labels[0]} − {case_labels[1]}]  (kPa)",  f"{_gen_kpa:.2f}"),
+            (f"Generator ΔP  [{case_labels[0]} − {case_labels[1]}]  (mbar)", f"{_gen_mbar:.1f}"),
+        ], col_widths=(4.0, 2.47))
+        doc.add_paragraph()
+
+    # ════════════════════════════════════════════════════════════════════════
+    # 3. METHOD
+    # ════════════════════════════════════════════════════════════════════════
     _h1("Method")
     for _txt in [
         ("Six two-phase ΔP correlations are available: Beggs & Brill (1973, default), "
@@ -885,156 +999,125 @@ def generate_combined_report(
          "vapour. Minor losses: Crane TP-410. Erosion: API RP 14E, C = 100. "
          "Packages: fluids · CoolProp · python-docx."),
     ]:
-        _p = doc.add_paragraph(_txt)
-        _p.paragraph_format.space_after = Pt(4)
-        if _p.runs:
-            _p.runs[0].font.size = Pt(9)
+        _body_para(_txt)
     doc.add_paragraph()
 
-    # ── 2. Process Conditions ────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # 4. PROCESS CONDITIONS
+    # ════════════════════════════════════════════════════════════════════════
     _h1("Process Conditions")
     _all_sp = list(dict.fromkeys(sp for c in cases for sp in c["gas_flows_kgh"]))
     _cond = [
-        ("Inlet pressure (bara)",)     + tuple(f"{c['P_bara']:.2f}"   for c in cases),
-        ("Temperature (°C)",)          + tuple(f"{c['T_C']:.1f}"      for c in cases),
+        ("Inlet pressure (bara)",)   + tuple(f"{c['P_bara']:.2f}"  for c in cases),
+        ("Temperature (°C)",)        + tuple(f"{c['T_C']:.1f}"     for c in cases),
     ]
     for _sp in _all_sp:
         _cond.append(
             (f"{_sp} mass flow (kg/h)",) +
             tuple(f"{c['gas_flows_kgh'].get(_sp, 0.0):.3f}" for c in cases))
     _cond += [
-        ("Liquid type",)               + tuple(c["liquid_type"]               for c in cases),
-        ("Liquid vol. flow (m³/h)",)   + tuple(f"{c['q_lye']:.3f}"           for c in cases),
-        ("ΔP correlation",)            + tuple(c.get("correlation", "—")      for c in cases),
-        ("Void fraction model",)       + tuple(c.get("voidage_method", "—")   for c in cases),
-        ("Number of segments",)        + tuple(str(len(c["segments"]))         for c in cases),
+        ("Liquid type",)             + tuple(c["liquid_type"]              for c in cases),
+        ("Liquid vol. flow (m³/h)",) + tuple(f"{c['q_lye']:.3f}"          for c in cases),
+        ("ΔP correlation",)          + tuple(c.get("correlation", "—")     for c in cases),
+        ("Void fraction model",)     + tuple(c.get("voidage_method", "—")  for c in cases),
+        ("Segments / taps",)         + tuple(
+            str(len(c["segments"])) if c.get("segments")
+            else f"{c.get('n_left',0)}L + {c.get('n_right',0)}R taps"
+            for c in cases),
     ]
     _nt(_cond)
     doc.add_paragraph()
 
-    # ── 3. Phase Thermodynamics ──────────────────────────────────────────────
-    _h1("Phase Thermodynamics  (inlet conditions)")
-    _ps = [c["props"] for c in cases]
-
-    def _pfmt(p, key, scale=1.0, fmt=".4f"):
-        v = p.get(key)
-        return f"{v * scale:{fmt}}" if v is not None else "—"
-
-    _thm = [
-        ("Gas density ρ_g (kg/m³)",)      + tuple(_pfmt(p, "rho_g")                    for p in _ps),
-        ("Gas mixture MW (g/mol)",)        + tuple(_pfmt(p, "MW_mix_gmol", fmt=".3f")   for p in _ps),
-        ("Liquid density ρ_l (kg/m³)",)    + tuple(_pfmt(p, "rho_l", fmt=".2f")         for p in _ps),
-        ("Liquid viscosity μ_l (mPa·s)",)  + tuple(_pfmt(p, "mu_l", 1e3)               for p in _ps),
-        ("Gas viscosity μ_g (µPa·s)",)     + tuple(_pfmt(p, "mu_g", 1e6, ".2f")        for p in _ps),
-        ("Surface tension σ (mN/m)",)      + tuple(_pfmt(p, "sigma", 1e3, ".3f")        for p in _ps),
-        ("Mass quality x (%)",)            + tuple(_pfmt(p, "x_gas", 100)              for p in _ps),
-        ("Void fraction α (%)",)           + tuple(_pfmt(p, "alpha", 100, ".2f")        for p in _ps),
-    ]
-    if any(p.get("P_sat_H2O_pa", 0) > 0 for p in _ps):
-        _thm += [
-            ("H₂O sat. pressure (bara)",) + tuple(
-                f"{p.get('P_sat_H2O_pa',0)/1e5:.4f}" if p.get('P_sat_H2O_pa',0) > 0 else "—"
-                for p in _ps),
-            ("H₂O vapour flow (kg/h)",) + tuple(
-                f"{p.get('m_vapor_h2o_kgh',0):.4f}" if p.get('P_sat_H2O_pa',0) > 0 else "—"
-                for p in _ps),
+    # ════════════════════════════════════════════════════════════════════════
+    # 5. BRANCH LINE RESULTS
+    # ════════════════════════════════════════════════════════════════════════
+    _branch_cases  = [c   for c, h in zip(cases, _is_hdr) if not h]
+    _branch_labels = [lbl for lbl, h in zip(case_labels, _is_hdr) if not h]
+    if _branch_cases:
+        _h1("Branch Line Results")
+        nb = len(_branch_cases)
+        if nb >= 3:
+            _bcw = (1.9, 1.5, 1.5, 1.5)[:nb + 1]
+        elif nb == 2:
+            _bcw = (2.5, 2.0, 2.0)
+        else:
+            _bcw = (3.0, 3.47)
+        _bhdrs = ["Parameter"] + _branch_labels
+        _max_ve = [
+            max((r.get("V_m/V_e", 0) for r in c["grid_records"]), default=0.0)
+            for c in _branch_cases
         ]
-    _nt(_thm)
-    doc.add_paragraph()
-
-    # ── 4. System Totals ─────────────────────────────────────────────────────
-    _h1("System Totals")
-    _max_ve = [max((r["V_m/V_e"] for r in c["grid_records"]), default=0.0) for c in cases]
-    _tot = [
-        ("Outlet pressure (bara)",)             + tuple(f"{c['outlet_pressure_bara']:.4f}" for c in cases),
-        ("Total ΔP (kPa)",)                     + tuple(f"{c['total_dp_kpa']:.4f}"         for c in cases),
-        ("Total ΔP (bar)",)                     + tuple(f"{c['total_dp_kpa']/100:.6f}"     for c in cases),
-        ("  ↳ Frictional ΔP (kPa)",)            + tuple(f"{c['total_dp_fric_kpa']:.4f}"   for c in cases),
-        ("  ↳ Gravitational ΔP (kPa)",)         + tuple(f"{c['total_dp_grav_kpa']:.4f}"   for c in cases),
-        ("Pipe length (m)",)                    + tuple(f"{c['pipe_length_m']:.2f}"        for c in cases),
-        ("Eff. length incl. fittings (m)",)     + tuple(f"{c['cumulative_distance']:.2f}" for c in cases),
-        ("Worst V_m/V_e (–)",)                  + tuple(f"{v:.3f}"                         for v in _max_ve),
-    ]
-    if n >= 2:
-        _dp_delta = cases[1]["total_dp_kpa"] - cases[0]["total_dp_kpa"]
-        _tot.append(
-            ("ΔP  B − A (kPa)", "—", f"{_dp_delta:+.4f}") + ("—",) * max(0, n - 2)
-        )
-    _nt(_tot)
-    doc.add_paragraph()
-
-    # ── 5. System Total ΔP — Header + Branch ─────────────────────────────────
-    # Only rendered when at least 3 cases (cases[2] = header, cases[0] = branch A)
-    if n >= 3:
-        _h1(f"System Total ΔP — {case_labels[2]} + {case_labels[0]}")
-
-        _dp_hdr  = cases[2]["total_dp_kpa"]   # header (worst-arm + T-seg)
-        _dp_br   = cases[0]["total_dp_kpa"]   # branch A
-        _total   = _dp_hdr + _dp_br
-        _p_in_c  = cases[2]["P_bara"]
-        _p_sep   = cases[2].get("P_separator_bara",
-                                cases[2]["outlet_pressure_bara"])
-        _p_br_in = cases[0]["P_bara"]
-        _p_br_out = cases[0]["outlet_pressure_bara"]
-
-        _sys_intro = doc.add_paragraph(
-            f"The {case_labels[2]} collecting header receives flow from n × {case_labels[0]} "
-            f"branch lines, combines them at the T-junction, and delivers the total flow "
-            f"to the separator via the T-segment. "
-            f"Pressure marches from the branch inlet → header taps → T-junction → "
-            f"T-segment → separator. "
-            f"The worst arm (longest tap distance) governs the header ΔP."
-        )
-        if _sys_intro.runs:
-            _sys_intro.runs[0].font.size = Pt(9)
-        doc.add_paragraph()
-
-        _sys_rows = [
-            (f"Branch inlet pressure — {case_labels[0]} (bara)",
-             f"{_p_br_in:.4f}"),
-            (f"Branch ΔP — {case_labels[0]} (kPa)",
-             f"{_dp_br:.4f}"),
-            (f"Branch outlet / header inlet pressure (bara)",
-             f"{_p_br_out:.4f}"),
-            (f"Header ΔP (worst arm + T-segment) — {case_labels[2]} (kPa)",
-             f"{_dp_hdr:.4f}"),
-            (f"Total system ΔP — {case_labels[0]} + {case_labels[2]} (kPa)",
-             f"{_total:.4f}"),
-            ("Separator connection pressure (bara)",
-             f"{_p_sep:.4f}"),
+        _br_rows = [
+            ("Inlet pressure (bara)",)
+                + tuple(f"{c['P_bara']:.4f}"           for c in _branch_cases),
+            ("Total ΔP (kPa)",)
+                + tuple(f"{c['total_dp_kpa']:.4f}"     for c in _branch_cases),
+            ("  ↳ Frictional ΔP (kPa)",)
+                + tuple(f"{c['total_dp_fric_kpa']:.4f}" for c in _branch_cases),
+            ("  ↳ Gravitational ΔP (kPa)",)
+                + tuple(f"{c['total_dp_grav_kpa']:.4f}" for c in _branch_cases),
+            ("Outlet pressure (bara)",)
+                + tuple(f"{c['outlet_pressure_bara']:.4f}" for c in _branch_cases),
+            ("Pipe length (m)",)
+                + tuple(f"{c['pipe_length_m']:.2f}"    for c in _branch_cases),
+            ("Worst V_m/V_e (–)",)
+                + tuple(f"{v:.3f}"                      for v in _max_ve),
         ]
-        _kv_table(doc, _sys_rows)
+        if nb >= 2:
+            _dp_delta = _branch_cases[1]["total_dp_kpa"] - _branch_cases[0]["total_dp_kpa"]
+            _br_rows.append(
+                (f"ΔP  {_branch_labels[1]} − {_branch_labels[0]}  (kPa)",
+                 "—", f"{_dp_delta:+.4f}") + ("—",) * max(0, nb - 2)
+            )
+        _kv_n_table(doc, _bhdrs, _br_rows, col_widths=_bcw)
         doc.add_paragraph()
 
-    # ── 6+. Segment Analysis (one section per case) ───────────────────────────
-    _SC = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)", "L_eq (m)", "Fittings", "Regime",
-           "V_m (m/s)", "V_m/V_e", "ΔP (kPa)", "P_out (bara)"]
-    _SW = [0.25, 0.50, 0.42, 0.80, 0.38, 0.42, 0.70, 0.85, 0.48, 0.44, 0.50, 0.53]
+    # ════════════════════════════════════════════════════════════════════════
+    # 6. COMBINED SYSTEM ΔP — one sub-section per header case
+    # ════════════════════════════════════════════════════════════════════════
+    _hdr_triples = [
+        (idx, c, lbl)
+        for idx, (c, lbl, h) in enumerate(zip(cases, case_labels, _is_hdr)) if h
+    ]
+    if _hdr_triples:
+        _h1("Combined System ΔP — Header + Branch")
+        for _hidx, _hc, _hlbl in _hdr_triples:
+            # Header at index 2 pairs with branch at 0; index 3 pairs with branch at 1
+            _br_idx = _hidx - 2
+            if 0 <= _br_idx < n and not _is_hdr[_br_idx]:
+                _bc, _blbl = cases[_br_idx], case_labels[_br_idx]
+            else:
+                _bc, _blbl = cases[0], case_labels[0]
 
-    def _seg_tbl(records):
-        if not records:
-            return
-        tbl = doc.add_table(rows=len(records) + 1, cols=len(_SC))
-        tbl.style = "Table Grid"
-        _style_header(tbl.rows[0], font_size=8)
-        for j, col in enumerate(_SC):
-            tbl.rows[0].cells[j].text = col
-        for i, rec in enumerate(records, start=1):
-            row = tbl.rows[i]
-            if i % 2 == 0:
-                for cell in row.cells:
-                    _shd(cell, _ALT_BG)
-            for j, col in enumerate(_SC):
-                row.cells[j].text = str(rec.get(col, ""))
-                _cell_font(row.cells[j], size_pt=8)
-        _set_col_widths(tbl, _SW)
+            _dp_hdr   = _hc["total_dp_kpa"]
+            _dp_br    = _bc["total_dp_kpa"]
+            _p_in_br  = _bc["P_bara"]
+            _p_out_br = _bc["outlet_pressure_bara"]
+            _p_sep    = _hc.get("P_separator_bara", _hc["outlet_pressure_bara"])
 
-    for c, lbl in zip(cases, case_labels):
-        _h1(f"Segment Analysis — {lbl}")
-        _seg_tbl(c["grid_records"])
-        doc.add_paragraph()
+            doc.add_heading(f"{_blbl} → {_hlbl} → Separator", level=2)
+            _sys_p = doc.add_paragraph(
+                f"The {_hlbl} collecting header receives flow from {_blbl} branch lines "
+                f"and delivers the combined flow to the separator via the T-segment. "
+                f"Equal flow per tap is assumed; the governing (highest-ΔP) arm sets the "
+                f"required tap inlet pressure. This is conservative when header ΔP ≪ branch ΔP."
+            )
+            if _sys_p.runs:
+                _sys_p.runs[0].font.size = Pt(9)
+            doc.add_paragraph()
+            _kv_table(doc, [
+                (f"Branch inlet pressure — {_blbl} (bara)",          f"{_p_in_br:.4f}"),
+                (f"Branch ΔP — {_blbl} (kPa)",                       f"{_dp_br:.4f}"),
+                ("Branch outlet / header tap inlet pressure (bara)",  f"{_p_out_br:.4f}"),
+                (f"Header ΔP (worst arm + T-seg) — {_hlbl} (kPa)",   f"{_dp_hdr:.4f}"),
+                (f"Total system ΔP — {_blbl} + {_hlbl} (kPa)",       f"{_dp_br + _dp_hdr:.4f}"),
+                ("Separator connection pressure (bara)",               f"{_p_sep:.4f}"),
+            ])
+            doc.add_paragraph()
 
-    # ── Visualisations ────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # 7. VISUALISATIONS  (page break)
+    # ════════════════════════════════════════════════════════════════════════
     _has_figs = (fig_cmp is not None or fig_bar is not None
                  or any(c.get("fig_sch") or c.get("fig_prof") for c in cases))
     if _has_figs:
@@ -1042,44 +1125,72 @@ def generate_combined_report(
         _h1("Visualisations")
 
         if fig_cmp is not None:
-            doc.add_heading("Pressure Profiles — A vs B", level=2)
+            _la_v = case_labels[0] if case_labels else "A"
+            _lb_v = case_labels[1] if len(case_labels) > 1 else "B"
+            doc.add_heading(f"Pressure Profiles — {_la_v} vs {_lb_v}", level=2)
             img = _fig_to_png(fig_cmp, width=900, height=400, scale=2)
             if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
             else:
                 doc.add_paragraph("(chart rendering timed out)")
-            doc.add_paragraph()
+            _fig_caption(doc,
+                f"Figure: Absolute pressure (bara) along the pipeline for {_la_v} (solid) "
+                f"and {_lb_v} (dashed). A steeper slope indicates higher local resistance.")
 
         if fig_bar is not None:
-            doc.add_heading("ΔP by Segment — A vs B", level=2)
+            _la_v = case_labels[0] if case_labels else "A"
+            _lb_v = case_labels[1] if len(case_labels) > 1 else "B"
+            doc.add_heading(f"ΔP by Segment — {_la_v} vs {_lb_v}", level=2)
             img = _fig_to_png(fig_bar, width=900, height=340, scale=2)
             if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
             else:
                 doc.add_paragraph("(chart rendering timed out)")
-            doc.add_paragraph()
+            _fig_caption(doc,
+                f"Figure: Pressure drop (kPa) per segment for {_la_v} and {_lb_v}. "
+                f"Tallest bars are the dominant loss elements.")
 
-        for c, lbl in zip(cases, case_labels):
+        for c, lbl, is_hdr in zip(cases, case_labels, _is_hdr):
             _fs = c.get("fig_sch")
             _fp = c.get("fig_prof")
             if _fs is not None or _fp is not None:
-                doc.add_heading(f"{lbl} — Pipeline", level=2)
+                doc.add_heading(f"{lbl} — {'Header Layout' if is_hdr else 'Pipeline'}", level=2)
             if _fs is not None:
-                img = _fig_to_png(_fs, width=900, height=440, scale=2)
+                img = _fig_to_png(_fs, width=900, height=340 if is_hdr else 440, scale=2)
                 if img:
                     doc.add_picture(BytesIO(img), width=Inches(6.2))
                 else:
                     doc.add_paragraph("(chart rendering timed out)")
-                doc.add_paragraph()
+                if is_hdr:
+                    _fig_caption(doc,
+                        f"Figure: Header piping layout for {lbl}. "
+                        f"Blue = left arm, orange = right arm. Triangular markers = tap risers "
+                        f"with distance from T. Flow arrows point toward T-junction. "
+                        f"Thicker dark pipe = T-segment to separator. "
+                        f"Governing arm (⚠) sets the required tap inlet pressure.")
+                else:
+                    _fig_caption(doc,
+                        f"Figure: Pipeline schematic for {lbl}, colour-coded by flow regime. "
+                        f"V_m/V_e > 1.0 flags erosion risk (API RP 14E, C = 100).")
             if _fp is not None:
                 img = _fig_to_png(_fp, width=900, height=320, scale=2)
                 if img:
                     doc.add_picture(BytesIO(img), width=Inches(6.2))
                 else:
                     doc.add_paragraph("(chart rendering timed out)")
-                doc.add_paragraph()
+                if is_hdr:
+                    _fig_caption(doc,
+                        f"Figure: Header pressure profile for {lbl}. Left arm (blue) and "
+                        f"right arm (orange) pressure vs. distance from T-junction. "
+                        f"X-axis reversed so flow runs left to right toward T at x = 0.")
+                else:
+                    _fig_caption(doc,
+                        f"Figure: Pressure profile for {lbl}. Pressure (bara) vs. cumulative "
+                        f"distance. Coloured bands show predicted flow regime per segment.")
 
-    # ── Sensitivity Analysis ──────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # 8. SENSITIVITY ANALYSIS  (page break, if provided)
+    # ════════════════════════════════════════════════════════════════════════
     if sensitivity_data is not None:
         _sa = sensitivity_data.get("sa", [])
         _sb = sensitivity_data.get("sb", [])
@@ -1090,8 +1201,8 @@ def generate_combined_report(
 
         _intro = doc.add_paragraph(
             "All 12 method combinations (6 ΔP correlations × 2 void-fraction models) "
-            "were evaluated for Cases A and B to quantify uncertainty due to method "
-            "selection.  Combinations that failed to converge are excluded."
+            "were evaluated to quantify uncertainty due to correlation choice. "
+            "Combinations that failed to converge are excluded."
         )
         if _intro.runs:
             _intro.runs[0].font.size = Pt(9)
@@ -1108,22 +1219,21 @@ def generate_combined_report(
         _va = [r["total_dp_kpa"] for r in _sa if r["ok"]]
         _vb = [r["total_dp_kpa"] for r in _sb if r["ok"]]
         if _va and _vb:
-            _a_sel = cases[0]["total_dp_kpa"]
-            _b_sel = cases[1]["total_dp_kpa"]
+            _a_sel  = cases[0]["total_dp_kpa"]
+            _b_sel  = cases[1]["total_dp_kpa"]
             _overlap = min(_va) <= max(_vb) and min(_vb) <= max(_va)
-            _sum = [
-                (f"{_lbl_sa} — minimum ΔP (kPa)",       f"{min(_va):.3f}",  "—"),
-                (f"{_lbl_sa} — selected method (kPa)",  f"{_a_sel:.3f}",    "—"),
-                (f"{_lbl_sa} — maximum ΔP (kPa)",       f"{max(_va):.3f}",  "—"),
-                (f"{_lbl_sa} — spread (kPa)",            f"{max(_va)-min(_va):.3f}", "—"),
-                (f"{_lbl_sb} — minimum ΔP (kPa)",       "—",               f"{min(_vb):.3f}"),
-                (f"{_lbl_sb} — selected method (kPa)",  "—",               f"{_b_sel:.3f}"),
-                (f"{_lbl_sb} — maximum ΔP (kPa)",       "—",               f"{max(_vb):.3f}"),
-                (f"{_lbl_sb} — spread (kPa)",            "—",               f"{max(_vb)-min(_vb):.3f}"),
+            _kv3_table(doc, [
+                (f"{_lbl_sa} — min ΔP (kPa)",    f"{min(_va):.3f}",  "—"),
+                (f"{_lbl_sa} — selected (kPa)",  f"{_a_sel:.3f}",    "—"),
+                (f"{_lbl_sa} — max ΔP (kPa)",    f"{max(_va):.3f}",  "—"),
+                (f"{_lbl_sa} — spread (kPa)",     f"{max(_va)-min(_va):.3f}", "—"),
+                (f"{_lbl_sb} — min ΔP (kPa)",    "—", f"{min(_vb):.3f}"),
+                (f"{_lbl_sb} — selected (kPa)",  "—", f"{_b_sel:.3f}"),
+                (f"{_lbl_sb} — max ΔP (kPa)",    "—", f"{max(_vb):.3f}"),
+                (f"{_lbl_sb} — spread (kPa)",     "—", f"{max(_vb)-min(_vb):.3f}"),
                 ("Ranges overlap?",
                  "Yes — ordering method-dependent" if _overlap else "No — unambiguous", ""),
-            ]
-            _kv3_table(doc, _sum, label_a=_lbl_sa, label_b=_lbl_sb)
+            ], label_a=_lbl_sa, label_b=_lbl_sb)
             doc.add_paragraph()
 
         _det = []
@@ -1144,8 +1254,14 @@ def generate_combined_report(
                 doc.add_picture(BytesIO(_img_s), width=Inches(6.2))
             else:
                 doc.add_paragraph("(sensitivity chart rendering timed out)")
+            _fig_caption(doc,
+                f"Figure: Total ΔP for all 12 method combinations. "
+                f"Spread quantifies the correlation-choice uncertainty band. "
+                f"Non-overlapping clusters give an unambiguous result.")
 
-    # ── Stack ΔP ──────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # 9. GENERATOR ΔP DETAIL  (page break, if goal-seek data available)
+    # ════════════════════════════════════════════════════════════════════════
     if stack_dp is not None:
         _gsh  = stack_dp.get("gsr_h2") or {}
         _gso  = stack_dp.get("gsr_o2") or {}
@@ -1160,36 +1276,27 @@ def generate_combined_report(
         _dp_mbar = _dp_kpa * 10.0
 
         doc.add_page_break()
-        _h1("Generator Differential Pressure")
+        _h1("Generator Differential Pressure — Detail")
 
         doc.add_heading("Target Conditions", level=2)
         _kv_table(doc, [
-            (f"{_la_s} system — separator target pressure (bara)", f"{_ph:.3f}" if _ph is not None else "—"),
-            (f"{_lb_s} system — separator target pressure (bara)", f"{_po:.3f}" if _po is not None else "—"),
+            (f"{_la_s} separator target pressure (bara)", f"{_ph:.3f}" if _ph is not None else "—"),
+            (f"{_lb_s} separator target pressure (bara)", f"{_po:.3f}" if _po is not None else "—"),
         ])
         doc.add_paragraph()
 
-        doc.add_heading(f"{_la_s} System  (Branch → Header C → Separator)", level=2)
-        _kv_table(doc, [
-            (f"{_la_s} line inlet pressure (bara)",       f"{_gsh.get('P_line_in', 0):.4f}"),
-            (f"{_la_s} line ΔP (kPa)",                    f"{_gsh.get('dp_line', 0):.3f}"),
-            (f"{_la_s} outlet / Header C inlet (bara)",   f"{_gsh.get('P_line_out', 0):.4f}"),
-            ("Header C + T-seg ΔP (kPa)",                 f"{_gsh.get('dp_hdr', 0):.3f}"),
-            (f"{_la_s} system separator pressure (bara)", f"{_gsh.get('P_sep', 0):.4f}"),
-        ])
-        doc.add_paragraph()
+        for _la_x, _gs_x in [(_la_s, _gsh), (_lb_s, _gso)]:
+            doc.add_heading(f"{_la_x}  (Branch → Header → Separator)", level=2)
+            _kv_table(doc, [
+                (f"{_la_x} branch inlet pressure (bara)",    f"{_gs_x.get('P_line_in', 0):.4f}"),
+                (f"{_la_x} branch ΔP (kPa)",                 f"{_gs_x.get('dp_line', 0):.3f}"),
+                ("Branch outlet / header tap inlet (bara)",  f"{_gs_x.get('P_line_out', 0):.4f}"),
+                ("Header + T-seg ΔP (kPa)",                  f"{_gs_x.get('dp_hdr', 0):.3f}"),
+                ("Separator pressure (bara)",                 f"{_gs_x.get('P_sep', 0):.4f}"),
+            ])
+            doc.add_paragraph()
 
-        doc.add_heading(f"{_lb_s} System  (Branch → Header D → Separator)", level=2)
-        _kv_table(doc, [
-            (f"{_lb_s} line inlet pressure (bara)",       f"{_gso.get('P_line_in', 0):.4f}"),
-            (f"{_lb_s} line ΔP (kPa)",                    f"{_gso.get('dp_line', 0):.3f}"),
-            (f"{_lb_s} outlet / Header D inlet (bara)",   f"{_gso.get('P_line_out', 0):.4f}"),
-            ("Header D + T-seg ΔP (kPa)",                 f"{_gso.get('dp_hdr', 0):.3f}"),
-            (f"{_lb_s} system separator pressure (bara)", f"{_gso.get('P_sep', 0):.4f}"),
-        ])
-        doc.add_paragraph()
-
-        doc.add_heading(f"Generator ΔP Result  (P_inlet_{_la_s} − P_inlet_{_lb_s})", level=2)
+        doc.add_heading(f"Generator ΔP  ({_la_s} − {_lb_s})", level=2)
         _kv_table(doc, [
             (f"ΔP  {_la_s} − {_lb_s}  (bara)",  f"{_dp_s:.4f}"),
             (f"ΔP  {_la_s} − {_lb_s}  (kPa)",   f"{_dp_kpa:.2f}"),
@@ -1197,22 +1304,169 @@ def generate_combined_report(
         ])
         doc.add_paragraph()
 
-    # ── Engineering note ──────────────────────────────────────────────────────
-    doc.add_paragraph()
+    # ── Engineering note (end of main body) ──────────────────────────────────
     _all_gas = sorted({sp for c in cases for sp in c["gas_flows_kgh"]})
     _all_liq = sorted({c["liquid_type"] for c in cases})
     note = doc.add_paragraph(
         f"Engineering Note: The two-phase correlations used here were developed primarily "
         f"for oil/gas systems. Their application to this service "
         f"({' / '.join(_all_gas)} / {' / '.join(_all_liq)}) carries an estimated "
-        f"uncertainty of ±20–30 %. Use the sensitivity analysis (if present above) to "
-        f"bracket the ΔP range across all available methods. Treat as a first-pass "
-        f"engineering estimate; validate against commissioning data before use in "
-        f"safety-critical design."
+        f"uncertainty of ±20–30 %. Use the sensitivity analysis (if present) to bracket "
+        f"the ΔP range. Treat as a first-pass estimate; validate against commissioning "
+        f"data before use in safety-critical design."
     )
     if note.runs:
         note.runs[0].font.size      = Pt(8)
         note.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # APPENDIX
+    # ════════════════════════════════════════════════════════════════════════
+    doc.add_page_break()
+    _app_h = doc.add_heading("Appendix", level=0)
+    _app_h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph()
+
+    # ── A. Phase Thermodynamics ───────────────────────────────────────────────
+    doc.add_heading("A.  Phase Thermodynamics  (inlet conditions)", level=1)
+    _ps = [c["props"] for c in cases]
+
+    def _pfmt(p, key, scale=1.0, fmt=".4f"):
+        v = p.get(key)
+        return f"{v * scale:{fmt}}" if v is not None else "—"
+
+    _thm = [
+        ("Gas density ρ_g (kg/m³)",)     + tuple(_pfmt(p, "rho_g")                  for p in _ps),
+        ("Gas mixture MW (g/mol)",)       + tuple(_pfmt(p, "MW_mix_gmol", fmt=".3f") for p in _ps),
+        ("Liquid density ρ_l (kg/m³)",)   + tuple(_pfmt(p, "rho_l", fmt=".2f")       for p in _ps),
+        ("Liquid viscosity μ_l (mPa·s)",) + tuple(_pfmt(p, "mu_l", 1e3)             for p in _ps),
+        ("Gas viscosity μ_g (µPa·s)",)   + tuple(_pfmt(p, "mu_g", 1e6, ".2f")       for p in _ps),
+        ("Surface tension σ (mN/m)",)    + tuple(_pfmt(p, "sigma", 1e3, ".3f")       for p in _ps),
+        ("Mass quality x (%)",)          + tuple(_pfmt(p, "x_gas", 100)             for p in _ps),
+        ("Void fraction α (%)",)         + tuple(_pfmt(p, "alpha", 100, ".2f")       for p in _ps),
+    ]
+    if any(p.get("P_sat_H2O_pa", 0) > 0 for p in _ps):
+        _thm += [
+            ("H₂O sat. pressure (bara)",) + tuple(
+                f"{p.get('P_sat_H2O_pa', 0) / 1e5:.4f}"
+                if p.get("P_sat_H2O_pa", 0) > 0 else "—" for p in _ps),
+            ("H₂O vapour flow (kg/h)",) + tuple(
+                f"{p.get('m_vapor_h2o_kgh', 0):.4f}"
+                if p.get("P_sat_H2O_pa", 0) > 0 else "—" for p in _ps),
+        ]
+    _nt(_thm)
+    doc.add_paragraph()
+
+    # ── B. Branch Segment Analysis ────────────────────────────────────────────
+    _branch_pairs = [(c, lbl) for c, lbl, h in zip(cases, case_labels, _is_hdr) if not h]
+    if _branch_pairs:
+        doc.add_heading("B.  Segment Analysis — Branch Lines", level=1)
+        _SC = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)", "L_eq (m)", "Fittings",
+               "Regime", "V_m (m/s)", "V_m/V_e", "ΔP (kPa)", "P_out (bara)"]
+        _SW = [0.25, 0.50, 0.42, 0.80, 0.38, 0.42, 0.70, 0.85, 0.48, 0.44, 0.50, 0.53]
+
+        def _seg_tbl(records):
+            if not records:
+                return
+            tbl = doc.add_table(rows=len(records) + 1, cols=len(_SC))
+            tbl.style = "Table Grid"
+            _style_header(tbl.rows[0], font_size=8)
+            for j, col in enumerate(_SC):
+                tbl.rows[0].cells[j].text = col
+            for i, rec in enumerate(records, start=1):
+                row = tbl.rows[i]
+                if i % 2 == 0:
+                    for cell in row.cells:
+                        _shd(cell, _ALT_BG)
+                for j, col in enumerate(_SC):
+                    row.cells[j].text = str(rec.get(col, ""))
+                    _cell_font(row.cells[j], size_pt=8)
+            _set_col_widths(tbl, _SW)
+
+        for _bc, _blbl in _branch_pairs:
+            doc.add_heading(_blbl, level=2)
+            _seg_tbl(_bc["grid_records"])
+            doc.add_paragraph()
+
+    # ── C. Header Configuration ───────────────────────────────────────────────
+    _hdr_pairs = [(c, lbl) for c, lbl, h in zip(cases, case_labels, _is_hdr) if h]
+    if _hdr_pairs:
+        doc.add_heading("C.  Header Configuration", level=1)
+
+        # Column headers for arm detail table
+        _HC = ["Arm", "Seg", "From T (m)", "To T (m)", "L (m)", "Pipe", "ID (mm)",
+               "Regime", "Q_gas (kg/h)", "Q_liq (m³/h)", "ΔP (kPa)",
+               "P_in (bara)", "P_out (bara)"]
+        _HW = [0.30, 0.28, 0.50, 0.50, 0.36, 0.48, 0.42, 0.72,
+               0.58, 0.56, 0.48, 0.50, 0.50]
+
+        def _hdr_detail_tbl(records):
+            if not records:
+                return
+            tbl = doc.add_table(rows=len(records) + 1, cols=len(_HC))
+            tbl.style = "Table Grid"
+            _style_header(tbl.rows[0], font_size=8)
+            for j, col in enumerate(_HC):
+                tbl.rows[0].cells[j].text = col
+            _col_map = {"Q_gas (kg/h)": "Q_gas_kgh", "Q_liq (m³/h)": "Q_liq_m3h"}
+            for i, rec in enumerate(records, start=1):
+                row = tbl.rows[i]
+                if i % 2 == 0:
+                    for cell in row.cells:
+                        _shd(cell, _ALT_BG)
+                seg_id = str(rec.get("Seg", ""))
+                row.cells[0].text = (
+                    "Left" if seg_id.startswith("L")
+                    else "Right" if seg_id.startswith("R") else "T-seg")
+                for j, col in enumerate(_HC[1:], start=1):
+                    row.cells[j].text = str(rec.get(_col_map.get(col, col), ""))
+                for cell in row.cells:
+                    _cell_font(cell, size_pt=8)
+            _set_col_widths(tbl, _HW)
+
+        for _hc, _hlbl in _hdr_pairs:
+            doc.add_heading(_hlbl, level=2)
+            _hp  = _hc.get("header_pipe", {})
+            _ts  = _hc.get("t_seg", {})
+            _ltp = sorted(_hc.get("left_taps",  []), reverse=True)
+            _rtp = sorted(_hc.get("right_taps", []))
+            _cfg_rows = [
+                ("Header pipe DN / PN",
+                 f"{_hp.get('dn', '—')} / {_hp.get('pn', '—')}"),
+                ("Header pipe material",
+                 _hp.get("material", "—")),
+            ]
+            if _hp.get("lined"):
+                _cfg_rows += [
+                    ("Liner material",       _hp.get("liner_material", "—")),
+                    ("Liner thickness (mm)", f"{_hp.get('liner_thickness_mm', 0):.1f}"),
+                ]
+            _cfg_rows += [
+                ("Taps — left arm",
+                 str(_hc.get("n_left", len(_ltp)))),
+                ("Taps — right arm",
+                 str(_hc.get("n_right", len(_rtp)))),
+                ("Left tap distances from T (m)",
+                 "  |  ".join(f"{p:.2f}" for p in _ltp) or "—"),
+                ("Right tap distances from T (m)",
+                 "  |  ".join(f"{p:.2f}" for p in _rtp) or "—"),
+                ("Governing arm",
+                 _hc.get("worst_arm", "—")),
+                ("T-segment DN / PN",
+                 f"{_ts.get('dn', '—')} / {_ts.get('pn', '—')}"),
+                ("T-segment material",
+                 _ts.get("material", "—")),
+                ("T-segment length (m)",
+                 f"{_ts.get('length', 0):.2f}"),
+            ]
+            _kv_table(doc, _cfg_rows, col_widths=(3.0, 3.47))
+            doc.add_paragraph()
+            if _hc.get("grid_records"):
+                _p = doc.add_paragraph("Arm segment detail:")
+                if _p.runs:
+                    _p.runs[0].font.size = Pt(9)
+                _hdr_detail_tbl(_hc["grid_records"])
+                doc.add_paragraph()
 
     buf = BytesIO()
     doc.save(buf)
