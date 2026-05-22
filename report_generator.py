@@ -18,25 +18,73 @@ _HDR_FG = RGBColor(0xFF, 0xFF, 0xFF)
 _ALT_BG = "F1F5F9"
 
 _IMG_TIMEOUT = 20  # seconds before giving up on kaleido
+_png_cache: dict = {}  # (id(fig), width, height, scale) → PNG bytes or None
 
 
 def _fig_to_png(fig, width=900, height=400, scale=2):
     """Render a Plotly figure to PNG bytes with a hard timeout.
     Returns bytes on success, None if kaleido hangs or fails.
-    Kaleido can deadlock when called from a Streamlit run thread.
-    We use shutdown(wait=False) so a hung kaleido process is abandoned
-    immediately rather than blocking the caller indefinitely.
+    Checks _png_cache first so prefetch_figures() avoids re-rendering.
     """
     import plotly.io as pio
+    _key = (id(fig), width, height, scale)
+    if _key in _png_cache:
+        return _png_cache[_key]
     _ex = ThreadPoolExecutor(max_workers=1)
     try:
         _fut = _ex.submit(pio.to_image, fig,
                           format="png", width=width, height=height, scale=scale)
-        return _fut.result(timeout=_IMG_TIMEOUT)
+        result = _fut.result(timeout=_IMG_TIMEOUT)
     except (_FuturesTimeout, Exception):
-        return None
+        result = None
     finally:
         _ex.shutdown(wait=False)
+    _png_cache[_key] = result
+    return result
+
+
+def prefetch_figures(specs):
+    """Render a list of (fig, width, height, scale) tuples in parallel.
+
+    Call this before generating reports so all kaleido renders happen
+    concurrently; subsequent _fig_to_png() calls are instant cache hits.
+    specs with None fig are silently skipped.
+    """
+    import plotly.io as pio
+    from concurrent.futures import wait as _wait
+
+    to_render = [
+        (fig, w, h, s)
+        for fig, w, h, s in specs
+        if fig is not None and (id(fig), w, h, s) not in _png_cache
+    ]
+    if not to_render:
+        return
+
+    _ex = ThreadPoolExecutor(max_workers=min(len(to_render), 4))
+    try:
+        futures = {
+            _ex.submit(pio.to_image, fig,
+                       format="png", width=w, height=h, scale=s): (id(fig), w, h, s)
+            for fig, w, h, s in to_render
+        }
+        done, _ = _wait(futures, timeout=_IMG_TIMEOUT)
+        for fut in done:
+            key = futures[fut]
+            try:
+                _png_cache[key] = fut.result()
+            except Exception:
+                _png_cache[key] = None
+        for fut, key in futures.items():
+            if key not in _png_cache:
+                _png_cache[key] = None
+    finally:
+        _ex.shutdown(wait=False)
+
+
+def clear_fig_cache():
+    """Clear the PNG render cache (call between report sessions if needed)."""
+    _png_cache.clear()
 
 
 def _shd(cell, fill_hex):

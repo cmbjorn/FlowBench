@@ -2632,6 +2632,29 @@ with tab_cmp:
                      use_container_width=True, key="gen_all_rpts"):
             _errors = []
             with st.spinner("Building all reports…"):
+                # Pre-render all figures in parallel before building any document
+                _pf_specs = []
+                for _pf_fig, _pf_w, _pf_h in [
+                    (ra.get("fig_sch"),  900, 520),
+                    (ra.get("fig_prof"), 900, 400),
+                    (rb.get("fig_sch"),  900, 520),
+                    (rb.get("fig_prof"), 900, 400),
+                    # Combined report uses different heights for branch (440) vs header (340) schematics
+                    (ra.get("fig_sch"),  900, 440),
+                    (rb.get("fig_sch"),  900, 440),
+                    (results_c.get("fig_sch")  if results_c else None, 900, 340),
+                    (results_c.get("fig_prof") if results_c else None, 900, 320),
+                    (results_d.get("fig_sch")  if results_d else None, 900, 340),
+                    (results_d.get("fig_prof") if results_d else None, 900, 320),
+                    (fig_cmp,  900, 400),
+                    (fig_bar,  900, 340),
+                ]:
+                    if _pf_fig is not None:
+                        _pf_specs.append((_pf_fig, _pf_w, _pf_h, 2))
+                _pf_s = _build_sens_data()
+                if _pf_s and _pf_s.get("fig"):
+                    _pf_specs.append((_pf_s["fig"], 900, 480, 2))
+                report_generator.prefetch_figures(_pf_specs)
                 try:
                     _buf_a_rpt = report_generator.generate_report(
                         P_bara=ra["P_bara"], T_C=ra["T_C"],
