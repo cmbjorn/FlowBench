@@ -83,6 +83,71 @@ def _cell_font(cell, size_pt=9):
             run.font.size = Pt(size_pt)
 
 
+def _add_toc(doc):
+    """Insert a Word TOC field (levels 1–2). Word updates it on open."""
+    from docx.oxml.ns import qn as _qn
+    from docx.oxml import OxmlElement as _el
+
+    toc_h = doc.add_heading("Table of Contents", level=1)
+    toc_h.runs[0].font.color.rgb = RGBColor(0x1E, 0x29, 0x3B)
+
+    para = doc.add_paragraph()
+    run  = para.add_run()
+
+    def _fc(type_):
+        fc = _el("w:fldChar"); fc.set(_qn("w:fldCharType"), type_); return fc
+
+    run._r.append(_fc("begin"))
+    instr = _el("w:instrText")
+    instr.set(_qn("xml:space"), "preserve")
+    instr.text = ' TOC \\o "1-2" \\h \\z \\u '
+    run._r.append(instr)
+    run._r.append(_fc("separate"))
+    placeholder = _el("w:r")
+    t = _el("w:t"); t.text = "[Right-click → Update Field to populate]"
+    placeholder.append(t)
+    para._p.append(placeholder)
+    run._r.append(_fc("end"))
+
+    doc.add_page_break()
+
+
+def _add_footer_page_numbers(doc):
+    """Add a centred PAGE / NUMPAGES field in the first section's footer."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    footer = doc.sections[0].footer
+    footer.is_linked_to_previous = False
+    para = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # Remove any existing runs, keep pPr (alignment)
+    p = para._p
+    for child in list(p):
+        if child.tag != qn("w:pPr"):
+            p.remove(child)
+
+    def _field_runs(instr):
+        """Return three w:r elements: fldChar begin, instrText, fldChar end."""
+        r1 = OxmlElement("w:r")
+        fc = OxmlElement("w:fldChar"); fc.set(qn("w:fldCharType"), "begin"); r1.append(fc)
+        r2 = OxmlElement("w:r")
+        it = OxmlElement("w:instrText"); it.set(qn("xml:space"), "preserve")
+        it.text = f" {instr} "; r2.append(it)
+        r3 = OxmlElement("w:r")
+        fc2 = OxmlElement("w:fldChar"); fc2.set(qn("w:fldCharType"), "end"); r3.append(fc2)
+        return r1, r2, r3
+
+    for r in _field_runs("PAGE"):
+        p.append(r)
+    r_sep = OxmlElement("w:r")
+    t_sep = OxmlElement("w:t"); t_sep.set(qn("xml:space"), "preserve"); t_sep.text = " / "
+    r_sep.append(t_sep); p.append(r_sep)
+    for r in _field_runs("NUMPAGES"):
+        p.append(r)
+
+
 def _kv_table(doc, rows_data, col_widths=(2.5, 3.5)):
     """Two-column key-value table with blue header."""
     tbl = doc.add_table(rows=len(rows_data) + 1, cols=2)
@@ -840,6 +905,9 @@ def generate_combined_report(
         sub.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
         sub.runs[0].font.size = Pt(10)
     doc.add_paragraph()
+
+    _add_footer_page_numbers(doc)
+    _add_toc(doc)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     _sec = [0]
