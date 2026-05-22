@@ -2632,19 +2632,18 @@ with tab_cmp:
                      use_container_width=True, key="gen_all_rpts"):
             _errors = []
             with st.spinner("Building all reports…"):
-                # Pre-render all figures in parallel before building any document
+                # Pre-render all figures sequentially before building any document.
+                # Branch figs use the same dimensions as individual reports so the
+                # combined report gets cache hits instead of re-rendering them.
                 _pf_specs = []
                 for _pf_fig, _pf_w, _pf_h in [
-                    (ra.get("fig_sch"),  900, 520),
-                    (ra.get("fig_prof"), 900, 400),
-                    (rb.get("fig_sch"),  900, 520),
-                    (rb.get("fig_prof"), 900, 400),
-                    # Combined report uses different heights for branch (440) vs header (340) schematics
-                    (ra.get("fig_sch"),  900, 440),
-                    (rb.get("fig_sch"),  900, 440),
-                    (results_c.get("fig_sch")  if results_c else None, 900, 340),
+                    (ra.get("fig_sch"),  900, 520),   # branch A schematic
+                    (ra.get("fig_prof"), 900, 400),   # branch A profile
+                    (rb.get("fig_sch"),  900, 520),   # branch B schematic
+                    (rb.get("fig_prof"), 900, 400),   # branch B profile
+                    (results_c.get("fig_sch")  if results_c else None, 900, 340),  # header C
                     (results_c.get("fig_prof") if results_c else None, 900, 320),
-                    (results_d.get("fig_sch")  if results_d else None, 900, 340),
+                    (results_d.get("fig_sch")  if results_d else None, 900, 340),  # header D
                     (results_d.get("fig_prof") if results_d else None, 900, 320),
                     (fig_cmp,  900, 400),
                     (fig_bar,  900, 340),

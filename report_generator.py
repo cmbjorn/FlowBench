@@ -18,7 +18,7 @@ _HDR_BG = "2563EB"
 _HDR_FG = RGBColor(0xFF, 0xFF, 0xFF)
 _ALT_BG = "F1F5F9"
 
-_IMG_TIMEOUT = 30  # seconds per render attempt before declaring kaleido hung
+_IMG_TIMEOUT = 60  # seconds per render attempt before declaring kaleido hung
 _png_cache: dict = {}  # (id(fig), width, height, scale) → PNG bytes or None
 
 
@@ -1286,7 +1286,7 @@ def generate_combined_report(
             if _fs is not None or _fp is not None:
                 doc.add_heading(f"{lbl} — {'Header Layout' if is_hdr else 'Pipeline'}", level=2)
             if _fs is not None:
-                img = _fig_to_png(_fs, width=900, height=340 if is_hdr else 440, scale=2)
+                img = _fig_to_png(_fs, width=900, height=340 if is_hdr else 520, scale=2)
                 if img:
                     doc.add_picture(BytesIO(img), width=Inches(6.2))
                 else:
@@ -1303,7 +1303,7 @@ def generate_combined_report(
                         f"Figure: Pipeline schematic for {lbl}, colour-coded by flow regime. "
                         f"V_m/V_e > 1.0 flags erosion risk (API RP 14E, C = 100).")
             if _fp is not None:
-                img = _fig_to_png(_fp, width=900, height=320, scale=2)
+                img = _fig_to_png(_fp, width=900, height=320 if is_hdr else 400, scale=2)
                 if img:
                     doc.add_picture(BytesIO(img), width=Inches(6.2))
                 else:
