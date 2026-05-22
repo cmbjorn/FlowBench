@@ -970,7 +970,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         else:
             _nodes.append((_xl, _yl-_seg["length"]))
 
-    _DN_LW = {"DN40":5,"DN50":7,"DN80":9,"DN100":11,"DN150":15,"DN200":19,"DN250":23}
+    _DN_LW = {"DN20":2,"DN25":3,"DN40":5,"DN50":7,"DN80":9,"DN100":11,"DN150":15,"DN200":19,"DN250":23}
 
     fig_sch = go.Figure()
     _seen_reg = set()

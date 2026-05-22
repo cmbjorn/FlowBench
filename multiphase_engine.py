@@ -18,6 +18,8 @@ _g = 9.80665
 # Material does NOT affect bore at the same schedule — wall thickness is defined
 # by schedule number, not alloy.  All five metallic materials below use this table.
 PIPE_DATABASE = {
+    "DN20":  {"PN20": 0.0209, "PN25": 0.0209, "PN40": 0.0189},
+    "DN25":  {"PN20": 0.0266, "PN25": 0.0266, "PN40": 0.0243},
     "DN40":  {"PN20": 0.0409, "PN25": 0.0409, "PN40": 0.0381},
     "DN50":  {"PN20": 0.0525, "PN25": 0.0525, "PN40": 0.0493},
     "DN80":  {"PN20": 0.0779, "PN25": 0.0779, "PN40": 0.0737},
