@@ -873,6 +873,7 @@ def generate_combined_report(
     fig_bar=None,
     sensitivity_data=None,
     stack_dp=None,
+    dn_study_data=None,
 ):
     """
     Generate a single Word report combining all cases, comparison, and sensitivity.
@@ -1535,6 +1536,100 @@ def generate_combined_report(
                     _p.runs[0].font.size = Pt(9)
                 _hdr_detail_tbl(_hc["grid_records"])
                 doc.add_paragraph()
+
+    # ── D. DN Study ──────────────────────────────────────────────────────────
+    if dn_study_data:
+        _dns = dn_study_data
+        _dn_p  = _dns["dn_primary"]
+        _dn_a  = _dns["dn_alt"]
+        _la_dn = _dns.get("label_a", case_labels[0] if case_labels else "A")
+        _lb_dn = _dns.get("label_b", case_labels[1] if len(case_labels) > 1 else "B")
+        _gp_h2 = _dns["gsr_h2_primary"]
+        _gp_o2 = _dns["gsr_o2_primary"]
+        _ga_h2 = _dns["gsr_h2_alt"]
+        _ga_o2 = _dns["gsr_o2_alt"]
+        _dp_p  = _dns["dp_gen_primary_mbar"]
+        _dp_a  = _dns["dp_gen_alt_mbar"]
+        _vd    = _dns["vel_data"]
+
+        doc.add_heading("D.  DN Study — Branch Line Size Comparison", level=1)
+        _kv_table(doc, [
+            ("Primary branch DN",         _dn_p),
+            ("Alternative branch DN",     _dn_a),
+            ("Header size",               "Unchanged for both cases"),
+            ("H₂ separator target (bara)", f"{_dns.get('p_sep_h2', 0):.3f}"),
+            ("O₂ separator target (bara)", f"{_dns.get('p_sep_o2', 0):.3f}"),
+        ])
+        doc.add_paragraph()
+
+        doc.add_heading("Generator ΔP", level=2)
+        _delta_mbar = _dp_a - _dp_p
+        _winner = _dn_p if abs(_dp_p) <= abs(_dp_a) else _dn_a
+        _kv3_table(doc, [
+            (f"{_la_dn} branch inlet pressure (bara)",
+                f"{_gp_h2['P_line_in']:.4f}", f"{_ga_h2['P_line_in']:.4f}"),
+            (f"{_lb_dn} branch inlet pressure (bara)",
+                f"{_gp_o2['P_line_in']:.4f}", f"{_ga_o2['P_line_in']:.4f}"),
+            ("Generator ΔP (mbar)", f"{_dp_p:.1f}", f"{_dp_a:.1f}"),
+            ("Change vs primary (mbar)", "—", f"{_delta_mbar:+.1f}"),
+            ("Lower |Generator ΔP|", _winner, _winner),
+        ], label_a=_dn_p, label_b=_dn_a)
+        doc.add_paragraph()
+
+        doc.add_heading("Pressure Drop by Case", level=2)
+        _cases_dp = [
+            (f"{_la_dn} branch", _gp_h2["dp_line"], _ga_h2["dp_line"]),
+            (f"{_lb_dn} branch", _gp_o2["dp_line"], _ga_o2["dp_line"]),
+            (f"{_la_dn} header", _gp_h2["dp_hdr"],  _ga_h2["dp_hdr"]),
+            (f"{_lb_dn} header", _gp_o2["dp_hdr"],  _ga_o2["dp_hdr"]),
+        ]
+        _dp_rows = []
+        for _lbl, _dp_pv, _dp_av in _cases_dp:
+            _pct = (_dp_av - _dp_pv) / _dp_pv * 100 if abs(_dp_pv) > 1e-9 else 0.0
+            _dp_rows.append((_lbl, f"{_dp_pv:.3f}", f"{_dp_av:.3f}  ({_pct:+.1f} %)"))
+        _kv3_table(doc, _dp_rows,
+                   label_a=f"{_dn_p} ΔP (kPa)", label_b=f"{_dn_a} ΔP (kPa)")
+        doc.add_paragraph()
+
+        doc.add_heading("Inlet Velocity — First Segment (Estimated)", level=2)
+        _ratio_a = _vd["vm_a_alt"] / _vd["ve_a"] if _vd["ve_a"] > 0 else 0.0
+        _ratio_b = _vd["vm_b_alt"] / _vd["ve_b"] if _vd["ve_b"] > 0 else 0.0
+        _kv3_table(doc, [
+            ("Effective ID (mm)",
+                f"{_vd['D_p_mm']:.1f}", f"{_vd['D_a_mm']:.1f}"),
+            ("Velocity scale factor (ID ratio²)", "1.00×", f"{_vd['vel_scale']:.2f}×"),
+            (f"{_la_dn} V_m inlet (m/s)",
+                f"{_vd['vm_a_primary']:.3f}", f"{_vd['vm_a_alt']:.3f}"),
+            (f"{_la_dn} V_m / V_e",
+                f"{_vd['vm_a_primary']/_vd['ve_a']:.2f}" if _vd["ve_a"] > 0 else "—",
+                f"{_ratio_a:.2f}"),
+            (f"{_lb_dn} V_m inlet (m/s)",
+                f"{_vd['vm_b_primary']:.3f}", f"{_vd['vm_b_alt']:.3f}"),
+            (f"{_lb_dn} V_m / V_e",
+                f"{_vd['vm_b_primary']/_vd['ve_b']:.2f}" if _vd["ve_b"] > 0 else "—",
+                f"{_ratio_b:.2f}"),
+        ], label_a=_dn_p, label_b=_dn_a)
+        _fig_caption(doc,
+            "Velocity estimated via ID-ratio scaling. "
+            "Erosion velocity V_e from API RP 14E (C = 100), primary case values.")
+        doc.add_paragraph()
+
+        doc.add_heading("Recommendation", level=2)
+        _vel_ok   = _ratio_a <= 1.0 and _ratio_b <= 1.0
+        _alt_wins = abs(_dp_a) < abs(_dp_p)
+        if _alt_wins and _vel_ok:
+            _rec = (f"{_dn_a} gives lower Generator |ΔP| ({_dp_a:.1f} vs {_dp_p:.1f} mbar) "
+                    f"with V_m/V_e within the erosion limit. {_dn_a} is preferred.")
+        elif _alt_wins:
+            _rec = (f"{_dn_a} gives lower Generator |ΔP| ({_dp_a:.1f} vs {_dp_p:.1f} mbar) "
+                    f"but estimated V_m/V_e may exceed 1.0 — verify erosion before selecting {_dn_a}.")
+        else:
+            _rec = (f"{_dn_p} (primary) gives lower Generator |ΔP| "
+                    f"({_dp_p:.1f} vs {_dp_a:.1f} mbar). {_dn_a} appears oversized.")
+        _p_rec = doc.add_paragraph(_rec)
+        if _p_rec.runs:
+            _p_rec.runs[0].font.size = Pt(9)
+        doc.add_paragraph()
 
     buf = BytesIO()
     doc.save(buf)

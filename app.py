@@ -2678,12 +2678,58 @@ with tab_cmp:
                     _errors.append(f"Comparison: {_e}")
 
                 try:
+                    def _build_dn_study_data():
+                        _dn_p = st.session_state.get("dn_study_dn_primary")
+                        _dn_a = st.session_state.get("dn_study_dn_alt")
+                        _gh_a = st.session_state.get("dn_study_gsr_h2_alt")
+                        _go_a = st.session_state.get("dn_study_gsr_o2_alt")
+                        _gh_p = st.session_state.get("stack_gsr_h2")
+                        _go_p = st.session_state.get("stack_gsr_o2")
+                        if not all([_dn_p, _dn_a, _gh_a, _go_a, _gh_p, _go_p]):
+                            return None
+                        _dp_p_mb = (_gh_p["P_line_in"] - _go_p["P_line_in"]) * 1000.0
+                        _dp_a_mb = (_gh_a["P_line_in"] - _go_a["P_line_in"]) * 1000.0
+                        _seg0    = ra["segments"][0] if ra.get("segments") else {}
+                        _pn0     = _seg0.get("pn", "PN20")
+                        _lined0  = _seg0.get("lined", False)
+                        _lthk0_m = _seg0.get("liner_thickness_mm", 1.0) / 1000.0
+                        _D_p_b   = engine.PIPE_DATABASE.get(_dn_p, {}).get(
+                                        _pn0, list(engine.PIPE_DATABASE.get(_dn_p, {None: 0}).values())[0])
+                        _D_a_b   = engine.PIPE_DATABASE.get(_dn_a, {}).get(
+                                        _pn0, list(engine.PIPE_DATABASE.get(_dn_a, {None: 0}).values())[0])
+                        _D_p_e   = _D_p_b - 2*_lthk0_m if _lined0 else _D_p_b
+                        _D_a_e   = _D_a_b - 2*_lthk0_m if _lined0 else _D_a_b
+                        _scale   = (_D_p_e / _D_a_e)**2 if _D_a_e > 0 else 1.0
+                        _rec_a0  = ra["grid_records"][0]  if ra.get("grid_records")  else {}
+                        _rec_b0  = rb["grid_records"][0]  if rb.get("grid_records")  else {}
+                        return {
+                            "dn_primary": _dn_p, "dn_alt": _dn_a,
+                            "label_a": _la, "label_b": _lb,
+                            "gsr_h2_primary": _gh_p, "gsr_o2_primary": _go_p,
+                            "gsr_h2_alt":     _gh_a, "gsr_o2_alt":     _go_a,
+                            "dp_gen_primary_mbar": _dp_p_mb,
+                            "dp_gen_alt_mbar":     _dp_a_mb,
+                            "vel_data": {
+                                "vm_a_primary": float(_rec_a0.get("V_m (m/s)", 0)),
+                                "vm_b_primary": float(_rec_b0.get("V_m (m/s)", 0)),
+                                "vm_a_alt":     float(_rec_a0.get("V_m (m/s)", 0)) * _scale,
+                                "vm_b_alt":     float(_rec_b0.get("V_m (m/s)", 0)) * _scale,
+                                "ve_a":         float(_rec_a0.get("V_e (m/s)", 0)),
+                                "ve_b":         float(_rec_b0.get("V_e (m/s)", 0)),
+                                "D_p_mm":       _D_p_e * 1000,
+                                "D_a_mm":       _D_a_e * 1000,
+                                "vel_scale":    _scale,
+                            },
+                            "p_sep_h2": st.session_state.get("stack_sep_h2", 0),
+                            "p_sep_o2": st.session_state.get("stack_sep_o2", 0),
+                        }
                     _combined_buf = report_generator.generate_combined_report(
                         cases=[ra, rb, results_c, results_d],
                         case_labels=[_la, _lb, _lc, _ld],
                         fig_cmp=fig_cmp, fig_bar=fig_bar,
                         sensitivity_data=_build_sens_data(),
-                        stack_dp=_build_stack_dp_data())
+                        stack_dp=_build_stack_dp_data(),
+                        dn_study_data=_build_dn_study_data())
                     st.session_state["combined_rpt_bytes"] = _combined_buf.getvalue()
                 except Exception as _e:
                     _errors.append(f"Combined: {_e}")
