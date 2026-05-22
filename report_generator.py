@@ -1472,3 +1472,153 @@ def generate_combined_report(
     doc.save(buf)
     buf.seek(0)
     return buf
+
+
+def generate_dn_study_report(
+    dn_primary, dn_alt,
+    label_a, label_b,
+    gsr_h2_primary, gsr_o2_primary,
+    gsr_h2_alt, gsr_o2_alt,
+    dp_gen_primary_mbar, dp_gen_alt_mbar,
+    vel_data,
+    p_sep_h2, p_sep_o2,
+):
+    """Word report comparing two branch DN sizes across the full system."""
+    doc = Document()
+
+    sec = doc.sections[0]
+    sec.page_width    = Inches(8.27)
+    sec.page_height   = Inches(11.69)
+    sec.left_margin   = Inches(0.9)
+    sec.right_margin  = Inches(0.9)
+    sec.top_margin    = Inches(0.9)
+    sec.bottom_margin = Inches(0.9)
+
+    h = doc.add_heading(f"Pipe Size Study — {dn_primary} vs {dn_alt}", level=0)
+    h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    sub = doc.add_paragraph(
+        f"Branch Line DN Comparison  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
+    )
+    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if sub.runs:
+        sub.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+        sub.runs[0].font.size = Pt(10)
+    doc.add_paragraph()
+
+    # ── 1. Study basis ────────────────────────────────────────────────────────
+    doc.add_heading("Study Basis", level=1)
+    _kv_table(doc, [
+        ("Primary branch DN",           dn_primary),
+        ("Alternative branch DN",        dn_alt),
+        ("Header size",                  "Unchanged for both cases"),
+        ("H₂ separator target (bara)",   f"{p_sep_h2:.3f}"),
+        ("O₂ separator target (bara)",   f"{p_sep_o2:.3f}"),
+        ("Correlation / voidage",        "As set in primary case"),
+    ])
+    doc.add_paragraph()
+
+    # ── 2. Generator ΔP comparison ───────────────────────────────────────────
+    doc.add_heading("Generator Differential Pressure", level=1)
+    _delta_mbar = dp_gen_alt_mbar - dp_gen_primary_mbar
+    _winner = dn_primary if abs(dp_gen_primary_mbar) <= abs(dp_gen_alt_mbar) else dn_alt
+    _kv3_table(doc, [
+        (f"{label_a} branch inlet pressure (bara)",
+            f"{gsr_h2_primary['P_line_in']:.4f}",
+            f"{gsr_h2_alt['P_line_in']:.4f}"),
+        (f"{label_b} branch inlet pressure (bara)",
+            f"{gsr_o2_primary['P_line_in']:.4f}",
+            f"{gsr_o2_alt['P_line_in']:.4f}"),
+        ("Generator ΔP (mbar)",
+            f"{dp_gen_primary_mbar:.1f}",
+            f"{dp_gen_alt_mbar:.1f}"),
+        ("Change vs primary (mbar)", "—", f"{_delta_mbar:+.1f}"),
+        ("Lower |Generator ΔP|", _winner, _winner),
+    ], label_a=dn_primary, label_b=dn_alt)
+    doc.add_paragraph()
+
+    # ── 3. Pressure drop by case ──────────────────────────────────────────────
+    doc.add_heading("Pressure Drop Summary by Case", level=1)
+    _cases_dp = [
+        (f"{label_a} branch",  gsr_h2_primary["dp_line"], gsr_h2_alt["dp_line"]),
+        (f"{label_b} branch",  gsr_o2_primary["dp_line"], gsr_o2_alt["dp_line"]),
+        (f"{label_a} header",  gsr_h2_primary["dp_hdr"],  gsr_h2_alt["dp_hdr"]),
+        (f"{label_b} header",  gsr_o2_primary["dp_hdr"],  gsr_o2_alt["dp_hdr"]),
+    ]
+    _rows_dp = []
+    for _lbl, _dp_p, _dp_a in _cases_dp:
+        _pct = (_dp_a - _dp_p) / _dp_p * 100 if abs(_dp_p) > 1e-9 else 0.0
+        _rows_dp.append((
+            _lbl,
+            f"{_dp_p:.3f}",
+            f"{_dp_a:.3f}  ({_pct:+.1f} %)",
+        ))
+    _kv3_table(doc, _rows_dp, label_a=f"{dn_primary} ΔP (kPa)", label_b=f"{dn_alt} ΔP (kPa)")
+    doc.add_paragraph()
+
+    # ── 4. Velocity estimate ──────────────────────────────────────────────────
+    doc.add_heading("Inlet Velocity — First Segment (Estimated)", level=1)
+    _vd = vel_data
+    _ratio_a = _vd["vm_a_alt"] / _vd["ve_a"] if _vd["ve_a"] > 0 else 0.0
+    _ratio_b = _vd["vm_b_alt"] / _vd["ve_b"] if _vd["ve_b"] > 0 else 0.0
+    _kv3_table(doc, [
+        ("Effective ID (mm)",
+            f"{_vd['D_p_mm']:.1f}", f"{_vd['D_a_mm']:.1f}"),
+        ("Velocity scale factor (ID ratio²)", "1.00×", f"{_vd['vel_scale']:.2f}×"),
+        (f"{label_a} V_m inlet (m/s)",
+            f"{_vd['vm_a_primary']:.3f}", f"{_vd['vm_a_alt']:.3f}"),
+        (f"{label_a} V_m / V_e",
+            f"{_vd['vm_a_primary'] / _vd['ve_a']:.2f}" if _vd['ve_a'] > 0 else "—",
+            f"{_ratio_a:.2f}"),
+        (f"{label_b} V_m inlet (m/s)",
+            f"{_vd['vm_b_primary']:.3f}", f"{_vd['vm_b_alt']:.3f}"),
+        (f"{label_b} V_m / V_e",
+            f"{_vd['vm_b_primary'] / _vd['ve_b']:.2f}" if _vd['ve_b'] > 0 else "—",
+            f"{_ratio_b:.2f}"),
+    ], label_a=dn_primary, label_b=dn_alt)
+    doc.add_paragraph()
+    _fig_caption(doc,
+        "Velocity estimated via ID-ratio scaling: V_m(alt) = V_m(primary) × (ID_primary/ID_alt)². "
+        "Erosion velocity V_e from primary case (API RP 14E, C = 100). Not recalculated for alt DN.")
+
+    # ── 5. Recommendation ─────────────────────────────────────────────────────
+    doc.add_heading("Recommendation", level=1)
+    _vel_ok = _ratio_a <= 1.0 and _ratio_b <= 1.0
+    _alt_better = abs(dp_gen_alt_mbar) < abs(dp_gen_primary_mbar)
+    if _alt_better and _vel_ok:
+        _rec = (
+            f"{dn_alt} gives a lower Generator |ΔP| ({dp_gen_alt_mbar:.1f} mbar vs "
+            f"{dp_gen_primary_mbar:.1f} mbar) with V_m/V_e within the erosion limit "
+            f"for both branch lines. {dn_alt} is preferred for this duty."
+        )
+    elif _alt_better and not _vel_ok:
+        _rec = (
+            f"{dn_alt} gives a lower Generator |ΔP| ({dp_gen_alt_mbar:.1f} mbar vs "
+            f"{dp_gen_primary_mbar:.1f} mbar) but the estimated inlet velocity ratio "
+            f"V_m/V_e exceeds 1.0 for one or both branch lines. Verify erosion "
+            f"against API RP 14E before selecting {dn_alt}."
+        )
+    else:
+        _rec = (
+            f"{dn_primary} (primary) gives a lower Generator |ΔP| "
+            f"({dp_gen_primary_mbar:.1f} mbar vs {dp_gen_alt_mbar:.1f} mbar). "
+            f"{dn_alt} appears oversized for this duty; the additional pipe cross-section "
+            f"does not meaningfully reduce the system differential pressure."
+        )
+    _p_rec = doc.add_paragraph(_rec)
+    if _p_rec.runs:
+        _p_rec.runs[0].font.size = Pt(10)
+    doc.add_paragraph()
+
+    note = doc.add_paragraph(
+        "Engineering Note: Velocity is estimated via ID-ratio scaling and is not exact. "
+        "For a rigorous erosion check on the alternative DN, run it as the primary case. "
+        "Correlations carry ±20–30 % uncertainty for H₂/O₂ over KOH systems."
+    )
+    if note.runs:
+        note.runs[0].font.size      = Pt(8)
+        note.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf

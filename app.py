@@ -1477,6 +1477,16 @@ def _calc_header_dp_at_p(res_hdr, P_in_bara):
     return dp_worst / 1000.0, P_T / 1e5
 
 
+def _apply_dn_override(res, dn_alt):
+    """Return a deep copy of a branch result dict with dn replaced in all segments.
+    Header pipe and T-segment are not modified."""
+    import copy
+    r = copy.deepcopy(res)
+    for seg in r.get("segments", []):
+        seg["dn"] = dn_alt
+    return r
+
+
 def _goal_seek_header(res_hdr, P_target_sep, tol=0.0005, max_iter=25):
     """Find the header inlet pressure (= line outlet) to achieve P_target_sep
     at the separator (end of T-segment).  Returns a result dict.
@@ -2199,9 +2209,9 @@ _lb = st.session_state["label_b"]
 _lc = f"{_la} Header"
 _ld = f"{_lb} Header"
 
-tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_stack = st.tabs(
+tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_stack, tab_dn = st.tabs(
     [_la, _lb, _lc, _ld,
-     f"Compare {_la} vs {_lb}", "Generator ΔP"])
+     f"Compare {_la} vs {_lb}", "Generator ΔP", "DN Study"])
 
 with tab_a:
     results_a = run_case("a", accent="#2563EB")
@@ -2903,3 +2913,223 @@ with tab_stack:
         ):
             st.session_state["stack_apply_b_pending"] = float(_p_in_b)
             st.rerun()
+
+# ============================================================================
+# DN STUDY TAB
+# ============================================================================
+with tab_dn:
+    st.subheader("DN Study — Branch Line Size Comparison")
+    st.caption(
+        "Re-runs the full system (branches A and B + goal-seek) with a different branch DN. "
+        "Header sizes are unchanged. All other inputs (flows, pressure, correlation) are identical."
+    )
+
+    _prereq_ok = (
+        results_a is not None and results_b is not None
+        and results_c is not None and results_d is not None
+    )
+    _gsr_ok = (
+        st.session_state.get("stack_gsr_h2") is not None
+        and st.session_state.get("stack_gsr_o2") is not None
+    )
+
+    if not _prereq_ok:
+        st.warning("Run all four cases (A, B, C, D) before using DN Study.")
+    elif not _gsr_ok:
+        st.warning("Run the Generator ΔP calculation before using DN Study.")
+    else:
+        _dn_primary = results_a["segments"][0]["dn"] if results_a.get("segments") else "DN50"
+        _dn_all_opts = list(engine.PIPE_DATABASE.keys())
+        _dn_alt_opts = [dn for dn in _dn_all_opts if dn != _dn_primary]
+        _dn_default_idx = _dn_alt_opts.index("DN40") if "DN40" in _dn_alt_opts else 0
+
+        _inp_col, _res_col = st.columns([1, 2])
+
+        with _inp_col:
+            with st.container(border=True):
+                st.markdown("**Study Settings**")
+                dn_alt = st.selectbox(
+                    "Alternative branch DN", _dn_alt_opts,
+                    index=_dn_default_idx, key="dn_study_alt_sel"
+                )
+                _p_sep_h2_dn = st.session_state.get("stack_sep_h2", 16.5)
+                _p_sep_o2_dn = st.session_state.get("stack_sep_o2", 16.5)
+                st.caption(
+                    f"Separator targets (from Generator ΔP tab):  "
+                    f"H₂ {_p_sep_h2_dn:.2f} bara  ·  O₂ {_p_sep_o2_dn:.2f} bara"
+                )
+                _run_dn_study = st.button(
+                    "Run DN Study", type="primary",
+                    use_container_width=True, key="dn_study_run"
+                )
+
+        if _run_dn_study:
+            with st.spinner(f"Computing {_dn_primary} vs {dn_alt}…"):
+                _ra_alt = _apply_dn_override(results_a, dn_alt)
+                _rb_alt = _apply_dn_override(results_b, dn_alt)
+                _gsr_h2_alt = _goal_seek_stack(_ra_alt, results_c, _p_sep_h2_dn)
+                _gsr_o2_alt = _goal_seek_stack(_rb_alt, results_d, _p_sep_o2_dn)
+            st.session_state["dn_study_dn_primary"] = _dn_primary
+            st.session_state["dn_study_dn_alt"]     = dn_alt
+            st.session_state["dn_study_gsr_h2_alt"] = _gsr_h2_alt
+            st.session_state["dn_study_gsr_o2_alt"] = _gsr_o2_alt
+            st.rerun()
+
+        _gsr_h2_p = st.session_state.get("stack_gsr_h2")
+        _gsr_o2_p = st.session_state.get("stack_gsr_o2")
+        _gsr_h2_a = st.session_state.get("dn_study_gsr_h2_alt")
+        _gsr_o2_a = st.session_state.get("dn_study_gsr_o2_alt")
+        _dn_p_lbl = st.session_state.get("dn_study_dn_primary", _dn_primary)
+        _dn_a_lbl = st.session_state.get("dn_study_dn_alt", "")
+
+        if _gsr_h2_a and _gsr_o2_a and _dn_a_lbl:
+            with _res_col:
+                # ── Generator ΔP ─────────────────────────────────────────────
+                _dp_gen_p_mbar = (_gsr_h2_p["P_line_in"] - _gsr_o2_p["P_line_in"]) * 1000.0
+                _dp_gen_a_mbar = (_gsr_h2_a["P_line_in"] - _gsr_o2_a["P_line_in"]) * 1000.0
+                _dp_gen_delta  = _dp_gen_a_mbar - _dp_gen_p_mbar
+
+                with st.container(border=True):
+                    st.markdown("**Generator ΔP**")
+                    _gc1, _gc2, _gc3 = st.columns(3)
+                    _gc1.metric(f"{_dn_p_lbl} (primary)", f"{_dp_gen_p_mbar:.1f} mbar")
+                    _gc2.metric(
+                        f"{_dn_a_lbl} (alternative)",
+                        f"{_dp_gen_a_mbar:.1f} mbar",
+                        delta=f"{_dp_gen_delta:+.1f} mbar",
+                        delta_color="off",
+                    )
+                    _winner = _dn_p_lbl if abs(_dp_gen_p_mbar) <= abs(_dp_gen_a_mbar) else _dn_a_lbl
+                    _gc3.metric("Lower |ΔP|", _winner)
+
+                # ── ΔP comparison table ───────────────────────────────────────
+                _dp_rows = []
+                for _case_lbl, _dp_p_kpa, _dp_a_kpa in [
+                    (f"{_la} branch", _gsr_h2_p["dp_line"], _gsr_h2_a["dp_line"]),
+                    (f"{_lb} branch", _gsr_o2_p["dp_line"], _gsr_o2_a["dp_line"]),
+                    (f"{_la} header", _gsr_h2_p["dp_hdr"],  _gsr_h2_a["dp_hdr"]),
+                    (f"{_lb} header", _gsr_o2_p["dp_hdr"],  _gsr_o2_a["dp_hdr"]),
+                ]:
+                    _pct = ((_dp_a_kpa - _dp_p_kpa) / _dp_p_kpa * 100
+                            if _dp_p_kpa and abs(_dp_p_kpa) > 1e-9 else 0.0)
+                    _dp_rows.append({
+                        "Case":                      _case_lbl,
+                        f"{_dn_p_lbl} ΔP (kPa)":    round(_dp_p_kpa, 3),
+                        f"{_dn_a_lbl} ΔP (kPa)":    round(_dp_a_kpa, 3),
+                        "Change (%)":                f"{_pct:+.1f}",
+                    })
+                st.dataframe(
+                    pd.DataFrame(_dp_rows),
+                    hide_index=True, use_container_width=True,
+                    column_config={
+                        f"{_dn_p_lbl} ΔP (kPa)": st.column_config.NumberColumn(format="%.3f"),
+                        f"{_dn_a_lbl} ΔP (kPa)": st.column_config.NumberColumn(format="%.3f"),
+                    }
+                )
+
+                # ── Velocity estimate (first segment, ID-ratio scaling) ───────
+                _seg0      = results_a["segments"][0]
+                _pn0       = _seg0["pn"]
+                _lined0    = _seg0.get("lined", False)
+                _lthk0_m   = _seg0.get("liner_thickness_mm", 1.0) / 1000.0
+                _D_p_bore  = engine.PIPE_DATABASE[_dn_p_lbl].get(_pn0, list(engine.PIPE_DATABASE[_dn_p_lbl].values())[0])
+                _D_a_bore  = engine.PIPE_DATABASE[_dn_a_lbl].get(_pn0, list(engine.PIPE_DATABASE[_dn_a_lbl].values())[0])
+                _D_p_eff   = _D_p_bore - 2 * _lthk0_m if _lined0 else _D_p_bore
+                _D_a_eff   = _D_a_bore - 2 * _lthk0_m if _lined0 else _D_a_bore
+                _vel_scale = (_D_p_eff / _D_a_eff) ** 2 if _D_a_eff > 0 else 1.0
+
+                _rec_a0 = results_a["grid_records"][0] if results_a.get("grid_records") else {}
+                _rec_b0 = results_b["grid_records"][0] if results_b.get("grid_records") else {}
+                _vm_a_p = float(_rec_a0.get("V_m (m/s)", 0))
+                _vm_b_p = float(_rec_b0.get("V_m (m/s)", 0))
+                _ve_a   = float(_rec_a0.get("V_e (m/s)", 0))
+                _ve_b   = float(_rec_b0.get("V_e (m/s)", 0))
+                _vm_a_a = _vm_a_p * _vel_scale
+                _vm_b_a = _vm_b_p * _vel_scale
+                _ratio_a = _vm_a_a / _ve_a if _ve_a > 0 else 0.0
+                _ratio_b = _vm_b_a / _ve_b if _ve_b > 0 else 0.0
+
+                with st.container(border=True):
+                    st.markdown("**Inlet velocity — first segment (estimated)**")
+                    _vc1, _vc2 = st.columns(2)
+                    with _vc1:
+                        st.markdown(f"*{_la} branch*")
+                        st.metric(f"{_dn_p_lbl}", f"{_vm_a_p:.2f} m/s",
+                                  help=f"V_m/V_e = {_vm_a_p/_ve_a:.2f}" if _ve_a > 0 else None)
+                        _dc_a = "inverse" if _ratio_a > 1.0 else ("normal" if _ratio_a > 0.8 else "off")
+                        st.metric(f"{_dn_a_lbl}", f"{_vm_a_a:.2f} m/s",
+                                  delta=f"V_m/V_e = {_ratio_a:.2f}", delta_color=_dc_a)
+                    with _vc2:
+                        st.markdown(f"*{_lb} branch*")
+                        st.metric(f"{_dn_p_lbl}", f"{_vm_b_p:.2f} m/s",
+                                  help=f"V_m/V_e = {_vm_b_p/_ve_b:.2f}" if _ve_b > 0 else None)
+                        _dc_b = "inverse" if _ratio_b > 1.0 else ("normal" if _ratio_b > 0.8 else "off")
+                        st.metric(f"{_dn_a_lbl}", f"{_vm_b_a:.2f} m/s",
+                                  delta=f"V_m/V_e = {_ratio_b:.2f}", delta_color=_dc_b)
+                    st.caption(
+                        f"Velocity scales as (ID ratio)²: "
+                        f"{_dn_p_lbl} {_D_p_eff*1000:.1f} mm → {_dn_a_lbl} {_D_a_eff*1000:.1f} mm  "
+                        f"·  factor {_vel_scale:.2f}×.  "
+                        f"Erosion limit V_e from primary case (API RP 14E, C = 100)."
+                    )
+
+                # ── Recommendation ────────────────────────────────────────────
+                _vel_ok  = _ratio_a <= 1.0 and _ratio_b <= 1.0
+                _dp_alt_better = abs(_dp_gen_a_mbar) < abs(_dp_gen_p_mbar)
+                if _dp_alt_better and _vel_ok:
+                    st.success(
+                        f"**{_dn_a_lbl}** gives lower Generator |ΔP| "
+                        f"({_dp_gen_a_mbar:.1f} vs {_dp_gen_p_mbar:.1f} mbar) "
+                        f"with acceptable velocities."
+                    )
+                elif _dp_alt_better and not _vel_ok:
+                    st.warning(
+                        f"**{_dn_a_lbl}** gives lower Generator |ΔP| but estimated "
+                        f"V_m/V_e exceeds 1.0 — verify erosion before selecting."
+                    )
+                else:
+                    st.info(
+                        f"**{_dn_p_lbl}** (primary) gives lower Generator |ΔP|. "
+                        f"{_dn_a_lbl} appears oversized for this duty."
+                    )
+
+                # ── Report ────────────────────────────────────────────────────
+                st.divider()
+                _dn_rpt_col1, _dn_rpt_col2 = st.columns(2)
+                with _dn_rpt_col1:
+                    if st.button("Generate DN Study Report", use_container_width=True,
+                                 key="dn_study_gen_rpt"):
+                        try:
+                            _dn_buf = report_generator.generate_dn_study_report(
+                                dn_primary=_dn_p_lbl,
+                                dn_alt=_dn_a_lbl,
+                                label_a=_la, label_b=_lb,
+                                gsr_h2_primary=_gsr_h2_p,
+                                gsr_o2_primary=_gsr_o2_p,
+                                gsr_h2_alt=_gsr_h2_a,
+                                gsr_o2_alt=_gsr_o2_a,
+                                dp_gen_primary_mbar=_dp_gen_p_mbar,
+                                dp_gen_alt_mbar=_dp_gen_a_mbar,
+                                vel_data={
+                                    "vm_a_primary": _vm_a_p, "vm_b_primary": _vm_b_p,
+                                    "vm_a_alt":     _vm_a_a, "vm_b_alt":     _vm_b_a,
+                                    "ve_a":         _ve_a,   "ve_b":         _ve_b,
+                                    "D_p_mm":       _D_p_eff * 1000,
+                                    "D_a_mm":       _D_a_eff * 1000,
+                                    "vel_scale":    _vel_scale,
+                                },
+                                p_sep_h2=_p_sep_h2_dn,
+                                p_sep_o2=_p_sep_o2_dn,
+                            )
+                            st.session_state["dn_study_rpt_bytes"] = _dn_buf.getvalue()
+                        except Exception as _re:
+                            st.error(f"Report failed: {_re}")
+                with _dn_rpt_col2:
+                    if st.session_state.get("dn_study_rpt_bytes"):
+                        st.download_button(
+                            f"Download  {_dn_p_lbl}_vs_{_dn_a_lbl}.docx",
+                            data=st.session_state["dn_study_rpt_bytes"],
+                            file_name=f"dn_study_{_dn_p_lbl}_vs_{_dn_a_lbl}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True, key="dn_study_dl_rpt",
+                        )
