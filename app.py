@@ -2599,7 +2599,7 @@ with tab_cmp:
             else:
                 st.caption("No regime data available.")
 
-    # ── Generate All Reports ──────────────────────────────────────────────────
+    # ── Reports ───────────────────────────────────────────────────────────────
     st.divider()
     st.markdown("#### Reports")
     _sens_avail = ("sens_a" in st.session_state and "sens_b" in st.session_state
@@ -2626,68 +2626,58 @@ with tab_cmp:
             }
         return None
 
-    _all_col1, _all_col2 = st.columns([1, 2])
-    with _all_col1:
-        if st.button("Generate All Reports", type="primary",
-                     use_container_width=True, key="gen_all_rpts"):
-            _errors = []
-            with st.spinner("Building all reports…"):
-                # Pre-render all figures sequentially before building any document.
-                # Branch figs use the same dimensions as individual reports so the
-                # combined report gets cache hits instead of re-rendering them.
-                _pf_specs = []
-                for _pf_fig, _pf_w, _pf_h in [
-                    (ra.get("fig_sch"),  900, 520),   # branch A schematic
-                    (ra.get("fig_prof"), 900, 400),   # branch A profile
-                    (rb.get("fig_sch"),  900, 520),   # branch B schematic
-                    (rb.get("fig_prof"), 900, 400),   # branch B profile
-                    (results_c.get("fig_sch")  if results_c else None, 900, 340),  # header C
-                    (results_c.get("fig_prof") if results_c else None, 900, 320),
-                    (results_d.get("fig_sch")  if results_d else None, 900, 340),  # header D
-                    (results_d.get("fig_prof") if results_d else None, 900, 320),
-                    (fig_cmp,  900, 400),
-                    (fig_bar,  900, 340),
-                ]:
-                    if _pf_fig is not None:
-                        _pf_specs.append((_pf_fig, _pf_w, _pf_h, 2))
-                _pf_s = _build_sens_data()
-                if _pf_s and _pf_s.get("fig"):
-                    _pf_specs.append((_pf_s["fig"], 900, 480, 2))
-                report_generator.prefetch_figures(_pf_specs)
-                try:
-                    _buf_a_rpt = report_generator.generate_report(
-                        P_bara=ra["P_bara"], T_C=ra["T_C"],
-                        gas_flows_kgh=ra["gas_flows_kgh"],
-                        liquid_type=ra["liquid_type"], q_lye=ra["q_lye"],
-                        props=ra["props"], grid_records=ra["grid_records"],
-                        segments=ra["segments"],
-                        total_dp_kpa=ra["total_dp_kpa"],
-                        outlet_pressure_bara=ra["outlet_pressure_bara"],
-                        pipe_length_m=ra["pipe_length_m"],
-                        cumulative_distance=ra["cumulative_distance"],
-                        fig_sch=ra.get("fig_sch"), fig_prof=ra.get("fig_prof"),
-                        case_label=_la)
-                    st.session_state["rpt_a_bytes"] = _buf_a_rpt.getvalue()
-                except Exception as _e:
-                    _errors.append(f"{_la}: {_e}")
+    def _build_dn_study_data():
+        _dn_p = st.session_state.get("dn_study_dn_primary")
+        _dn_a = st.session_state.get("dn_study_dn_alt")
+        _gh_a = st.session_state.get("dn_study_gsr_h2_alt")
+        _go_a = st.session_state.get("dn_study_gsr_o2_alt")
+        _gh_p = st.session_state.get("stack_gsr_h2")
+        _go_p = st.session_state.get("stack_gsr_o2")
+        if not all([_dn_p, _dn_a, _gh_a, _go_a, _gh_p, _go_p]):
+            return None
+        _dp_p_mb = (_gh_p["P_line_in"] - _go_p["P_line_in"]) * 1000.0
+        _dp_a_mb = (_gh_a["P_line_in"] - _go_a["P_line_in"]) * 1000.0
+        _seg0    = ra["segments"][0] if ra.get("segments") else {}
+        _pn0     = _seg0.get("pn", "PN20")
+        _lined0  = _seg0.get("lined", False)
+        _lthk0_m = _seg0.get("liner_thickness_mm", 1.0) / 1000.0
+        _D_p_b   = engine.PIPE_DATABASE.get(_dn_p, {}).get(
+                        _pn0, list(engine.PIPE_DATABASE.get(_dn_p, {None: 0}).values())[0])
+        _D_a_b   = engine.PIPE_DATABASE.get(_dn_a, {}).get(
+                        _pn0, list(engine.PIPE_DATABASE.get(_dn_a, {None: 0}).values())[0])
+        _D_p_e   = _D_p_b - 2*_lthk0_m if _lined0 else _D_p_b
+        _D_a_e   = _D_a_b - 2*_lthk0_m if _lined0 else _D_a_b
+        _scale   = (_D_p_e / _D_a_e)**2 if _D_a_e > 0 else 1.0
+        _rec_a0  = ra["grid_records"][0]  if ra.get("grid_records")  else {}
+        _rec_b0  = rb["grid_records"][0]  if rb.get("grid_records")  else {}
+        return {
+            "dn_primary": _dn_p, "dn_alt": _dn_a,
+            "label_a": _la, "label_b": _lb,
+            "gsr_h2_primary": _gh_p, "gsr_o2_primary": _go_p,
+            "gsr_h2_alt":     _gh_a, "gsr_o2_alt":     _go_a,
+            "dp_gen_primary_mbar": _dp_p_mb,
+            "dp_gen_alt_mbar":     _dp_a_mb,
+            "vel_data": {
+                "vm_a_primary": float(_rec_a0.get("V_m (m/s)", 0)),
+                "vm_b_primary": float(_rec_b0.get("V_m (m/s)", 0)),
+                "vm_a_alt":     float(_rec_a0.get("V_m (m/s)", 0)) * _scale,
+                "vm_b_alt":     float(_rec_b0.get("V_m (m/s)", 0)) * _scale,
+                "ve_a":         float(_rec_a0.get("V_e (m/s)", 0)),
+                "ve_b":         float(_rec_b0.get("V_e (m/s)", 0)),
+                "D_p_mm":       _D_p_e * 1000,
+                "D_a_mm":       _D_a_e * 1000,
+                "vel_scale":    _scale,
+            },
+            "p_sep_h2": st.session_state.get("stack_sep_h2", 0),
+            "p_sep_o2": st.session_state.get("stack_sep_o2", 0),
+        }
 
-                try:
-                    _buf_b_rpt = report_generator.generate_report(
-                        P_bara=rb["P_bara"], T_C=rb["T_C"],
-                        gas_flows_kgh=rb["gas_flows_kgh"],
-                        liquid_type=rb["liquid_type"], q_lye=rb["q_lye"],
-                        props=rb["props"], grid_records=rb["grid_records"],
-                        segments=rb["segments"],
-                        total_dp_kpa=rb["total_dp_kpa"],
-                        outlet_pressure_bara=rb["outlet_pressure_bara"],
-                        pipe_length_m=rb["pipe_length_m"],
-                        cumulative_distance=rb["cumulative_distance"],
-                        fig_sch=rb.get("fig_sch"), fig_prof=rb.get("fig_prof"),
-                        case_label=_lb)
-                    st.session_state["rpt_b_bytes"] = _buf_b_rpt.getvalue()
-                except Exception as _e:
-                    _errors.append(f"{_lb}: {_e}")
-
+    # ── Comparison report ─────────────────────────────────────────────────────
+    _cmp_btn_col, _cmp_dl_col = st.columns(2)
+    with _cmp_btn_col:
+        if st.button("Generate Comparison Report", type="primary",
+                     use_container_width=True, key="gen_cmp_rpt"):
+            with st.spinner("Building comparison report…"):
                 try:
                     _cbuf = report_generator.generate_comparison_report(
                         results_a=ra, results_b=rb,
@@ -2696,55 +2686,25 @@ with tab_cmp:
                         sensitivity_data=_build_sens_data(),
                         stack_dp=_build_stack_dp_data())
                     st.session_state["cmp_rpt_bytes"] = _cbuf.getvalue()
+                    st.success("Comparison report ready.")
                 except Exception as _e:
-                    _errors.append(f"Comparison: {_e}")
+                    st.error(f"Comparison report failed: {_e}")
+    with _cmp_dl_col:
+        if st.session_state.get("cmp_rpt_bytes"):
+            st.download_button(
+                "Download Comparison  (.docx)",
+                data=st.session_state["cmp_rpt_bytes"],
+                file_name="report_comparison.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True, key="dl_cmp_rpt")
 
+    # ── Combined report ───────────────────────────────────────────────────────
+    _cmb_btn_col, _cmb_dl_col = st.columns(2)
+    with _cmb_btn_col:
+        if st.button("Generate Combined Report", type="primary",
+                     use_container_width=True, key="gen_combined_rpt"):
+            with st.spinner("Building combined report (includes charts — may take a minute)…"):
                 try:
-                    def _build_dn_study_data():
-                        _dn_p = st.session_state.get("dn_study_dn_primary")
-                        _dn_a = st.session_state.get("dn_study_dn_alt")
-                        _gh_a = st.session_state.get("dn_study_gsr_h2_alt")
-                        _go_a = st.session_state.get("dn_study_gsr_o2_alt")
-                        _gh_p = st.session_state.get("stack_gsr_h2")
-                        _go_p = st.session_state.get("stack_gsr_o2")
-                        if not all([_dn_p, _dn_a, _gh_a, _go_a, _gh_p, _go_p]):
-                            return None
-                        _dp_p_mb = (_gh_p["P_line_in"] - _go_p["P_line_in"]) * 1000.0
-                        _dp_a_mb = (_gh_a["P_line_in"] - _go_a["P_line_in"]) * 1000.0
-                        _seg0    = ra["segments"][0] if ra.get("segments") else {}
-                        _pn0     = _seg0.get("pn", "PN20")
-                        _lined0  = _seg0.get("lined", False)
-                        _lthk0_m = _seg0.get("liner_thickness_mm", 1.0) / 1000.0
-                        _D_p_b   = engine.PIPE_DATABASE.get(_dn_p, {}).get(
-                                        _pn0, list(engine.PIPE_DATABASE.get(_dn_p, {None: 0}).values())[0])
-                        _D_a_b   = engine.PIPE_DATABASE.get(_dn_a, {}).get(
-                                        _pn0, list(engine.PIPE_DATABASE.get(_dn_a, {None: 0}).values())[0])
-                        _D_p_e   = _D_p_b - 2*_lthk0_m if _lined0 else _D_p_b
-                        _D_a_e   = _D_a_b - 2*_lthk0_m if _lined0 else _D_a_b
-                        _scale   = (_D_p_e / _D_a_e)**2 if _D_a_e > 0 else 1.0
-                        _rec_a0  = ra["grid_records"][0]  if ra.get("grid_records")  else {}
-                        _rec_b0  = rb["grid_records"][0]  if rb.get("grid_records")  else {}
-                        return {
-                            "dn_primary": _dn_p, "dn_alt": _dn_a,
-                            "label_a": _la, "label_b": _lb,
-                            "gsr_h2_primary": _gh_p, "gsr_o2_primary": _go_p,
-                            "gsr_h2_alt":     _gh_a, "gsr_o2_alt":     _go_a,
-                            "dp_gen_primary_mbar": _dp_p_mb,
-                            "dp_gen_alt_mbar":     _dp_a_mb,
-                            "vel_data": {
-                                "vm_a_primary": float(_rec_a0.get("V_m (m/s)", 0)),
-                                "vm_b_primary": float(_rec_b0.get("V_m (m/s)", 0)),
-                                "vm_a_alt":     float(_rec_a0.get("V_m (m/s)", 0)) * _scale,
-                                "vm_b_alt":     float(_rec_b0.get("V_m (m/s)", 0)) * _scale,
-                                "ve_a":         float(_rec_a0.get("V_e (m/s)", 0)),
-                                "ve_b":         float(_rec_b0.get("V_e (m/s)", 0)),
-                                "D_p_mm":       _D_p_e * 1000,
-                                "D_a_mm":       _D_a_e * 1000,
-                                "vel_scale":    _scale,
-                            },
-                            "p_sep_h2": st.session_state.get("stack_sep_h2", 0),
-                            "p_sep_o2": st.session_state.get("stack_sep_o2", 0),
-                        }
                     _combined_buf = report_generator.generate_combined_report(
                         cases=[ra, rb, results_c, results_d],
                         case_labels=[_la, _lb, _lc, _ld],
@@ -2753,85 +2713,25 @@ with tab_cmp:
                         stack_dp=_build_stack_dp_data(),
                         dn_study_data=_build_dn_study_data())
                     st.session_state["combined_rpt_bytes"] = _combined_buf.getvalue()
+                    st.success("Combined report ready.")
                 except Exception as _e:
-                    _errors.append(f"Combined: {_e}")
-
-                _dn_data = _build_dn_study_data()
-                if _dn_data is not None:
-                    try:
-                        _dn_buf = report_generator.generate_dn_study_report(
-                            dn_primary=_dn_data["dn_primary"],
-                            dn_alt=_dn_data["dn_alt"],
-                            label_a=_dn_data["label_a"],
-                            label_b=_dn_data["label_b"],
-                            gsr_h2_primary=_dn_data["gsr_h2_primary"],
-                            gsr_o2_primary=_dn_data["gsr_o2_primary"],
-                            gsr_h2_alt=_dn_data["gsr_h2_alt"],
-                            gsr_o2_alt=_dn_data["gsr_o2_alt"],
-                            dp_gen_primary_mbar=_dn_data["dp_gen_primary_mbar"],
-                            dp_gen_alt_mbar=_dn_data["dp_gen_alt_mbar"],
-                            vel_data=_dn_data["vel_data"],
-                            p_sep_h2=_dn_data["p_sep_h2"],
-                            p_sep_o2=_dn_data["p_sep_o2"],
-                        )
-                        st.session_state["dn_study_rpt_bytes"] = _dn_buf.getvalue()
-                    except Exception as _e:
-                        _errors.append(f"DN Study: {_e}")
-
-            if _errors:
-                for _err in _errors:
-                    st.error(f"Report failed: {_err}")
-            else:
-                st.success("All reports ready — download below.")
-
-    with _all_col2:
-        _dl_cols = st.columns(2)
-        if st.session_state.get("rpt_a_bytes"):
-            _dl_cols[0].download_button(
-                f"Download {_la}  (.docx)",
-                data=st.session_state["rpt_a_bytes"],
-                file_name=f"report_{_la.replace(' ', '_')}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True, key="dl_rpt_a_all")
-        if st.session_state.get("rpt_b_bytes"):
-            _dl_cols[1].download_button(
-                f"Download {_lb}  (.docx)",
-                data=st.session_state["rpt_b_bytes"],
-                file_name=f"report_{_lb.replace(' ', '_')}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True, key="dl_rpt_b_all")
-        _dl_cols2 = st.columns(2)
-        if st.session_state.get("cmp_rpt_bytes"):
-            _dl_cols2[0].download_button(
-                f"Download Comparison  (.docx)",
-                data=st.session_state["cmp_rpt_bytes"],
-                file_name="report_comparison.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True, key="dl_cmp_rpt")
+                    st.error(f"Combined report failed: {_e}")
+    with _cmb_dl_col:
         if st.session_state.get("combined_rpt_bytes"):
-            _dl_cols2[1].download_button(
+            st.download_button(
                 "Download Combined  (.docx)",
                 data=st.session_state["combined_rpt_bytes"],
                 file_name="report_combined.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True, key="dl_combined_rpt")
-        if st.session_state.get("dn_study_rpt_bytes"):
-            _dn_p_lbl_all = st.session_state.get("dn_study_dn_primary", "primary")
-            _dn_a_lbl_all = st.session_state.get("dn_study_dn_alt", "alt")
-            _dl_cols3 = st.columns(2)
-            _dl_cols3[0].download_button(
-                f"Download DN Study {_dn_p_lbl_all} vs {_dn_a_lbl_all}  (.docx)",
-                data=st.session_state["dn_study_rpt_bytes"],
-                file_name=f"dn_study_{_dn_p_lbl_all}_vs_{_dn_a_lbl_all}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True, key="dl_dn_study_all")
 
+    st.caption("ℹ Individual case reports (A, B) are available in their respective tabs.")
     if not _sens_avail:
         st.caption("ℹ Run the Sensitivity Analysis above first to include it in the reports.")
     if not st.session_state.get("stack_gsr_h2"):
-        st.caption("ℹ Run the Generator ΔP calculation (Generator ΔP tab) first to include it in the reports.")
+        st.caption("ℹ Run the Generator ΔP calculation first to include it in the reports.")
     if not st.session_state.get("dn_study_dn_primary"):
-        st.caption("ℹ Run the DN Study (DN Study tab) first to include it in the reports.")
+        st.caption("ℹ Run the DN Study first to include it in the Combined report.")
 
     st.divider()
 
