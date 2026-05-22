@@ -371,6 +371,27 @@ def generate_report(
 
     # ── 5. Segment Analysis ──────────────────────────────────────────────────
     doc.add_heading("5. Segment Analysis", level=1)
+    _p5 = doc.add_paragraph(
+        "The segment table shows the hydraulic result for each individual pipe section, "
+        "marching from inlet to outlet. Three columns are of primary interest. "
+        "Regime shows the predicted two-phase flow pattern — Bubbly, Slug, Annular, or Mist — "
+        "which governs the dominant loss mechanism and drives vibration and pulsation loads. "
+        "Slug flow on near-horizontal lines produces cyclic pressure surges at bends and "
+        "supports; Annular and Mist flow indicate a gas-dominated, high-velocity service "
+        "associated with higher erosion risk; Bubbly flow is a liquid-dominated regime "
+        "with relatively low pulsation. A change in regime from one segment to the next "
+        "signals a shift in flow character that the designer should be aware of. "
+        "ΔP (kPa) shows how much of the total pressure budget is consumed by each segment — "
+        "any segment that contributes disproportionately is the first candidate for bore "
+        "enlargement or fitting reduction. "
+        "V_m/V_e is the ratio of mixture velocity to the API RP 14E erosional velocity "
+        "(C = 100 for continuous service); values above 1.0 flag an erosion concern "
+        "and warrant a material selection or increased wall-thickness review."
+    )
+    _p5.paragraph_format.space_after = Pt(4)
+    if _p5.runs:
+        _p5.runs[0].font.size = Pt(9)
+    doc.add_paragraph()
 
     # Subset of columns that fits A4 portrait (6.47" available between margins)
     _COLS   = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)", "L_eq (m)", "Fittings", "Regime",
@@ -403,6 +424,22 @@ def generate_report(
 
     # ── 6. System Totals ─────────────────────────────────────────────────────
     doc.add_heading("6. System Totals", level=1)
+    _p6 = doc.add_paragraph(
+        "The system totals consolidate all segment results into the key hydraulic deliverable. "
+        "Total ΔP is the pressure budget consumed by the branch pipeline; it must be "
+        "subtracted from the process unit outlet pressure to obtain the separator operating "
+        "pressure, or alternatively added to the separator target pressure to determine "
+        "the required process unit outlet pressure. "
+        "For a goal-seek run, the inlet pressure was found iteratively so that the pipeline "
+        "outlet reaches the target separator pressure exactly. "
+        "The effective length (including fitting equivalent lengths per Crane TP-410) "
+        "confirms that all minor losses — valves, elbows, reducers, tees — have been "
+        "captured in the friction model."
+    )
+    _p6.paragraph_format.space_after = Pt(4)
+    if _p6.runs:
+        _p6.runs[0].font.size = Pt(9)
+    doc.add_paragraph()
     _kv_table(doc, [
         ("Case",                                       case_label),
         ("Inlet Pressure",                             f"{P_bara:.4f} bara"),
@@ -420,6 +457,18 @@ def generate_report(
 
         if fig_sch is not None:
             doc.add_heading("Pipeline Schematic", level=2)
+            _psch = doc.add_paragraph(
+                "The schematic plots each pipe segment as a coloured bar, where the colour "
+                "indicates the predicted flow regime. Reading left to right follows the "
+                "flow direction from process unit outlet to separator inlet. "
+                "A colour change along the route signals a regime transition — for instance, "
+                "from Slug to Annular flow as pressure drops and gas expands toward the outlet. "
+                "The segment label shows the pipe specification (DN/PN) and the V_m/V_e ratio; "
+                "segments where V_m/V_e > 1.0 are highlighted as potential erosion risk locations."
+            )
+            _psch.paragraph_format.space_after = Pt(4)
+            if _psch.runs:
+                _psch.runs[0].font.size = Pt(9)
             img = _fig_to_png(fig_sch, width=900, height=520, scale=2)
             if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
@@ -429,6 +478,20 @@ def generate_report(
 
         if fig_prof is not None:
             doc.add_heading("Pressure Profile", level=2)
+            _pprof = doc.add_paragraph(
+                "The pressure profile shows absolute pressure (bara) as a function of "
+                "cumulative pipe distance from the process unit outlet. "
+                "The overall pressure drop from the left edge to the right edge of the chart "
+                "equals the total ΔP reported in Section 6 above. "
+                "Coloured markers or bands on the profile indicate the predicted flow regime "
+                "in each segment, linking the pressure trend to the local flow character. "
+                "A steep slope in any one segment identifies the location with the highest "
+                "resistance per unit length — typically a segment with many fittings, "
+                "a smaller bore, or a significant elevation change."
+            )
+            _pprof.paragraph_format.space_after = Pt(4)
+            if _pprof.runs:
+                _pprof.runs[0].font.size = Pt(9)
             img = _fig_to_png(fig_prof, width=900, height=400, scale=2)
             if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
@@ -638,6 +701,20 @@ def generate_comparison_report(
 
     # ── 4. System Totals ─────────────────────────────────────────────────────
     doc.add_heading("4. System Totals", level=1)
+    _p4cmp = doc.add_paragraph(
+        "This section compares the two branch lines at the system level. "
+        "The governing branch — the one with the higher total ΔP — sets the required "
+        "inlet pressure and therefore the minimum process unit outlet pressure. "
+        "For an electrolyser or fuel cell where both branches carry gas from a common "
+        "pressure boundary, the ΔP difference (last row) is the hydraulic imbalance "
+        "that appears as a differential pressure across the internal membrane. "
+        "Minimising this differential is the primary design objective alongside "
+        "keeping both lines within the erosion velocity limit (V_m/V_e ≤ 1.0)."
+    )
+    _p4cmp.paragraph_format.space_after = Pt(4)
+    if _p4cmp.runs:
+        _p4cmp.runs[0].font.size = Pt(9)
+    doc.add_paragraph()
     _dp_delta = results_b["total_dp_kpa"] - results_a["total_dp_kpa"]
     _max_ve_a = max((r["V_m/V_e"] for r in results_a["grid_records"]), default=0.0)
     _max_ve_b = max((r["V_m/V_e"] for r in results_b["grid_records"]), default=0.0)
@@ -691,9 +768,27 @@ def generate_comparison_report(
         _set_col_widths(tbl, _WIDTHS)
 
     doc.add_heading(f"5. Segment Analysis — {label_a}", level=1)
+    _pseg_a = doc.add_paragraph(
+        f"Per-segment results for the {label_a} branch. "
+        f"The Regime column shows the predicted two-phase flow pattern for each segment — "
+        f"note any changes in regime along the pipe route as these indicate a shift in "
+        f"the dominant loss mechanism. "
+        f"V_m/V_e > 1.0 flags erosion risk (API RP 14E, C = 100)."
+    )
+    _pseg_a.paragraph_format.space_after = Pt(4)
+    if _pseg_a.runs:
+        _pseg_a.runs[0].font.size = Pt(9)
     _seg_table(doc, results_a["grid_records"])
     doc.add_paragraph()
     doc.add_heading(f"6. Segment Analysis — {label_b}", level=1)
+    _pseg_b = doc.add_paragraph(
+        f"Per-segment results for the {label_b} branch. "
+        f"Compare the Regime and V_m/V_e columns with {label_a} above to identify "
+        f"where the two branches differ in flow character and loss distribution."
+    )
+    _pseg_b.paragraph_format.space_after = Pt(4)
+    if _pseg_b.runs:
+        _pseg_b.runs[0].font.size = Pt(9)
     _seg_table(doc, results_b["grid_records"])
     doc.add_paragraph()
 
@@ -703,6 +798,17 @@ def generate_comparison_report(
         doc.add_heading("7. Visualisations", level=1)
         if fig_cmp is not None:
             doc.add_heading(f"Pressure Profiles — {label_a} vs {label_b}", level=2)
+            _pcmp = doc.add_paragraph(
+                f"The overlay shows absolute pressure (bara) vs. cumulative pipe distance for "
+                f"{label_a} (solid line) and {label_b} (dashed line). "
+                f"Both lines start at their respective inlet pressures; the vertical separation "
+                f"at the outlet end reflects the difference in total ΔP between the two branches. "
+                f"A steeper slope on either curve identifies the segments with the highest "
+                f"resistance per unit length — the prime candidates for bore or fitting optimisation."
+            )
+            _pcmp.paragraph_format.space_after = Pt(4)
+            if _pcmp.runs:
+                _pcmp.runs[0].font.size = Pt(9)
             img = _fig_to_png(fig_cmp, width=900, height=400, scale=2)
             if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
@@ -711,6 +817,17 @@ def generate_comparison_report(
             doc.add_paragraph()
         if fig_bar is not None:
             doc.add_heading(f"ΔP by Segment — {label_a} vs {label_b}", level=2)
+            _pbar = doc.add_paragraph(
+                f"The bar chart decomposes total ΔP into individual segment contributions for "
+                f"{label_a} and {label_b} side by side. "
+                f"Tall bars identify the dominant loss segments. "
+                f"A significant difference in bar height between the two branches at the same "
+                f"segment position means their pipe specifications diverge there — this is "
+                f"often the root cause of the hydraulic imbalance between the two lines."
+            )
+            _pbar.paragraph_format.space_after = Pt(4)
+            if _pbar.runs:
+                _pbar.runs[0].font.size = Pt(9)
             img = _fig_to_png(fig_bar, width=900, height=340, scale=2)
             if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
@@ -734,6 +851,20 @@ def generate_comparison_report(
         )
         if _intro.runs:
             _intro.runs[0].font.size = Pt(9)
+        _intro_s2 = doc.add_paragraph(
+            "The spread between minimum and maximum ΔP values defines the correlation "
+            "uncertainty band for this service. "
+            "If the two cases' ΔP ranges do not overlap, the relative ordering is "
+            "unambiguous — one branch always has higher ΔP regardless of method choice. "
+            "If the ranges overlap, method selection can change which branch governs; "
+            "in that situation treat the spread as an additional design margin. "
+            "The Flow Regime Consistency table below confirms whether the predicted "
+            "regime in each segment is stable across all 12 combinations — an unstable "
+            "regime (✗ flag) at a particular segment warrants extra scrutiny."
+        )
+        _intro_s2.paragraph_format.space_after = Pt(4)
+        if _intro_s2.runs:
+            _intro_s2.runs[0].font.size = Pt(9)
         doc.add_paragraph()
 
         # Build summary table
@@ -864,6 +995,24 @@ def generate_comparison_report(
 
         doc.add_page_break()
         doc.add_heading("Generator Differential Pressure", level=1)
+
+        _pgen_cmp = doc.add_paragraph(
+            "The Generator (Electrolyser) Differential Pressure is the difference between "
+            f"the {_la_s}-side and {_lb_s}-side branch inlet pressures, calculated at equal "
+            "separator target pressures. "
+            "Both gas streams share a common electrolyte membrane; any hydraulic imbalance "
+            "between the two pipe systems appears directly as a mechanical pressure differential "
+            "across that membrane. "
+            "The inlet pressures are found by goal-seeking each system independently: both "
+            "separators are set to their target operating pressure and the required inlet "
+            "pressure is back-calculated through the full branch and header pressure drop. "
+            "The resulting difference is a purely hydraulic quantity — it excludes "
+            "electrochemical overpotentials — and represents the piping-induced membrane load."
+        )
+        _pgen_cmp.paragraph_format.space_after = Pt(4)
+        if _pgen_cmp.runs:
+            _pgen_cmp.runs[0].font.size = Pt(9)
+        doc.add_paragraph()
 
         doc.add_heading("Target Conditions", level=2)
         _kv_table(doc, [
@@ -1102,6 +1251,16 @@ def generate_combined_report(
         _gen_kpa  = _gen_dp * 100.0
         _gen_mbar = _gen_kpa * 10.0
         doc.add_heading("Generator Differential Pressure", level=2)
+        _pgen_kr = doc.add_paragraph(
+            f"The Generator ΔP is the pressure difference between the {case_labels[0]} and "
+            f"{case_labels[1]} branch inlet ports, evaluated at equal separator target pressures. "
+            f"Both systems share a common electrolyte membrane; this hydraulic imbalance "
+            f"appears directly as a differential pressure across that membrane. "
+            f"The design objective is to minimise the absolute value of this differential."
+        )
+        _pgen_kr.paragraph_format.space_after = Pt(4)
+        if _pgen_kr.runs:
+            _pgen_kr.runs[0].font.size = Pt(9)
         _kv_table(doc, [
             (f"{case_labels[0]} branch inlet pressure (bara)",              f"{_p_in_a:.4f}"),
             (f"{case_labels[1]} branch inlet pressure (bara)",              f"{_p_in_b:.4f}"),
@@ -1336,6 +1495,21 @@ def generate_combined_report(
         )
         if _intro.runs:
             _intro.runs[0].font.size = Pt(9)
+        _intro_c2 = doc.add_paragraph(
+            "The spread between minimum and maximum ΔP defines the correlation uncertainty "
+            "band for this specific service. "
+            "A narrow spread (below ~20 % of the mean) indicates robust agreement across "
+            "methods; a wide spread signals that the result is method-sensitive and that "
+            "further validation — e.g. against vendor data or commissioning measurements — "
+            "is advisable. "
+            "If the two cases' ΔP ranges do not overlap, the ordering (which line has the "
+            "higher ΔP) is unambiguous regardless of method choice; if they overlap, "
+            "treat the full sensitivity range as the design uncertainty band. "
+            "The chart at the end of this section shows all 12 results visually."
+        )
+        _intro_c2.paragraph_format.space_after = Pt(4)
+        if _intro_c2.runs:
+            _intro_c2.runs[0].font.size = Pt(9)
         doc.add_paragraph()
 
         _CORR_S = {"Beggs-Brill": "BB", "Friedel": "Friedel",
@@ -1407,6 +1581,21 @@ def generate_combined_report(
 
         doc.add_page_break()
         _h1("Generator Differential Pressure — Detail")
+
+        _pgen_det = doc.add_paragraph(
+            "This section traces the full pressure path from each branch inlet, through the "
+            f"respective header, to the separator for both the {_la_s} and {_lb_s} systems. "
+            "The goal-seek algorithm fixes both separator pressures at their targets and "
+            "back-calculates the required branch inlet pressure for each system independently. "
+            "The difference between the two inlet pressures is the Generator ΔP — the net "
+            "hydraulic load on the electrolyser membrane arising solely from piping asymmetry. "
+            "It is reported in bara, kPa, and mbar to align with typical membrane "
+            "pressure-rating and instrumentation documentation."
+        )
+        _pgen_det.paragraph_format.space_after = Pt(4)
+        if _pgen_det.runs:
+            _pgen_det.runs[0].font.size = Pt(9)
+        doc.add_paragraph()
 
         doc.add_heading("Target Conditions", level=2)
         _kv_table(doc, [
@@ -1614,6 +1803,21 @@ def generate_combined_report(
         _vd    = _dns["vel_data"]
 
         doc.add_heading("D.  DN Study — Branch Line Size Comparison", level=1)
+        _pdn_intro = doc.add_paragraph(
+            "The DN Study evaluates whether changing the branch pipe nominal diameter "
+            f"from {_dn_p} (primary design) to {_dn_a} (alternative) improves system performance. "
+            "A larger bore reduces mixture velocity and therefore frictional pressure drop "
+            "in the branch, but it does so differently on each side because the two fluids "
+            "(H₂ and O₂) have different physical properties and flow rates. "
+            "This asymmetric response means that switching DN shifts the hydraulic balance "
+            "between the two branches, changing the Generator ΔP. "
+            "The study uses the same separator target pressures and goal-seek logic as the "
+            "main case — only the branch DN changes; header sizes are kept constant."
+        )
+        _pdn_intro.paragraph_format.space_after = Pt(4)
+        if _pdn_intro.runs:
+            _pdn_intro.runs[0].font.size = Pt(9)
+        doc.add_paragraph()
         _kv_table(doc, [
             ("Primary branch DN",         _dn_p),
             ("Alternative branch DN",     _dn_a),
@@ -1624,6 +1828,15 @@ def generate_combined_report(
         doc.add_paragraph()
 
         doc.add_heading("Generator ΔP", level=2)
+        _pdn_gen = doc.add_paragraph(
+            "Each column represents a complete goal-seek run with all branches at the "
+            "specified DN and headers unchanged. "
+            "The preferred DN is the one with the smaller absolute Generator ΔP, "
+            "subject to the erosion velocity constraint (V_m/V_e ≤ 1.0)."
+        )
+        _pdn_gen.paragraph_format.space_after = Pt(4)
+        if _pdn_gen.runs:
+            _pdn_gen.runs[0].font.size = Pt(9)
         _delta_mbar = _dp_a - _dp_p
         _winner = _dn_p if abs(_dp_p) <= abs(_dp_a) else _dn_a
         _kv3_table(doc, [
@@ -1729,6 +1942,27 @@ def generate_dn_study_report(
         sub.runs[0].font.size = Pt(10)
     doc.add_paragraph()
 
+    # ── 0. Study objective ────────────────────────────────────────────────────
+    doc.add_heading("Study Objective", level=1)
+    _pobj = doc.add_paragraph(
+        "This study quantifies the effect of changing the branch pipe nominal diameter "
+        f"from {dn_primary} (primary design) to {dn_alt} on overall system hydraulics. "
+        "A different-bore branch changes mixture velocity and therefore frictional pressure "
+        "drop, but the H₂ and O₂ sides respond differently because their flow rates, "
+        "gas densities, and fluid properties differ. "
+        "This asymmetric response shifts the hydraulic balance between the two systems "
+        "and therefore changes the Generator Differential Pressure — the net pressure "
+        "across the electrolyser membrane arising from piping asymmetry. "
+        "The study holds separator target pressures fixed and uses the same goal-seek "
+        "logic as the main case; only the branch DN changes. "
+        "The preferred DN is the one that gives the lower absolute Generator ΔP while "
+        "keeping mixture velocities below the API RP 14E erosion limit (V_m/V_e ≤ 1.0)."
+    )
+    _pobj.paragraph_format.space_after = Pt(4)
+    if _pobj.runs:
+        _pobj.runs[0].font.size = Pt(9)
+    doc.add_paragraph()
+
     # ── 1. Study basis ────────────────────────────────────────────────────────
     doc.add_heading("Study Basis", level=1)
     _kv_table(doc, [
@@ -1743,6 +1977,21 @@ def generate_dn_study_report(
 
     # ── 2. Generator ΔP comparison ───────────────────────────────────────────
     doc.add_heading("Generator Differential Pressure", level=1)
+    _pgen_dn = doc.add_paragraph(
+        "The Generator ΔP is back-calculated by goal-seeking both the H₂ and O₂ systems "
+        "to their respective separator target pressures and then taking the difference "
+        "between the two branch inlet pressures. "
+        "It represents the mechanical pressure differential across the electrolyser membrane "
+        "resulting purely from hydraulic imbalance in the piping — not from "
+        "electrochemical effects. "
+        "A smaller absolute value indicates a more balanced system and lower membrane stress. "
+        "The Change vs primary row shows how the differential shifts when the DN changes; "
+        "a negative change means the imbalance decreased."
+    )
+    _pgen_dn.paragraph_format.space_after = Pt(4)
+    if _pgen_dn.runs:
+        _pgen_dn.runs[0].font.size = Pt(9)
+    doc.add_paragraph()
     _delta_mbar = dp_gen_alt_mbar - dp_gen_primary_mbar
     _winner = dn_primary if abs(dp_gen_primary_mbar) <= abs(dp_gen_alt_mbar) else dn_alt
     _kv3_table(doc, [
@@ -1762,6 +2011,20 @@ def generate_dn_study_report(
 
     # ── 3. Pressure drop by case ──────────────────────────────────────────────
     doc.add_heading("Pressure Drop Summary by Case", level=1)
+    _pdp_dn = doc.add_paragraph(
+        "The table breaks down how pressure drop changes in each pipe section when the "
+        f"branch DN is changed from {dn_primary} to {dn_alt}. "
+        "Branch ΔP typically decreases with a larger bore (lower velocity, lower friction) "
+        "and increases with a smaller bore. "
+        "Header ΔP is unchanged because the header DN is kept constant. "
+        "The percentage change quantifies the sensitivity of each section to the DN choice. "
+        "A large change on one branch and a small change on the other explains why the "
+        "Generator ΔP shifts when the DN is varied."
+    )
+    _pdp_dn.paragraph_format.space_after = Pt(4)
+    if _pdp_dn.runs:
+        _pdp_dn.runs[0].font.size = Pt(9)
+    doc.add_paragraph()
     _cases_dp = [
         (f"{label_a} branch",  gsr_h2_primary["dp_line"], gsr_h2_alt["dp_line"]),
         (f"{label_b} branch",  gsr_o2_primary["dp_line"], gsr_o2_alt["dp_line"]),
@@ -1781,6 +2044,22 @@ def generate_dn_study_report(
 
     # ── 4. Velocity estimate ──────────────────────────────────────────────────
     doc.add_heading("Inlet Velocity — First Segment (Estimated)", level=1)
+    _pvel_dn = doc.add_paragraph(
+        "Inlet velocity is the critical erosion check — particularly important when "
+        "moving to a smaller bore where velocity increases. "
+        "For a larger bore (typical in this study) velocity decreases, but the check "
+        "is included for completeness. "
+        "Velocity is estimated by scaling the primary-case value by the square of the "
+        "ID ratio (pipe area ratio), which is exact for incompressible flow and "
+        "conservative for two-phase compressible flow. "
+        "V_m/V_e must remain ≤ 1.0 for continuous-service acceptance under API RP 14E "
+        "(C = 100); values above this threshold require either a higher C-factor "
+        "justification based on material and fluid corrosivity, or a bore increase."
+    )
+    _pvel_dn.paragraph_format.space_after = Pt(4)
+    if _pvel_dn.runs:
+        _pvel_dn.runs[0].font.size = Pt(9)
+    doc.add_paragraph()
     _vd = vel_data
     _ratio_a = _vd["vm_a_alt"] / _vd["ve_a"] if _vd["ve_a"] > 0 else 0.0
     _ratio_b = _vd["vm_b_alt"] / _vd["ve_b"] if _vd["ve_b"] > 0 else 0.0
