@@ -238,6 +238,90 @@ def _get_species_viscosity(species, T_K, P_pa):
     return GAS_SPECIES[species]["mu_ref"]
 
 
+def _coolprop_mixture_properties(gas_flows_kgh, T_C, P_bara, custom_gas=None):
+    """Attempt to compute mixture density (kg/m3), viscosity (Pa·s),
+    and MW_mix (kg/mol) using CoolProp for the provided gas flows.
+    Falls back to mole-weighted / ideal-gas approximations on failure.
+    Returns (rho_g, mu_g, MW_mix_kgmol, composition_dict)
+    """
+    T_K = T_C + 273.15
+    P_pa = P_bara * 1e5
+
+    # Build mole flows and mapping to CoolProp ids
+    mol_flows = {}
+    cp_parts = []
+    for sp, m_kgh in gas_flows_kgh.items():
+        if sp == "Custom" and custom_gas:
+            MW = custom_gas["MW_gmol"] * 1e-3
+        else:
+            MW = GAS_SPECIES.get(sp, {}).get("MW")
+        if MW is None or MW <= 0:
+            continue
+        mol_flows[sp] = m_kgh / MW
+        cid = GAS_SPECIES.get(sp, {}).get("coolprop_id")
+        if cid:
+            cp_parts.append((cid, mol_flows[sp]))
+
+    n_total = sum(mol_flows.values())
+    if n_total <= 0:
+        raise ValueError("No valid gas species with positive flow provided")
+
+    # Try CoolProp mixture evaluation if we have at least one coolprop id
+    try:
+        if cp_parts:
+            # Build mixture string like 'Methane[0.5]&Ethane[0.5]'
+            mix_str = "&".join(f"{cid}[{frac}]" for cid, frac in (
+                (cid, mol / n_total) for cid, mol in cp_parts
+            ))
+            # Try density (Dmass) and dynamic viscosity (V) via PropsSI
+            rho = CP.PropsSI('Dmass', 'T', T_K, 'P', P_pa, mix_str)
+            mu = CP.PropsSI('V', 'T', T_K, 'P', P_pa, mix_str)
+            # Estimate MW_mix from mass / mol: compute mass flow and mol flow
+            m_gas_total_kgh = sum(gas_flows_kgh.get(sp, 0.0) for sp in mol_flows.keys())
+            MW_mix_kgmol = m_gas_total_kgh / n_total if n_total > 0 else None
+            # Build composition dict
+            composition = {}
+            for sp, n_mol_h in mol_flows.items():
+                if sp == "Custom" and custom_gas:
+                    MW = custom_gas["MW_gmol"] * 1e-3
+                else:
+                    MW = GAS_SPECIES.get(sp, {}).get("MW")
+                composition[sp] = {
+                    "mol_h": n_mol_h,
+                    "kg_h": n_mol_h * MW,
+                    "mol_frac": n_mol_h / n_total if n_total > 0 else 0.0,
+                    "coolprop_id": GAS_SPECIES.get(sp, {}).get("coolprop_id"),
+                }
+            return rho, mu, MW_mix_kgmol, composition
+    except Exception:
+        # Fall through to fallback calculations
+        pass
+
+    # Fallback: ideal gas density and mole-fraction weighted viscosity
+    m_gas_total_kgh = sum(gas_flows_kgh.get(sp, 0.0) for sp in mol_flows.keys())
+    MW_mix_kgmol = m_gas_total_kgh / n_total if n_total > 0 else list(GAS_SPECIES.values())[0]["MW"]
+    rho_ideal = (P_pa * MW_mix_kgmol) / (8.314 * T_K)
+    mu_mix = 0.0
+    for sp, n_mol_h in mol_flows.items():
+        y = n_mol_h / n_total if n_total > 0 else 0.0
+        if sp == "Custom" and custom_gas:
+            mu_i = custom_gas.get("mu_upas", 1.2) * 1e-6
+        else:
+            mu_i = _get_species_viscosity(sp, T_K, P_pa)
+        mu_mix += y * mu_i
+    mu_mix = max(5e-6, mu_mix)
+    composition = {}
+    for sp, n_mol_h in mol_flows.items():
+        MW = custom_gas["MW_gmol"] * 1e-3 if sp == "Custom" and custom_gas else GAS_SPECIES.get(sp, {}).get("MW")
+        composition[sp] = {
+            "mol_h": n_mol_h,
+            "kg_h": n_mol_h * MW,
+            "mol_frac": n_mol_h / n_total if n_total > 0 else 0.0,
+            "coolprop_id": GAS_SPECIES.get(sp, {}).get("coolprop_id"),
+        }
+    return rho_ideal, mu_mix, MW_mix_kgmol, composition
+
+
 # ============================================================================
 # 4. THERMODYNAMIC CORE SOLVER
 # ============================================================================
@@ -249,6 +333,7 @@ def calculate_two_phase_properties(
     q_lye_m3h,
     custom_gas=None,    # {"MW_gmol": float, "mu_upas": float}  — only for "Custom" species
     custom_liquid=None, # {"rho_kgm3": float, "mu_mpas": float, "sigma_mnm": float}
+    use_coolprop=False, # opt-in: try CoolProp mixture calculations for gas phase
 ):
     """
     Generic two-phase thermodynamic solver.
@@ -285,7 +370,10 @@ def calculate_two_phase_properties(
         if sp == "Custom" and custom_gas:
             MW = custom_gas["MW_gmol"] * 1e-3
         else:
-            MW = GAS_SPECIES[sp]["MW"]
+            MW = GAS_SPECIES.get(sp, {}).get("MW")
+        if MW is None or MW <= 0:
+            # skip unknown species here; they may be handled by CoolProp
+            continue
         dry_moles[sp] = m_kgh / MW
     n_dry = sum(dry_moles.values())
 
@@ -304,45 +392,66 @@ def calculate_two_phase_properties(
         n_H2O = n_dry * y_H2O / (1.0 - y_H2O) if y_H2O < 1.0 else 0.0
         m_H2O_vapor_kgh = n_H2O * 18.015e-3  # mol/h × kg/mol = kg/h
 
-    # ── Gas mixture composition ───────────────────────────────────────────────
-    all_moles = dict(dry_moles)
-    if n_H2O > 0:
-        all_moles["H₂O (vapour)"] = n_H2O
-    n_total = sum(all_moles.values())
+    # ── Gas mixture composition and properties (optionally CoolProp) ────────
+    # If requested, attempt CoolProp-based mixture eval; otherwise fall back
+    # to existing ideal-gas + mole-fraction viscosity approach.
+    composition = None
+    rho_g = None
+    mu_g = None
+    MW_mix_kgmol = None
 
-    composition = {}
-    for sp, n_mol_h in all_moles.items():
-        if sp == "H₂O (vapour)":
-            MW = 18.015e-3
-        elif sp == "Custom" and custom_gas:
-            MW = custom_gas["MW_gmol"] * 1e-3
-        else:
-            MW = GAS_SPECIES[sp]["MW"]
-        composition[sp] = {
-            "mol_h":    n_mol_h,
-            "kg_h":     n_mol_h * MW,
-            "mol_frac": n_mol_h / n_total if n_total > 0 else 0.0,
-        }
+    if use_coolprop:
+        try:
+            rho_g, mu_g, MW_mix_kgmol, composition = _coolprop_mixture_properties(
+                gas_flows_kgh, T_C, P_bara, custom_gas=custom_gas)
+        except Exception:
+            # Fallback to legacy approach below
+            rho_g = None
+            mu_g = None
+            MW_mix_kgmol = None
+            composition = None
 
-    m_gas_total_kgh = sum(v["kg_h"] for v in composition.values())
-    MW_mix_kgmol    = m_gas_total_kgh / n_total if n_total > 0 else 2.016e-3
+    if composition is None:
+        # ── Gas mixture composition ─────────────────────────────────────────
+        all_moles = dict(dry_moles)
+        if n_H2O > 0:
+            all_moles["H₂O (vapour)"] = n_H2O
+        n_total = sum(all_moles.values())
 
-    # ── Gas density (ideal gas) ───────────────────────────────────────────────
-    rho_g = (P_pa * MW_mix_kgmol) / (8.314 * T_K)
+        composition = {}
+        for sp, n_mol_h in all_moles.items():
+            if sp == "H₂O (vapour)":
+                MW = 18.015e-3
+            elif sp == "Custom" and custom_gas:
+                MW = custom_gas["MW_gmol"] * 1e-3
+            else:
+                MW = GAS_SPECIES.get(sp, {}).get("MW", 2.016e-3)
+            composition[sp] = {
+                "mol_h":    n_mol_h,
+                "kg_h":     n_mol_h * MW,
+                "mol_frac": n_mol_h / n_total if n_total > 0 else 0.0,
+                "coolprop_id": GAS_SPECIES.get(sp, {}).get("coolprop_id"),
+            }
 
-    # ── Gas mixture viscosity (mole-fraction weighted) ────────────────────────
-    mu_g = 0.0
-    _custom_mu = (custom_gas["mu_upas"] * 1e-6) if custom_gas else 1.2e-5
-    for sp, data in composition.items():
-        y = data["mol_frac"]
-        if sp == "H₂O (vapour)":
-            mu_i = 1.2e-5
-        elif sp == "Custom":
-            mu_i = _custom_mu
-        else:
-            mu_i = _get_species_viscosity(sp, T_K, P_pa)
-        mu_g += y * mu_i
-    mu_g = max(5e-6, mu_g)
+        m_gas_total_kgh = sum(v["kg_h"] for v in composition.values())
+        MW_mix_kgmol    = m_gas_total_kgh / n_total if n_total > 0 else 2.016e-3
+
+        # ── Gas density (ideal gas) ────────────────────────────────────────
+        rho_g = (P_pa * MW_mix_kgmol) / (8.314 * T_K)
+
+        # ── Gas mixture viscosity (mole-fraction weighted) ────────────────
+        mu_g = 0.0
+        _custom_mu = (custom_gas["mu_upas"] * 1e-6) if custom_gas else 1.2e-5
+        for sp, data in composition.items():
+            y = data["mol_frac"]
+            if sp == "H₂O (vapour)":
+                mu_i = 1.2e-5
+            elif sp == "Custom":
+                mu_i = _custom_mu
+            else:
+                mu_i = _get_species_viscosity(sp, T_K, P_pa)
+            mu_g += y * mu_i
+        mu_g = max(5e-6, mu_g)
 
     # ── Phase mass balance ────────────────────────────────────────────────────
     m_liquid_total_kgh = max(0.1, m_lye_kgh - m_H2O_vapor_kgh)

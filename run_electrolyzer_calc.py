@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Electrolyzer system hydraulic study
-H2 side: Case A (H2 branch) + Case C (H2 header)
-O2 side: Case B (O2 branch) + Case D (O2 header)
+Two-branch gas/liquid hydraulic study
+Branch A: Case A (branch) + Case C (header)
+Branch B: Case B (branch) + Case D (header)
 Goal-seek: P_T-junction = 16.5 bara
 """
 import sys, os
@@ -19,12 +19,12 @@ T_C          = 80.0
 LIQUID_TYPE  = "KOH 30 wt%"
 P_TARGET     = 16.5       # bara at T-junction (T-segment length = 0)
 
-GAS_A = {"H₂":  26.0}    # kg/h per stack
-GAS_B = {"O₂": 206.0}    # kg/h per stack
-Q_LYE = 15.0              # m³/h KOH per stack
+GAS_A = {"GasA":  26.0}    # kg/h example per unit
+GAS_B = {"GasB": 206.0}    # kg/h example per unit
+Q_LYE = 15.0                 # m³/h liquid per unit
 
-LABEL_A = "H₂ Branch (A)"
-LABEL_B = "O₂ Branch (B)"
+LABEL_A = "Branch A"
+LABEL_B = "Branch B"
 
 # ─── Pipe specs ──────────────────────────────────────────────────────────────
 DN_BR   = "DN50";   PN_BR  = "PN20"
@@ -325,47 +325,47 @@ def goal_seek_stack(gas_flows, gas_per_tap, liq_per_tap, P_target,
 # RUN ALL CALCULATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 print("=" * 60)
-print("ELECTROLYZER PIPING HYDRAULIC STUDY")
+print("TWO-BRANCH PIPING HYDRAULIC STUDY")
 print(f"Target P at T-junction: {P_TARGET} bara")
 print(f"T = {T_C}°C  |  Liquid: {LIQUID_TYPE}")
-print(f"H₂/stack: {GAS_A['H₂']} kg/h  |  O₂/stack: {GAS_B['O₂']} kg/h")
-print(f"KOH/stack: {Q_LYE} m³/h  |  Stacks per header: {N_TOTAL}")
+print(f"Gas A flows: {GAS_A}  |  Gas B flows: {GAS_B}")
+print(f"Liquid per unit: {Q_LYE} m³/h  |  Units per header: {N_TOTAL}")
 print("=" * 60)
 
-# ─── H2 side ──────────────────────────────────────────────────────────────────
-print("\n── H₂ side (A + C) ──────────────────────────────────────")
-gsr_h2 = goal_seek_stack(GAS_A, GAS_A, Q_LYE, P_TARGET)
-P_in_A = gsr_h2["P_line_in"]
-print(f"  Converged: {gsr_h2['converged']}  ({gsr_h2['iterations']} iter)")
+# ─── Branch A side ───────────────────────────────────────────────────────────
+print("\n── Branch A (A + C) ──────────────────────────────────────")
+gsr_a = goal_seek_stack(GAS_A, GAS_A, Q_LYE, P_TARGET)
+P_in_A = gsr_a["P_line_in"]
+print(f"  Converged: {gsr_a['converged']}  ({gsr_a['iterations']} iter)")
 print(f"  P_inlet_A  = {P_in_A:.4f} bara")
-print(f"  P_outlet_A = {gsr_h2['P_line_out']:.4f} bara  (ΔP_A = {gsr_h2['dp_line']:.3f} kPa)")
-print(f"  Header C ΔP = {gsr_h2['dp_hdr']:.3f} kPa")
-print(f"  P_T (H₂)   = {gsr_h2['P_sep']:.4f} bara")
+print(f"  P_outlet_A = {gsr_a['P_line_out']:.4f} bara  (ΔP_A = {gsr_a['dp_line']:.3f} kPa)")
+print(f"  Header (A) ΔP = {gsr_a['dp_hdr']:.3f} kPa")
+print(f"  P_T (A)   = {gsr_a['P_sep']:.4f} bara")
 
 res_a = calc_branch(GAS_A, P_in_A)
-res_c = build_header_result(GAS_A, Q_LYE, gsr_h2["P_line_out"])
+res_c = build_header_result(GAS_A, Q_LYE, gsr_a["P_line_out"])
 
-# ─── O2 side ──────────────────────────────────────────────────────────────────
-print("\n── O₂ side (B + D) ──────────────────────────────────────")
-gsr_o2 = goal_seek_stack(GAS_B, GAS_B, Q_LYE, P_TARGET)
-P_in_B = gsr_o2["P_line_in"]
-print(f"  Converged: {gsr_o2['converged']}  ({gsr_o2['iterations']} iter)")
+# ─── Branch B side ───────────────────────────────────────────────────────────
+print("\n── Branch B (B + D) ──────────────────────────────────────")
+gsr_b = goal_seek_stack(GAS_B, GAS_B, Q_LYE, P_TARGET)
+P_in_B = gsr_b["P_line_in"]
+print(f"  Converged: {gsr_b['converged']}  ({gsr_b['iterations']} iter)")
 print(f"  P_inlet_B  = {P_in_B:.4f} bara")
-print(f"  P_outlet_B = {gsr_o2['P_line_out']:.4f} bara  (ΔP_B = {gsr_o2['dp_line']:.3f} kPa)")
-print(f"  Header D ΔP = {gsr_o2['dp_hdr']:.3f} kPa")
-print(f"  P_T (O₂)   = {gsr_o2['P_sep']:.4f} bara")
+print(f"  P_outlet_B = {gsr_b['P_line_out']:.4f} bara  (ΔP_B = {gsr_b['dp_line']:.3f} kPa)")
+print(f"  Header (B) ΔP = {gsr_b['dp_hdr']:.3f} kPa")
+print(f"  P_T (B)   = {gsr_b['P_sep']:.4f} bara")
 
 res_b = calc_branch(GAS_B, P_in_B)
-res_d = build_header_result(GAS_B, Q_LYE, gsr_o2["P_line_out"])
+res_d = build_header_result(GAS_B, Q_LYE, gsr_b["P_line_out"])
 
 # ─── Stack ΔP ─────────────────────────────────────────────────────────────────
 dp_stack_bara = P_in_A - P_in_B
-print("\n── STACK DIFFERENTIAL PRESSURE ──────────────────────────")
-print(f"  P_inlet_A (H₂) = {P_in_A:.4f} bara")
-print(f"  P_inlet_B (O₂) = {P_in_B:.4f} bara")
-print(f"  ΔP_stack       = {dp_stack_bara:.4f} bara")
-print(f"                 = {dp_stack_bara*100:.3f} kPa")
-print(f"                 = {dp_stack_bara*1000:.1f} mbar")
+print("\n── BRANCH DIFFERENTIAL PRESSURE ──────────────────────────")
+print(f"  P_inlet_A = {P_in_A:.4f} bara")
+print(f"  P_inlet_B = {P_in_B:.4f} bara")
+print(f"  ΔP_between_branches = {dp_stack_bara:.4f} bara")
+print(f"                       = {dp_stack_bara*100:.3f} kPa")
+print(f"                       = {dp_stack_bara*1000:.1f} mbar")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SENSITIVITY ANALYSIS
@@ -378,7 +378,7 @@ _CS = {"Beggs-Brill": "BB", "Friedel": "Friedel", "Lockhart_Martinelli": "L-M",
        "Muller_Steinhagen_Heck": "MSH", "Chisholm": "Chisholm", "Kim_Mudawar": "Kim-M"}
 _VS = {"Homogeneous": "Homo", "Rouhani-1 (slip)": "Rouhani-1"}
 
-print(f"  {'Method':<22}  {'A (H₂) kPa':>12}  {'B (O₂) kPa':>12}")
+print(f"  {'Method':<22}  {'A (kPa)':>12}  {'B (kPa)':>12}")
 print(f"  {'-'*22}  {'-'*12}  {'-'*12}")
 for sa, sb in zip(sens_a, sens_b):
     c = _CS.get(sa["correlation"], sa["correlation"])
@@ -391,10 +391,10 @@ for sa, sb in zip(sens_a, sens_b):
 va_ok = [r["total_dp_kpa"] for r in sens_a if r["ok"]]
 vb_ok = [r["total_dp_kpa"] for r in sens_b if r["ok"]]
 if va_ok:
-    print(f"\n  H₂ ΔP range: {min(va_ok):.3f} – {max(va_ok):.3f} kPa  "
+    print(f"\n  Branch A ΔP range: {min(va_ok):.3f} – {max(va_ok):.3f} kPa  "
           f"(selected {res_a['total_dp_kpa']:.3f} kPa)")
 if vb_ok:
-    print(f"  O₂ ΔP range: {min(vb_ok):.3f} – {max(vb_ok):.3f} kPa  "
+    print(f"  Branch B ΔP range: {min(vb_ok):.3f} – {max(vb_ok):.3f} kPa  "
           f"(selected {res_b['total_dp_kpa']:.3f} kPa)")
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -403,7 +403,7 @@ if vb_ok:
 print("\n── Generating Word reports ──────────────────────────────")
 out_dir = os.path.dirname(__file__)
 
-# Report A (H2 branch)
+# Report A (branch A)
 buf_a = report_generator.generate_report(
     P_bara=P_in_A, T_C=T_C,
     gas_flows_kgh=GAS_A, liquid_type=LIQUID_TYPE, q_lye=Q_LYE,
@@ -413,12 +413,12 @@ buf_a = report_generator.generate_report(
     pipe_length_m=res_a["pipe_length_m"],
     cumulative_distance=res_a["cumulative_distance"],
     case_label=LABEL_A)
-path_a = os.path.join(out_dir, "report_case_A_H2.docx")
+path_a = os.path.join(out_dir, "report_case_A.docx")
 with open(path_a, "wb") as f:
     f.write(buf_a.getvalue())
 print(f"  Saved: {path_a}")
 
-# Report B (O2 branch)
+# Report B (branch B)
 buf_b = report_generator.generate_report(
     P_bara=P_in_B, T_C=T_C,
     gas_flows_kgh=GAS_B, liquid_type=LIQUID_TYPE, q_lye=Q_LYE,
@@ -428,7 +428,7 @@ buf_b = report_generator.generate_report(
     pipe_length_m=res_b["pipe_length_m"],
     cumulative_distance=res_b["cumulative_distance"],
     case_label=LABEL_B)
-path_b = os.path.join(out_dir, "report_case_B_O2.docx")
+path_b = os.path.join(out_dir, "report_case_B.docx")
 with open(path_b, "wb") as f:
     f.write(buf_b.getvalue())
 print(f"  Saved: {path_b}")
@@ -438,7 +438,7 @@ buf_cmp = report_generator.generate_comparison_report(
     results_a=res_a, results_b=res_b,
     label_a=LABEL_A, label_b=LABEL_B,
     sensitivity_data={"sa": sens_a, "sb": sens_b, "fig": None})
-path_cmp = os.path.join(out_dir, "report_comparison_H2_vs_O2.docx")
+path_cmp = os.path.join(out_dir, "report_comparison_A_vs_B.docx")
 with open(path_cmp, "wb") as f:
     f.write(buf_cmp.getvalue())
 print(f"  Saved: {path_cmp}")
@@ -446,9 +446,9 @@ print(f"  Saved: {path_cmp}")
 # Combined report (A + B + C)
 buf_combined = report_generator.generate_combined_report(
     cases=[res_a, res_b, res_c],
-    case_labels=[LABEL_A, LABEL_B, "C — H₂ Header"],
+    case_labels=[LABEL_A, LABEL_B, "C — Header A"],
     sensitivity_data={"sa": sens_a, "sb": sens_b, "fig": None})
-path_combined = os.path.join(out_dir, "report_combined_electrolyzer.docx")
+path_combined = os.path.join(out_dir, "report_combined_branches.docx")
 with open(path_combined, "wb") as f:
     f.write(buf_combined.getvalue())
 print(f"  Saved: {path_combined}")
@@ -465,11 +465,11 @@ print(f"  {LABEL_B}:")
 print(f"    Inlet: {P_in_B:.4f} bara  →  Outlet: {res_b['outlet_pressure_bara']:.4f} bara")
 print(f"    ΔP:    {res_b['total_dp_kpa']:.3f} kPa  "
       f"(fric {res_b['total_dp_fric_kpa']:.3f}  +  grav {res_b['total_dp_grav_kpa']:.3f})")
-print(f"  H₂ header ΔP:  {gsr_h2['dp_hdr']:.3f} kPa")
-print(f"  O₂ header ΔP:  {gsr_o2['dp_hdr']:.3f} kPa")
-print(f"  P_separator (H₂): {gsr_h2['P_sep']:.4f} bara")
-print(f"  P_separator (O₂): {gsr_o2['P_sep']:.4f} bara")
+print(f"  Header A ΔP:  {gsr_a['dp_hdr']:.3f} kPa")
+print(f"  Header B ΔP:  {gsr_b['dp_hdr']:.3f} kPa")
+print(f"  P_separator (A): {gsr_a['P_sep']:.4f} bara")
+print(f"  P_separator (B): {gsr_b['P_sep']:.4f} bara")
 print(f"  ─────────────────────────────────────")
-print(f"  STACK ΔP = {dp_stack_bara:.4f} bara  =  {dp_stack_bara*100:.3f} kPa  "
-      f"=  {dp_stack_bara*1000:.1f} mbar")
+print(f"  BRANCH ΔP = {dp_stack_bara:.4f} bara  =  {dp_stack_bara*100:.3f} kPa  "
+    f"=  {dp_stack_bara*1000:.1f} mbar")
 print("=" * 60)

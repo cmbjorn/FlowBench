@@ -6,7 +6,7 @@
 
 ## Overview
 
-This tool calculates pressure drops across complex, multi-directional piping networks carrying multiphase mixtures of gas (H₂/O₂ with water vapor) and dense liquid phases (30 wt% aqueous KOH).
+This tool calculates pressure drops across complex, multi-directional piping networks carrying multiphase mixtures of gases (e.g., H₂, O₂, or others with water vapor) and dense liquid phases (30 wt% aqueous KOH).
 
 ### Key Capabilities
 
@@ -57,10 +57,10 @@ The browser opens automatically at `http://localhost:8501`.
 
 ### 1. Set Process Boundaries
 - Inlet pressure (1–100 bara) and temperature (5–95°C)
-- Or load one of the built-in presets (H₂ side / O₂ side)
+- Or load one of the built-in gas-side presets
 
 ### 2. Define Flow Rates
-- H₂ mass flow (kg/h), O₂ mass flow (kg/h), KOH lye volume flow (m³/h)
+- Gas mass flows (kg/h), KOH lye volume flow (m³/h)
 
 ### 3. Build Pipe Geometry
 - Add segments with **+ Add Segment** / **- Remove Last**
@@ -136,7 +136,7 @@ multiphase_hydraulics/
 
 ## Limitations
 
-- Beggs & Brill was developed for oil/gas systems — uncertainty on H₂/KOH is ±20–30%
+- Beggs & Brill was developed for oil/gas systems — uncertainty for selected gases with KOH is ±20–30%
 - KOH correlations assume 30 wt% concentration (not adjustable)
 - Single flow path only — no parallel branches or network calculations
 - Steady-state; no transient, slug frequency, or liquid inventory calculations

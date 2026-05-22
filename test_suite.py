@@ -45,7 +45,7 @@ def _check(name, actual, expected, tol_pct=None, tol_abs=None, warn_only=False):
 
 def _run_validation_case(key, case):
     inp = case["inputs"]
-    gas_flows = {"H₂": inp["m_H2_kgh"], "O₂": inp["m_O2_kgh"]}
+    gas_flows = inp["gas_flows_kgh"]
 
     P_Pa = inp["P_bara"] * 1e5
     total_dp = 0.0
@@ -409,7 +409,7 @@ def test_header_goal_seek():
     T_C  = 60.0
     liq  = "KOH 30 wt%"
 
-    # Left arm: 2 segments, each with a branch tapping in H₂ + lye
+    # Left arm: 2 segments, each with a branch tapping gas + lye
     left_segs = [
         _make_arm_seg("DN100", 3.0, h2_kgh=5.0, q_lye=2.5),
         _make_arm_seg("DN100", 3.0, h2_kgh=5.0, q_lye=2.5),

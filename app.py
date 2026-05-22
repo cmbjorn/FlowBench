@@ -69,22 +69,22 @@ hr { margin: 0.75rem 0 !important; }
 """, unsafe_allow_html=True)
 
 st.title("Multiphase Pressure Drop Calculator")
-st.caption("Two-phase pressure drop · H₂ · O₂ · KOH · Six correlations · Steady-state")
+st.caption("Two-phase pressure drop · Gas + liquid · KOH · Six correlations · Steady-state")
 
 with st.expander("About this calculator", expanded=False):
     st.markdown("""
-    Sizes the **hydrogen and oxygen gas pipelines** from an alkaline or PEM electrolyzer to the gas–liquid separator. Each pipeline carries a two-phase mixture of gas (H₂ or O₂) entrained in electrolyte (KOH 30 wt%, KOH 15 wt%, Water, or custom) at elevated pressure.
+    Sizes gas pipelines that carry two-phase mixtures of gas entrained in liquids (for example KOH 30 wt%, KOH 15 wt%, water, or a user-defined fluid) at elevated pressure.
 
     **Typical workflow**
-    1. **Hydrogen pipe** tab — set inlet pressure, temperature, H₂ mass flow, and electrolyte flow; build the pipe geometry segment by segment (DN, PN, material, length, fittings, optional FEP/PTFE/PFA liner).
-    2. **Oxygen pipe** tab — same for the O₂ side (gas is heavier, ΔP differs).
-    3. **H₂ Header / O₂ Header** tabs — configure the collecting manifold (tap positions, header pipe, T-segment) for each gas.
-    4. **Generator ΔP** tab — goal-seek both systems simultaneously; the difference in branch inlet pressures is the **differential pressure across the electrolyzer stack**.
+    1. **Gas pipe A** tab — set inlet pressure, temperature, gas mass flow(s), and liquid flow; build the pipe geometry segment by segment (DN, PN, material, length, fittings, optional liner).
+    2. **Gas pipe B** tab — same for the second branch or comparison case.
+    3. **Header / Manifold** tabs — configure collecting manifolds (tap positions, header pipe, T-segment) for branch aggregation studies.
+    4. **Differential ΔP** tab — goal-seek both systems simultaneously; the difference in branch inlet pressures is reported as the differential across the device under study.
     5. **Compare** tab — overlay pressure profiles and export a combined Word or Excel report.
 
-    **Method** — Beggs & Brill (1973) default, with Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm, and Kim-Mudawar for cross-checking. Pressure marching: gas density updated at every segment inlet. ΔP split into frictional, gravitational, and accelerational components. Flow regime classified automatically (Taitel-Dukler + Mandhane for horizontal; Wallis/Taitel for vertical). Erosion check: API RP 14E, C = 100.
+    **Method** — Beggs & Brill (1973) default, with Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm, and Kim-Mudawar for cross-checking. Pressure marching: gas density updated at every segment inlet. ΔP split into frictional, gravitational, and accelerational components. Flow regime classified automatically. Erosion check: API RP 14E, C = 100.
 
-    **Accuracy note** — Correlations were developed for oil/gas systems. Uncertainty for H₂/O₂ over KOH is ±20–30 %. Use for design guidance and relative comparison; validate against commissioning data.
+    **Accuracy note** — Correlations were developed for oil/gas systems. Uncertainty for selected gases with KOH is ±20–30 %. Use for design guidance and relative comparison; validate against commissioning data.
     """)
 
 # ============================================================================
@@ -189,7 +189,7 @@ with st.sidebar:
     st.header("Documentation")
     with st.expander("Capabilities", expanded=False):
         st.markdown("""
-        **Cases** — Run the Hydrogen pipe and Oxygen pipe independently, then compare side by side.
+        **Cases** — Run Gas pipe A and Gas pipe B independently, then compare side by side.
         Useful for: alternative pipe routings, diameter studies, full-flow vs. turndown.
 
         **Gas species** — H₂, O₂, N₂, CO₂, CH₄, Ar, He, Air, or Custom (user-defined MW and viscosity).
@@ -252,9 +252,7 @@ with st.sidebar:
             st.info(val_cases.get_case_info(_sb_sel))
             if st.button("Run", key="sb_run_val", use_container_width=True):
                 _sb_vi = _sb_case["inputs"]
-                _sb_vg = {}
-                if _sb_vi.get("m_H2_kgh", 0) > 0: _sb_vg["H₂"] = _sb_vi["m_H2_kgh"]
-                if _sb_vi.get("m_O2_kgh", 0) > 0: _sb_vg["O₂"] = _sb_vi["m_O2_kgh"]
+                _sb_vg = _sb_vi["gas_flows_kgh"]
                 _sb_vl = _sb_vi.get("liquid_type", "KOH 30 wt%")
                 _sb_vp = engine.calculate_two_phase_properties(
                     _sb_vi["P_bara"], _sb_vi["T_C"], _sb_vg, _sb_vl, _sb_vi["q_lye_m3h"])
@@ -555,6 +553,12 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                                             step=0.5, key=k("cg_mu"))
                 custom_gas = {"MW_gmol": _cg_mw, "mu_upas": _cg_mu}
 
+            # Use CoolProp mixture evaluation when available
+            _use_cp_default = any(engine.GAS_SPECIES.get(sp, {}).get("coolprop_id")
+                                   for sp in selected_species if sp != "Custom")
+            use_coolprop = st.checkbox("Use CoolProp mixture evaluation (recommended)",
+                                      value=_use_cp_default, key=k("use_coolprop"))
+
         # Liquid Phase
         with st.container(border=True):
             st.markdown("**Liquid Phase**")
@@ -743,7 +747,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
         props = engine.calculate_two_phase_properties(
             P_bara, T_C, gas_flows_kgh, liquid_type, q_lye,
-            custom_gas=custom_gas, custom_liquid=custom_liquid)
+            custom_gas=custom_gas, custom_liquid=custom_liquid,
+            use_coolprop=use_coolprop)
 
         # Phase Properties
         with st.container(border=True):
@@ -831,7 +836,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
             props_seg = engine.calculate_two_phase_properties(
                 current_P/1e5, T_C, gas_flows_kgh, liquid_type, q_lye,
-                custom_gas=custom_gas, custom_liquid=custom_liquid)
+                custom_gas=custom_gas, custom_liquid=custom_liquid,
+                use_coolprop=use_coolprop)
 
             angle = {"Horizontal": 0.0,
                      "Vertical Upflow": np.pi/2.0,
