@@ -10,14 +10,15 @@ import hashlib
 import json
 
 st.set_page_config(
-    page_title="Electrolyzer Piping Calculator",
-    page_icon="⚗️",
+    page_title="Multiphase Pressure Drop Calculator",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 st.markdown("""
 <style>
+/* ── Metric cards ─────────────────────────────────────────── */
 [data-testid="stMetricValue"] {
     font-size: 1.45rem !important;
     font-weight: 600 !important;
@@ -25,19 +26,50 @@ st.markdown("""
     letter-spacing: -0.01em !important;
 }
 [data-testid="stMetricLabel"] {
-    font-size: 0.75rem !important;
+    font-size: 0.82rem !important;
     font-weight: 500 !important;
-    color: #64748B !important;
+    color: #475569 !important;
     text-transform: none !important;
     letter-spacing: normal !important;
 }
-[data-testid="stMetricDelta"] { font-size: 0.78rem !important; }
-hr { margin: 0.5rem 0 !important; }
+[data-testid="stMetricDelta"] { font-size: 0.80rem !important; }
+
+/* ── Section labels inside containers (**Bold** pattern) ─── */
+[data-testid="stMarkdownContainer"] p strong {
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+    color: #64748B !important;
+}
+
+/* ── Body text and captions ───────────────────────────────── */
+[data-testid="stMarkdownContainer"] p {
+    font-size: 0.92rem;
+    line-height: 1.55;
+    color: #1E293B;
+}
+[data-testid="stCaptionContainer"] p {
+    font-size: 0.82rem !important;
+    color: #64748B !important;
+    line-height: 1.5 !important;
+}
+
+/* ── Subheaders ───────────────────────────────────────────── */
+h3 {
+    font-size: 1.05rem !important;
+    font-weight: 600 !important;
+    color: #1E293B !important;
+    letter-spacing: -0.01em !important;
+}
+
+/* ── Dividers ─────────────────────────────────────────────── */
+hr { margin: 0.75rem 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Electrolyzer Gas Piping Calculator")
-st.caption("H₂ · O₂ · KOH · Two-phase pressure drop · Six correlations · Steady-state")
+st.title("Multiphase Pressure Drop Calculator")
+st.caption("Two-phase pressure drop · H₂ · O₂ · KOH · Six correlations · Steady-state")
 
 with st.expander("About this calculator", expanded=False):
     st.markdown("""
