@@ -4,7 +4,8 @@ Generates a Word (.docx) calculation report from multiphase hydraulics calculati
 """
 from io import BytesIO
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
+import atexit
+import threading
 
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
@@ -21,26 +22,45 @@ _IMG_TIMEOUT = 20  # seconds before giving up on kaleido
 _png_cache: dict = {}  # (id(fig), width, height, scale) → PNG bytes or None
 
 
+def _cleanup_kaleido():
+    """Kill the kaleido subprocess on process exit.
+    Prevents orphaned kaleido Node.js processes after Streamlit shuts down.
+    """
+    try:
+        import plotly.io as pio
+        scope = getattr(getattr(pio, "kaleido", None), "scope", None)
+        if scope is not None:
+            proc = getattr(scope, "_proc", None)
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+    except Exception:
+        pass
+
+
+atexit.register(_cleanup_kaleido)
+
+
 def _fig_to_png(fig, width=900, height=400, scale=2):
     """Render a Plotly figure to PNG bytes with a hard timeout.
     Returns bytes on success, None if kaleido hangs or fails.
-    Checks _png_cache first so prefetch_figures() avoids re-rendering.
+    Uses a daemon thread so a hung kaleido render never blocks process exit.
     """
     import plotly.io as pio
     _key = (id(fig), width, height, scale)
     if _key in _png_cache:
         return _png_cache[_key]
-    _ex = ThreadPoolExecutor(max_workers=1)
-    try:
-        _fut = _ex.submit(pio.to_image, fig,
-                          format="png", width=width, height=height, scale=scale)
-        result = _fut.result(timeout=_IMG_TIMEOUT)
-    except (_FuturesTimeout, Exception):
-        result = None
-    finally:
-        _ex.shutdown(wait=False)
-    _png_cache[_key] = result
-    return result
+    _result = [None]
+    def _render():
+        try:
+            _result[0] = pio.to_image(
+                fig, format="png", width=width, height=height, scale=scale)
+        except Exception:
+            pass
+    _t = threading.Thread(target=_render, daemon=True)
+    _t.start()
+    _t.join(timeout=_IMG_TIMEOUT)
+    _png_cache[_key] = _result[0]
+    return _result[0]
 
 
 def prefetch_figures(specs):
@@ -48,10 +68,11 @@ def prefetch_figures(specs):
 
     Call this before generating reports so all kaleido renders happen
     concurrently; subsequent _fig_to_png() calls are instant cache hits.
+    All threads are daemon threads — they are abandoned (not waited on)
+    if the process exits, preventing shutdown hangs.
     specs with None fig are silently skipped.
     """
     import plotly.io as pio
-    from concurrent.futures import wait as _wait
 
     to_render = [
         (fig, w, h, s)
@@ -61,25 +82,32 @@ def prefetch_figures(specs):
     if not to_render:
         return
 
-    _ex = ThreadPoolExecutor(max_workers=min(len(to_render), 4))
-    try:
-        futures = {
-            _ex.submit(pio.to_image, fig,
-                       format="png", width=w, height=h, scale=s): (id(fig), w, h, s)
-            for fig, w, h, s in to_render
-        }
-        done, _ = _wait(futures, timeout=_IMG_TIMEOUT)
-        for fut in done:
-            key = futures[fut]
-            try:
-                _png_cache[key] = fut.result()
-            except Exception:
-                _png_cache[key] = None
-        for fut, key in futures.items():
-            if key not in _png_cache:
-                _png_cache[key] = None
-    finally:
-        _ex.shutdown(wait=False)
+    _results: dict = {}
+    _lock = threading.Lock()
+
+    def _render(fig, w, h, s):
+        key = (id(fig), w, h, s)
+        try:
+            data = pio.to_image(fig, format="png", width=w, height=h, scale=s)
+        except Exception:
+            data = None
+        with _lock:
+            _results[key] = data
+
+    threads = [
+        threading.Thread(target=_render, args=(fig, w, h, s), daemon=True)
+        for fig, w, h, s in to_render
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=_IMG_TIMEOUT)
+
+    _png_cache.update(_results)
+    for fig, w, h, s in to_render:
+        key = (id(fig), w, h, s)
+        if key not in _png_cache:
+            _png_cache[key] = None
 
 
 def clear_fig_cache():
