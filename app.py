@@ -2757,6 +2757,28 @@ with tab_cmp:
                 except Exception as _e:
                     _errors.append(f"Combined: {_e}")
 
+                _dn_data = _build_dn_study_data()
+                if _dn_data is not None:
+                    try:
+                        _dn_buf = report_generator.generate_dn_study_report(
+                            dn_primary=_dn_data["dn_primary"],
+                            dn_alt=_dn_data["dn_alt"],
+                            label_a=_dn_data["label_a"],
+                            label_b=_dn_data["label_b"],
+                            gsr_h2_primary=_dn_data["gsr_h2_primary"],
+                            gsr_o2_primary=_dn_data["gsr_o2_primary"],
+                            gsr_h2_alt=_dn_data["gsr_h2_alt"],
+                            gsr_o2_alt=_dn_data["gsr_o2_alt"],
+                            dp_gen_primary_mbar=_dn_data["dp_gen_primary_mbar"],
+                            dp_gen_alt_mbar=_dn_data["dp_gen_alt_mbar"],
+                            vel_data=_dn_data["vel_data"],
+                            p_sep_h2=_dn_data["p_sep_h2"],
+                            p_sep_o2=_dn_data["p_sep_o2"],
+                        )
+                        st.session_state["dn_study_rpt_bytes"] = _dn_buf.getvalue()
+                    except Exception as _e:
+                        _errors.append(f"DN Study: {_e}")
+
             if _errors:
                 for _err in _errors:
                     st.error(f"Report failed: {_err}")
@@ -2794,11 +2816,23 @@ with tab_cmp:
                 file_name="report_combined.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True, key="dl_combined_rpt")
+        if st.session_state.get("dn_study_rpt_bytes"):
+            _dn_p_lbl_all = st.session_state.get("dn_study_dn_primary", "primary")
+            _dn_a_lbl_all = st.session_state.get("dn_study_dn_alt", "alt")
+            _dl_cols3 = st.columns(2)
+            _dl_cols3[0].download_button(
+                f"Download DN Study {_dn_p_lbl_all} vs {_dn_a_lbl_all}  (.docx)",
+                data=st.session_state["dn_study_rpt_bytes"],
+                file_name=f"dn_study_{_dn_p_lbl_all}_vs_{_dn_a_lbl_all}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True, key="dl_dn_study_all")
 
     if not _sens_avail:
         st.caption("ℹ Run the Sensitivity Analysis above first to include it in the reports.")
     if not st.session_state.get("stack_gsr_h2"):
         st.caption("ℹ Run the Generator ΔP calculation (Generator ΔP tab) first to include it in the reports.")
+    if not st.session_state.get("dn_study_dn_primary"):
+        st.caption("ℹ Run the DN Study (DN Study tab) first to include it in the reports.")
 
     st.divider()
 
