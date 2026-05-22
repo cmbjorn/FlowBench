@@ -1323,6 +1323,43 @@ def _calc_dp_at_p(res, P_bara_override):
     return dp_kpa, outlet_bara
 
 
+def _calc_regimes_at_p(res, P_bara_override):
+    """Run segments at the given inlet pressure; return list of dicts with
+    seg label, pipe label, and regime string — one entry per segment."""
+    current_P = P_bara_override * 1e5
+    corr = res.get("correlation",    engine.TWO_PHASE_CORRELATIONS[0])
+    void = res.get("voidage_method", engine.VOIDAGE_METHODS[0])
+    cgas = res.get("custom_gas")
+    cliq = res.get("custom_liquid")
+    out = []
+    for i, seg in enumerate(res["segments"]):
+        D_seg  = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
+        lined  = seg.get("lined", False)
+        lthk_m = seg.get("liner_thickness_mm", 1.0) / 1000.0
+        lmat   = seg.get("liner_material", "FEP")
+        D_eff  = D_seg - 2 * lthk_m if lined else D_seg
+        rough  = (engine.LINER_ROUGHNESS[lmat] if lined
+                  else engine.MATERIAL_ROUGHNESS[seg.get("material", "SS316L")])
+        props  = engine.calculate_two_phase_properties(
+            current_P / 1e5, res["T_C"],
+            res["gas_flows_kgh"], res["liquid_type"], res["q_lye"],
+            custom_gas=cgas, custom_liquid=cliq)
+        angle  = {"Horizontal": 0.0, "Vertical Upflow": np.pi / 2.0,
+                  "Vertical Downflow": -np.pi / 2.0}[seg["type"]]
+        le_fit = _sum_le_fit(seg, D_eff)
+        seg_res = engine.calculate_segment_pressure_drop(
+            props, D_eff, rough, seg["length"] + le_fit, angle,
+            correlation=corr, voidage_method=void)
+        out.append({
+            "seg":    f"#{i + 1}",
+            "pipe":   f"{seg['dn']}/{seg['pn']}",
+            "regime": seg_res["regime"],
+        })
+        current_P -= seg_res["dP_Pa"]
+        current_P  = max(1e4, current_P)
+    return out
+
+
 def _march_header_simple(tap_dists, gas_per_tap, liq_per_tap,
                           hdr, P_start_Pa, T_C, liquid_type, corr, void):
     """Pressure-march one header arm from farthest tap to T-junction.
@@ -2971,10 +3008,14 @@ with tab_dn:
                 _rb_alt = _apply_dn_override(results_b, dn_alt)
                 _gsr_h2_alt = _goal_seek_stack(_ra_alt, results_c, _p_sep_h2_dn)
                 _gsr_o2_alt = _goal_seek_stack(_rb_alt, results_d, _p_sep_o2_dn)
-            st.session_state["dn_study_dn_primary"] = _dn_primary
-            st.session_state["dn_study_dn_alt"]     = dn_alt
-            st.session_state["dn_study_gsr_h2_alt"] = _gsr_h2_alt
-            st.session_state["dn_study_gsr_o2_alt"] = _gsr_o2_alt
+                _reg_a_alt  = _calc_regimes_at_p(_ra_alt, _gsr_h2_alt["P_line_in"])
+                _reg_b_alt  = _calc_regimes_at_p(_rb_alt, _gsr_o2_alt["P_line_in"])
+            st.session_state["dn_study_dn_primary"]  = _dn_primary
+            st.session_state["dn_study_dn_alt"]      = dn_alt
+            st.session_state["dn_study_gsr_h2_alt"]  = _gsr_h2_alt
+            st.session_state["dn_study_gsr_o2_alt"]  = _gsr_o2_alt
+            st.session_state["dn_study_regimes_a"]   = _reg_a_alt
+            st.session_state["dn_study_regimes_b"]   = _reg_b_alt
             st.rerun()
 
         _gsr_h2_p = st.session_state.get("stack_gsr_h2")
@@ -3074,6 +3115,42 @@ with tab_dn:
                         f"·  factor {_vel_scale:.2f}×.  "
                         f"Erosion limit V_e from primary case (API RP 14E, C = 100)."
                     )
+
+                # ── Flow Regime ───────────────────────────────────────────────
+                _reg_a_stored = st.session_state.get("dn_study_regimes_a", [])
+                _reg_b_stored = st.session_state.get("dn_study_regimes_b", [])
+                if _reg_a_stored or _reg_b_stored:
+                    with st.container(border=True):
+                        st.markdown("**Flow Regime by Segment**")
+                        _rr1, _rr2 = st.columns(2)
+                        with _rr1:
+                            st.caption(f"*{_la} branch*")
+                            _prim_a_recs = results_a.get("grid_records", [])
+                            _rrA = []
+                            for _ri, _ar in enumerate(_reg_a_stored):
+                                _pr = _prim_a_recs[_ri]["Regime"] if _ri < len(_prim_a_recs) else "—"
+                                _rrA.append({
+                                    "Seg":      _ar["seg"],
+                                    _dn_p_lbl:  _pr,
+                                    _dn_a_lbl:  _ar["regime"],
+                                    "Changed":  "⚠" if _pr != _ar["regime"] else "✓",
+                                })
+                            st.dataframe(pd.DataFrame(_rrA), hide_index=True,
+                                         use_container_width=True)
+                        with _rr2:
+                            st.caption(f"*{_lb} branch*")
+                            _prim_b_recs = results_b.get("grid_records", [])
+                            _rrB = []
+                            for _ri, _br in enumerate(_reg_b_stored):
+                                _pr = _prim_b_recs[_ri]["Regime"] if _ri < len(_prim_b_recs) else "—"
+                                _rrB.append({
+                                    "Seg":      _br["seg"],
+                                    _dn_p_lbl:  _pr,
+                                    _dn_a_lbl:  _br["regime"],
+                                    "Changed":  "⚠" if _pr != _br["regime"] else "✓",
+                                })
+                            st.dataframe(pd.DataFrame(_rrB), hide_index=True,
+                                         use_container_width=True)
 
                 # ── Recommendation ────────────────────────────────────────────
                 _vel_ok  = _ratio_a <= 1.0 and _ratio_b <= 1.0
