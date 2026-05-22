@@ -285,6 +285,15 @@ with st.sidebar:
                     st.warning(f"Failed — {_sb_err:.2f}% exceeds ±{_sb_tol:.0f}%")
 
     st.divider()
+    st.markdown("**Report Settings**")
+    st.checkbox(
+        "Include charts in reports",
+        value=False,
+        key="reports_include_charts",
+        help="Requires kaleido and Node.js. Disable if report generation crashes or hangs.",
+    )
+
+    st.divider()
     st.header("Session")
 
     # ── Save ──────────────────────────────────────────────────────────────────
@@ -1112,6 +1121,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             if st.button("Generate Report", type="primary",
                          use_container_width=True, key=k("gen_rpt")):
                 with st.spinner("Building document…"):
+                    _inc_ch = st.session_state.get("reports_include_charts", False)
                     _buf = report_generator.generate_report(
                         P_bara=P_bara, T_C=T_C,
                         gas_flows_kgh=gas_flows_kgh, liquid_type=liquid_type, q_lye=q_lye,
@@ -1121,7 +1131,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                         outlet_pressure_bara=outlet_pressure_bara,
                         pipe_length_m=pipe_length_m,
                         cumulative_distance=cumulative_distance,
-                        fig_sch=fig_sch, fig_prof=fig_prof,
+                        fig_sch=fig_sch if _inc_ch else None,
+                        fig_prof=fig_prof if _inc_ch else None,
                         case_label=st.session_state.get(
                             f"label_{cid}", f"Case {cid.upper()}"))
                     st.session_state[k("rpt_bytes")] = _buf.getvalue()
@@ -2714,13 +2725,17 @@ with tab_cmp:
     with _cmp_btn_col:
         if st.button("Generate Comparison Report", type="primary",
                      use_container_width=True, key="gen_cmp_rpt"):
+            _inc_ch = st.session_state.get("reports_include_charts", False)
             with st.spinner("Building comparison report…"):
                 try:
+                    _sd = _build_sens_data()
                     _cbuf = report_generator.generate_comparison_report(
                         results_a=ra, results_b=rb,
                         label_a=_la, label_b=_lb,
-                        fig_cmp=fig_cmp, fig_bar=fig_bar,
-                        sensitivity_data=_build_sens_data(),
+                        fig_cmp=fig_cmp if _inc_ch else None,
+                        fig_bar=fig_bar if _inc_ch else None,
+                        sensitivity_data=(
+                            {**_sd, "fig": None} if _sd and not _inc_ch else _sd),
                         stack_dp=_build_stack_dp_data())
                     st.session_state["cmp_rpt_bytes"] = _cbuf.getvalue()
                     st.success("Comparison report ready.")
@@ -2740,13 +2755,19 @@ with tab_cmp:
     with _cmb_btn_col:
         if st.button("Generate Combined Report", type="primary",
                      use_container_width=True, key="gen_combined_rpt"):
-            with st.spinner("Building combined report (includes charts — may take a minute)…"):
+            _inc_ch = st.session_state.get("reports_include_charts", False)
+            _spinner_msg = ("Building combined report…" if not _inc_ch
+                            else "Building combined report (charts enabled — may take a minute)…")
+            with st.spinner(_spinner_msg):
                 try:
+                    _sd = _build_sens_data()
                     _combined_buf = report_generator.generate_combined_report(
                         cases=[ra, rb, results_c, results_d],
                         case_labels=[_la, _lb, _lc, _ld],
-                        fig_cmp=fig_cmp, fig_bar=fig_bar,
-                        sensitivity_data=_build_sens_data(),
+                        fig_cmp=fig_cmp if _inc_ch else None,
+                        fig_bar=fig_bar if _inc_ch else None,
+                        sensitivity_data=(
+                            {**_sd, "fig": None} if _sd and not _inc_ch else _sd),
                         stack_dp=_build_stack_dp_data(),
                         dn_study_data=_build_dn_study_data())
                     st.session_state["combined_rpt_bytes"] = _combined_buf.getvalue()
