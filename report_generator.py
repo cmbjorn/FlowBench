@@ -23,17 +23,20 @@ _IMG_TIMEOUT = 20  # seconds before giving up on kaleido
 def _fig_to_png(fig, width=900, height=400, scale=2):
     """Render a Plotly figure to PNG bytes with a hard timeout.
     Returns bytes on success, None if kaleido hangs or fails.
-    Kaleido can deadlock when called from a Streamlit run thread;
-    running it in a separate thread lets us abort cleanly.
+    Kaleido can deadlock when called from a Streamlit run thread.
+    We use shutdown(wait=False) so a hung kaleido process is abandoned
+    immediately rather than blocking the caller indefinitely.
     """
     import plotly.io as pio
+    _ex = ThreadPoolExecutor(max_workers=1)
     try:
-        with ThreadPoolExecutor(max_workers=1) as _ex:
-            _fut = _ex.submit(pio.to_image, fig,
-                              format="png", width=width, height=height, scale=scale)
-            return _fut.result(timeout=_IMG_TIMEOUT)
+        _fut = _ex.submit(pio.to_image, fig,
+                          format="png", width=width, height=height, scale=scale)
+        return _fut.result(timeout=_IMG_TIMEOUT)
     except (_FuturesTimeout, Exception):
         return None
+    finally:
+        _ex.shutdown(wait=False)
 
 
 def _shd(cell, fill_hex):
