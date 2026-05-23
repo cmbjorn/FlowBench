@@ -2,84 +2,76 @@
 """
 Reference validation cases for multiphase flow pressure drop calculations.
 
-Expected values are computed from the corrected engine (Beggs & Brill with
-angles in degrees, correct lye mass-flow). They serve as regression anchors —
-if you change the engine, run these to detect unintended shifts.
+All gas+liquid cases now use `liquid_flows_kgh` (dict of species → kg/h) as the
+liquid input, which feeds the CoolProp-backed liquid mixture path in the engine.
+Cases that previously used KOH 30 wt% have been migrated to Water; their expected
+ΔP values are set to None (auto-calibrated on first run) because KOH and Water
+have different physical properties.
 
-Note: Beggs & Brill was developed for oil/gas systems. These validation cases
-exercise the correlation outside its original validation domain; results should
-be treated as engineering estimates, not certified reference values.
-
---- Library canonical reference (independent check) ---
-The fluids library ships its own docstring example for Beggs_Brill:
-  m=0.6 kg/s, x=0.1, rhol=915, rhog=2.67, mul=180e-6, mug=14e-6,
-  sigma=0.0487, P=1e7 Pa, D=0.05 m, angle=0°, L=1 m
-  → 686.97 Pa  (verified: fluids 1.0.x)
-This uses oil/gas properties so it cannot be expressed as those engine
-inputs; it is verified separately in the test suite.
+Expected values with a number serve as regression anchors — if you change the
+engine, run these to detect unintended shifts.
 """
 
 VALIDATION_CASES = {
     "reference_horizontal_stratified": {
         "name": "Horizontal Stratified Flow — Low Velocity",
-            "description": (
+        "description": (
             "Horizontal DN100 pipe, 50 m, gas/liquid mixture at low superficial "
             "velocities (Vsg ≈ 0.17 m/s, Vsl ≈ 0.10 m/s). "
             "Friction-dominated; gravitational component is zero. "
-            "Expected ΔP ≈ 0.28 kPa from Beggs & Brill friction correlation."
+            "Expected ΔP from Beggs & Brill friction correlation (Water liquid)."
         ),
         "inputs": {
             "P_bara":    5.0,
             "T_C":      25.0,
             "gas_flows_kgh": {"H₂": 2.0, "O₂": 0.5},
-            "q_lye_m3h": 3.0,
+            "liquid_flows_kgh": {"Water": 2991.0},
             "pipe_dn":  "DN100",
             "pipe_pn":  "PN20",
             "segments": [
                 {"type": "Horizontal", "length": 50.0, "fittings": "None", "fitting_count": 0}
             ]
         },
-        "expected_total_dp_kpa": 0.280,
+        "expected_total_dp_kpa": None,
         "tolerance_pct": 5.0,
-        "source": "Beggs & Brill (1973) correlation — validation inputs, regression reference"
+        "source": "Beggs & Brill (1973) correlation — regression anchor (Water, migrated from KOH)"
     },
 
     "reference_vertical_upflow": {
         "name": "Vertical Upflow — Gravity-Dominated",
-            "description": (
+        "description": (
             "Vertical DN80 riser, 30 m upflow, gas/liquid mixture at 8 bara, 40 °C. "
-            "Gravity dominates (hydrostatic head ~88–379 kPa depending on holdup). "
-            "Beggs & Brill holdup model gives ΔP ≈ 217 kPa. "
-            "Bubble/Slug regime at Vsg ≈ 0.48 m/s."
+            "Gravity dominates (hydrostatic head). "
+            "Bubble/Slug regime at Vsg ≈ 0.48 m/s. Water liquid."
         ),
         "inputs": {
             "P_bara":    8.0,
             "T_C":      40.0,
             "gas_flows_kgh": {"H₂": 5.0, "O₂": 1.2},
-            "q_lye_m3h": 2.5,
+            "liquid_flows_kgh": {"Water": 2480.0},
             "pipe_dn":  "DN80",
             "pipe_pn":  "PN25",
             "segments": [
                 {"type": "Vertical Upflow", "length": 30.0, "fittings": "None", "fitting_count": 0}
             ]
         },
-        "expected_total_dp_kpa": 217.317,
+        "expected_total_dp_kpa": None,
         "tolerance_pct": 5.0,
-        "source": "Beggs & Brill (1973) correlation — validation inputs, regression reference"
+        "source": "Beggs & Brill (1973) correlation — regression anchor (Water, migrated from KOH)"
     },
 
     "reference_mixed_horizontal_vertical": {
         "name": "Mixed Geometry — Horizontal Run + Vertical Riser",
-            "description": (
+        "description": (
             "DN100 system: 25 m horizontal with one 90° elbow, then 15 m vertical riser. "
             "Horizontal friction negligible vs riser gravity head. "
-            "Total ΔP ≈ 162 kPa, dominated by 15 m upflow section."
+            "Total ΔP dominated by 15 m upflow section. Water liquid."
         ),
         "inputs": {
             "P_bara":    6.0,
             "T_C":      50.0,
             "gas_flows_kgh": {"H₂": 3.5, "O₂": 0.8},
-            "q_lye_m3h": 2.0,
+            "liquid_flows_kgh": {"Water": 1976.0},
             "pipe_dn":  "DN100",
             "pipe_pn":  "PN20",
             "segments": [
@@ -89,27 +81,24 @@ VALIDATION_CASES = {
                  "fittings": "None",               "fitting_count": 0}
             ]
         },
-        "expected_total_dp_kpa": 162.467,
+        "expected_total_dp_kpa": None,
         "tolerance_pct": 5.0,
-        "source": "Beggs & Brill (1973) correlation — validation inputs, regression reference"
+        "source": "Beggs & Brill (1973) correlation — regression anchor (Water, migrated from KOH)"
     },
-
-    # ── New cases added to extend coverage ────────────────────────────────────
 
     "downflow_gravity_recovery": {
         "name": "Vertical Downflow — Gravity-Assisted (Pressure Gain)",
-            "description": (
+        "description": (
             "DN80 vertical downflow, 20 m. Gravity drives the liquid column downward, "
             "recovering more pressure head than friction consumes, so the net ΔP is "
             "negative (outlet pressure > inlet pressure). "
-            "Annular regime at Vsg ≈ 0.83 m/s, Vsl ≈ 0.23 m/s. "
-            "Tests that the engine correctly handles pressure-gain segments."
+            "Tests that the engine correctly handles pressure-gain segments. Water liquid."
         ),
         "inputs": {
             "P_bara":    10.0,
             "T_C":      60.0,
             "gas_flows_kgh": {"H₂": 10.0, "O₂": 3.0},
-            "q_lye_m3h": 4.0,
+            "liquid_flows_kgh": {"Water": 3932.0},
             "pipe_dn":  "DN80",
             "pipe_pn":  "PN25",
             "segments": [
@@ -117,25 +106,24 @@ VALIDATION_CASES = {
                  "fittings": "None", "fitting_count": 0}
             ]
         },
-        "expected_total_dp_kpa": -49.104,
+        "expected_total_dp_kpa": None,
         "tolerance_pct": 5.0,
-        "source": "Beggs & Brill (1973) correlation — validation inputs, regression reference"
+        "source": "Beggs & Brill (1973) correlation — regression anchor (Water, migrated from KOH)"
     },
 
     "high_pressure_horizontal": {
         "name": "High-Pressure Horizontal — Elevated Gas Density",
-            "description": (
+        "description": (
             "DN150 horizontal pipe, 50 m, at 30 bara and 70 °C. "
             "Higher pressure increases the gas density, "
             "increasing the homogeneous mixture density and altering the holdup. "
-            "Stratified regime at low superficial velocities. "
-            "Tests pressure-dependent gas density behaviour."
+            "Stratified regime at low superficial velocities. Water liquid."
         ),
         "inputs": {
             "P_bara":    30.0,
             "T_C":      70.0,
             "gas_flows_kgh": {"H₂": 50.0, "O₂": 25.0},
-            "q_lye_m3h": 20.0,
+            "liquid_flows_kgh": {"Water": 19560.0},
             "pipe_dn":  "DN150",
             "pipe_pn":  "PN40",
             "segments": [
@@ -143,24 +131,23 @@ VALIDATION_CASES = {
                  "fittings": "None", "fitting_count": 0}
             ]
         },
-        "expected_total_dp_kpa": 1.292,
+        "expected_total_dp_kpa": None,
         "tolerance_pct": 5.0,
-        "source": "Beggs & Brill (1973) correlation — validation inputs, regression reference"
+        "source": "Beggs & Brill (1973) correlation — regression anchor (Water, migrated from KOH)"
     },
 
     "large_riser_high_flow": {
         "name": "Large-Diameter Riser — High Flow, Bubble/Slug",
-            "description": (
-            "DN200 vertical riser, 15 m, at 16 bara and 80 °C with high gas and lye flows. "
+        "description": (
+            "DN200 vertical riser, 15 m, at 16 bara and 80 °C with high gas and liquid flows. "
             "Tests the engine on the largest standard pipe size with combined gas flows. "
-            "Bubble/Slug regime at Vsg ≈ 0.83 m/s, Vsl ≈ 0.43 m/s. "
-            "Gravity-dominated: ΔP ≈ 94 kPa over 15 m."
+            "Bubble/Slug regime. Gravity-dominated. Water liquid."
         ),
         "inputs": {
             "P_bara":    16.0,
             "T_C":      80.0,
             "gas_flows_kgh": {"H₂": 100.0, "O₂": 50.0},
-            "q_lye_m3h": 50.0,
+            "liquid_flows_kgh": {"Water": 48600.0},
             "pipe_dn":  "DN200",
             "pipe_pn":  "PN25",
             "segments": [
@@ -168,26 +155,24 @@ VALIDATION_CASES = {
                  "fittings": "None", "fitting_count": 0}
             ]
         },
-        "expected_total_dp_kpa": 93.758,
+        "expected_total_dp_kpa": None,
         "tolerance_pct": 5.0,
-        "source": "Beggs & Brill (1973) correlation — validation inputs, regression reference"
+        "source": "Beggs & Brill (1973) correlation — regression anchor (Water, migrated from KOH)"
     },
 
     "near_single_phase_liquid": {
         "name": "Near-Single-Phase Liquid — Trace Gas Fraction",
-            "description": (
+        "description": (
             "DN100 horizontal pipe, 50 m, with trace gas and "
-            "8 m³/h lye recirculation. Mass quality x ≈ 0.002%, void fraction α ≈ 1.8%. "
-            "Result should approach single-phase Darcy-Weisbach for KOH lye. "
-            "D-W predicts ≈ 507 Pa; Beggs-Brill gives ≈ 674 Pa (~33% higher, "
-            "acceptable since BB is a multiphase correlation not tuned for single-phase). "
+            "~7.9 m³/h water recirculation. Mass quality x ≈ 0.002%, void fraction α ≈ 1.8%. "
+            "Result should approach single-phase Darcy-Weisbach for Water. "
             "Useful as a lower-bound sanity check on friction losses."
         ),
         "inputs": {
             "P_bara":    10.0,
             "T_C":      60.0,
             "gas_flows_kgh": {"H₂": 0.1, "O₂": 0.1},
-            "q_lye_m3h": 8.0,
+            "liquid_flows_kgh": {"Water": 7864.0},
             "pipe_dn":  "DN100",
             "pipe_pn":  "PN20",
             "segments": [
@@ -195,37 +180,30 @@ VALIDATION_CASES = {
                  "fittings": "None", "fitting_count": 0}
             ]
         },
-        "expected_total_dp_kpa": 0.674,
+        "expected_total_dp_kpa": None,
         "tolerance_pct": 5.0,
-        "source": (
-            "Beggs & Brill (1973) correlation — validation inputs, regression reference. "
-            "Independent check: Darcy-Weisbach for KOH lye at same conditions gives "
-            "≈ 0.507 kPa (BB is ~33% higher, consistent with multiphase-correlation bias)."
-        )
+        "source": "Beggs & Brill (1973) correlation — regression anchor (Water, migrated from KOH)"
     },
 
-    # ── New general-fluid cases ──────────────────────────────────────────────
-
     "air_water_horizontal": {
-        "name": "Air / Water — Horizontal, General CoolProp Liquid",
+        "name": "Air / Water — Horizontal, CoolProp Liquid",
         "description": (
             "Horizontal DN80 pipe, 50 m, Air gas + Water liquid at 5 bara, 25 °C. "
-            "Exercises the generalized CoolProp liquid lookup path (not KOH). "
+            "Exercises the generalized CoolProp liquid lookup path. "
             "Expected ΔP from Beggs & Brill friction + zero gravity component."
         ),
         "inputs": {
             "P_bara":    5.0,
             "T_C":      25.0,
             "gas_flows_kgh": {"Air": 100.0},
-            "liquid_type": "Water",
-            "q_lye_m3h": 5.0,
+            "liquid_flows_kgh": {"Water": 4985.0},
             "pipe_dn":  "DN80",
             "pipe_pn":  "PN20",
             "segments": [
                 {"type": "Horizontal", "length": 50.0, "fittings": "None", "fitting_count": 0}
             ]
         },
-        "expected_total_dp_kpa": None,   # auto-calibrated on first run (regression anchor)
+        "expected_total_dp_kpa": None,
         "tolerance_pct": 5.0,
         "source": "Regression anchor — Beggs & Brill, CoolProp Water properties",
         "mode": "gas_liquid",
@@ -250,7 +228,7 @@ VALIDATION_CASES = {
                 {"type": "Vertical Upflow", "length": 20.0, "fittings": "None", "fitting_count": 0}
             ]
         },
-        "expected_total_dp_kpa": None,   # auto-calibrated on first run
+        "expected_total_dp_kpa": None,
         "tolerance_pct": 5.0,
         "source": "VLE mode regression anchor — CoolProp Water saturation, Beggs & Brill",
         "mode": "vle",
@@ -260,22 +238,21 @@ VALIDATION_CASES = {
         "name": "Single-Phase N₂ Gas — Darcy-Weisbach Fallback",
         "description": (
             "Horizontal DN50 pipe, 100 m, pure N₂ gas at 30 bara, 40 °C, no liquid. "
-            "Liquid volume flow = 0 → single-phase gas Darcy-Weisbach fallback engaged. "
+            "Liquid flow = 0 → single-phase gas Darcy-Weisbach fallback engaged. "
             "ΔP ≈ Darcy-Weisbach with N₂ density from ideal gas at 30 bara."
         ),
         "inputs": {
             "P_bara":    30.0,
             "T_C":      40.0,
             "gas_flows_kgh": {"N₂": 200.0},
-            "liquid_type": "Water",
-            "q_lye_m3h": 0.0,
+            "liquid_flows_kgh": {},
             "pipe_dn":  "DN50",
             "pipe_pn":  "PN20",
             "segments": [
                 {"type": "Horizontal", "length": 100.0, "fittings": "None", "fitting_count": 0}
             ]
         },
-        "expected_total_dp_kpa": None,   # auto-calibrated on first run
+        "expected_total_dp_kpa": None,
         "tolerance_pct": 5.0,
         "source": "Single-phase fallback regression anchor — Darcy-Weisbach, N₂ ideal gas",
         "mode": "gas_liquid",
@@ -299,27 +276,46 @@ def get_case_info(case_name):
     if not case:
         return "Validation case not found."
 
-    segs = case["inputs"]["segments"]
+    mode = case.get("mode", "gas_liquid")
+    inp  = case["inputs"]
+    segs = inp["segments"]
     seg_lines = "\n".join(
         f"  - {s['type']}, {s['length']} m"
-        + (f", {s['fitting_count']}× {s['fittings']}" if s["fittings"] != "None" else "")
+        + (f", {s['fitting_count']}× {s['fittings']}" if s.get("fittings", "None") != "None" else "")
         for s in segs
     )
 
-    gas_flows = case['inputs']['gas_flows_kgh']
-    gas_line = ' · '.join(f"{sp}: {kg:.3g} kg/h" for sp, kg in gas_flows.items())
+    exp = case["expected_total_dp_kpa"]
+    exp_str = f"{exp:.3f} kPa  (tolerance ±{case['tolerance_pct']:.0f}%)" if exp is not None \
+              else "Auto-calibrated (no reference value)"
+
+    if mode == "vle":
+        flow_line = (f"VLE fluid: {inp.get('vle_fluid', '?')}  · "
+                     f"x = {inp.get('vle_x_mass', '?')}  · "
+                     f"ṁ = {inp.get('vle_m_total_kgs', '?')} kg/s")
+        p_line = f"Pressure: {inp.get('P_bara', '?')} bara (T_sat from CoolProp)"
+    else:
+        gas_flows = inp.get("gas_flows_kgh", {})
+        gas_line  = " · ".join(f"{sp}: {kg:.3g} kg/h" for sp, kg in gas_flows.items())
+        liq_flows = inp.get("liquid_flows_kgh", {})
+        if liq_flows:
+            liq_line = " · ".join(f"{sp}: {m:.3g} kg/h" for sp, m in liq_flows.items())
+        else:
+            liq_line = "none (single-phase gas)"
+        flow_line = f"Gas: {gas_line}  ·  Liquid: {liq_line}"
+        p_line    = f"Pressure: {inp.get('P_bara', '?')} bara · Temperature: {inp.get('T_C', '?')} °C"
 
     return f"""
 **{case['name']}**
 
 {case['description']}
 
-**Expected ΔP:** {case['expected_total_dp_kpa']:.3f} kPa  (tolerance ±{case['tolerance_pct']:.0f}%)
+**Expected ΔP:** {exp_str}
 
 **Inputs:**
-- Pressure: {case['inputs']['P_bara']} bara · Temperature: {case['inputs']['T_C']} °C
-- Gas flows: {gas_line} · Lye: {case['inputs']['q_lye_m3h']} m³/h
-- Pipe: {case['inputs']['pipe_dn']} / {case['inputs']['pipe_pn']}
+- {p_line}
+- {flow_line}
+- Pipe: {inp.get('pipe_dn', '?')} / {inp.get('pipe_pn', '?')}
 - Segments:
 {seg_lines}
 

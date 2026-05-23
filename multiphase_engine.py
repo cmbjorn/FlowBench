@@ -170,35 +170,11 @@ GAS_CATEGORIES = {
 }
 
 # ============================================================================
-# 3. LIQUID PHASE DATABASE
+# 3. LIQUID PHASE DATABASE  (CoolProp-backed species only)
+#    Special fluids (KOH 30/15 wt%, Custom) are archived in _specials.py.
 # ============================================================================
 
-LIQUID_PHASES = [
-    # Water-based
-    "KOH 30 wt%", "KOH 15 wt%", "Water",
-    # Organic solvents
-    "Methanol", "Ethanol", "Acetone", "Benzene", "Toluene",
-    # Hydrocarbons (liquid)
-    "n-Pentane", "n-Hexane", "n-Heptane", "Cyclohexane",
-    # LPG / cryogenic
-    "Propane (liq.)", "n-Butane (liq.)", "Ammonia (liq.)",
-    # Refrigerants (liquid)
-    "R-134a (liq.)", "CO₂ (liq.)",
-    # Custom
-    "Custom",
-]
-
-# UI groupings for the liquid selector.
-LIQUID_CATEGORIES = {
-    "Water-based":          ["KOH 30 wt%", "KOH 15 wt%", "Water"],
-    "Organic solvents":     ["Methanol", "Ethanol", "Acetone", "Benzene", "Toluene"],
-    "Hydrocarbons (liq.)":  ["n-Pentane", "n-Hexane", "n-Heptane", "Cyclohexane"],
-    "LPG / cryogenic":      ["Propane (liq.)", "n-Butane (liq.)", "Ammonia (liq.)"],
-    "Refrigerants (liq.)":  ["R-134a (liq.)", "CO₂ (liq.)"],
-    "Custom":               ["Custom"],
-}
-
-# CoolProp fluid IDs for CoolProp-backed liquids.
+# CoolProp fluid IDs for liquid-phase species.
 LIQUID_COOLPROP_ID = {
     "Water":           "Water",
     "Methanol":        "Methanol",
@@ -234,15 +210,10 @@ LIQUID_SIGMA_FALLBACK = {
     "Ammonia (liq.)":  0.021,
     "R-134a (liq.)":   0.008,
     "CO₂ (liq.)":      0.003,
-    "KOH 30 wt%":      0.072,
-    "KOH 15 wt%":      0.072,
-    "Custom":          0.020,
 }
 
-# Aqueous liquids add H₂O vapour to the gas phase via Dalton's Law.
+# Aqueous species trigger H₂O vapour addition to the gas phase (Dalton's Law).
 LIQUID_AQUEOUS = {
-    "KOH 30 wt%":      True,
-    "KOH 15 wt%":      True,
     "Water":            True,
     "Methanol":         False,
     "Ethanol":          False,
@@ -258,7 +229,6 @@ LIQUID_AQUEOUS = {
     "Ammonia (liq.)":   False,
     "R-134a (liq.)":    False,
     "CO₂ (liq.)":       False,
-    "Custom":           False,
 }
 
 # ============================================================================
@@ -267,7 +237,7 @@ LIQUID_AQUEOUS = {
 
 # Maps every display-name species to a thermo Chemical identifier.
 # None entries are handled specially (Air → N₂/O₂/Ar split).
-# KOH and Custom are absent — flash is not applicable for electrolytes/unknowns.
+# Custom is absent — flash requires EOS data that custom inputs don't provide.
 SPECIES_THERMO_ID = {
     # Gas species
     "H₂":           "hydrogen",
@@ -340,7 +310,8 @@ def _merge_water_species(feed_kgh: dict) -> dict:
 
 
 def flash_pt(gas_flows_kgh: dict, liquid_type: str, q_lye_m3h: float,
-             T_C: float, P_bara: float) -> dict:
+             T_C: float, P_bara: float,
+             liquid_flows_kgh: dict | None = None) -> dict:
     """
     Isothermal two-phase PT flash of the combined gas+liquid feed.
 
@@ -353,17 +324,13 @@ def flash_pt(gas_flows_kgh: dict, liquid_type: str, q_lye_m3h: float,
         feed_kgh         : unified feed composition
         warnings  : list[str]
 
-    Returns feasible=False for KOH, Custom, or if thermo is unavailable.
+    Returns feasible=False for Custom liquid or if thermo is unavailable.
     """
     if not _THERMO_AVAILABLE:
         return {"feasible": False,
                 "warnings": ["thermo library not installed — flash unavailable."]}
 
-    if "KOH" in liquid_type:
-        return {"feasible": False,
-                "warnings": [f"{liquid_type} is an electrolyte — equilibrium flash "
-                             "is not applicable. Using specified phase split."]}
-    if liquid_type == "Custom":
+    if liquid_flows_kgh is None and liquid_type == "Custom":
         return {"feasible": False,
                 "warnings": ["Custom liquid — no equation-of-state data. "
                              "Using specified phase split."]}
@@ -377,7 +344,11 @@ def flash_pt(gas_flows_kgh: dict, liquid_type: str, q_lye_m3h: float,
     feed = _merge_water_species(feed)
 
     # Add liquid contribution
-    if q_lye_m3h > 0:
+    if liquid_flows_kgh:
+        for sp, m_kgh in liquid_flows_kgh.items():
+            if m_kgh > 0:
+                feed[sp] = feed.get(sp, 0.0) + m_kgh
+    elif q_lye_m3h > 0:
         try:
             cp_id = LIQUID_COOLPROP_ID.get(liquid_type)
             liq_rho = CP.PropsSI("D", "T", T_C + 273.15, "P", P_bara * 1e5,
@@ -385,7 +356,6 @@ def flash_pt(gas_flows_kgh: dict, liquid_type: str, q_lye_m3h: float,
         except Exception:
             liq_rho = 1000.0
         liq_kgh = q_lye_m3h * liq_rho
-        # Map liquid display name to feed key (normalise to SPECIES_THERMO_ID keys)
         liq_key = liquid_type
         feed[liq_key] = feed.get(liq_key, 0.0) + liq_kgh
 
@@ -518,59 +488,8 @@ def liquid_mixture_props(liquid_phase_kgh: dict, T_K: float, P_pa: float):
 
 
 # ============================================================================
-# 3B. KOH 30 wt% LIQUID PROPERTIES
-# Temperature-dependent correlations. Valid range: 0–100 °C.
-# Reference: Yaws' Chemical Properties Handbook; NIST aqueous KOH data.
-# ============================================================================
-
-def koh_density_kgm3(T_C):
-    rho_ref_20C = 1295.0   # kg/m³ at 20 °C
-    slope = -0.3375        # kg/m³ per °C
-    return max(1100.0, rho_ref_20C + slope * (T_C - 20.0))
-
-
-def koh_viscosity_pas(T_C):
-    mu_ref_20C = 1.4e-3    # Pa·s at 20 °C
-    T_ref_K    = 293.15
-    E_a_over_R = 1200.0    # K
-    mu = mu_ref_20C * np.exp(E_a_over_R * (1.0 / (T_C + 273.15) - 1.0 / T_ref_K))
-    return max(2e-4, mu)
-
-
-def koh_surface_tension_nm(T_C):
-    sigma_ref_20C = 0.074  # N/m at 20 °C
-    slope = -0.001125      # N/m per °C
-    return max(0.040, sigma_ref_20C + slope * (T_C - 20.0))
-
-
-# ============================================================================
-# 3B. KOH 15 wt% LIQUID PROPERTIES
-# Valid range: 0–100 °C.
-# References: CRC Handbook of Chemistry and Physics; fitted to tabulated data.
-# ============================================================================
-
-def koh15_density_kgm3(T_C):
-    rho_ref_20C = 1139.0   # kg/m³ at 20 °C (CRC Handbook)
-    slope = -0.50          # kg/m³ per °C
-    return max(1050.0, rho_ref_20C + slope * (T_C - 20.0))
-
-
-def koh15_viscosity_pas(T_C):
-    mu_ref_20C = 1.1e-3    # Pa·s at 20 °C
-    T_ref_K    = 293.15
-    E_a_over_R = 1540.0    # K (fitted to μ(80°C) ≈ 0.45 mPa·s)
-    mu = mu_ref_20C * np.exp(E_a_over_R * (1.0 / (T_C + 273.15) - 1.0 / T_ref_K))
-    return max(1.5e-4, mu)
-
-
-def koh15_surface_tension_nm(T_C):
-    sigma_ref_20C = 0.073  # N/m at 20 °C
-    slope = -0.00014       # N/m per °C
-    return max(0.040, sigma_ref_20C + slope * (T_C - 20.0))
-
-
-# ============================================================================
-# 3C. LIQUID PROPERTIES VIA COOLPROP AND GAS VISCOSITY HELPER
+# 3B. LIQUID PROPERTIES VIA COOLPROP AND GAS VISCOSITY HELPER
+#     KOH polynomial models archived in _specials.py
 # ============================================================================
 
 def _coolprop_liquid_by_id(fluid_id, T_K, P_pa, sigma_fallback=0.020):
@@ -720,12 +639,13 @@ def _coolprop_mixture_properties(gas_flows_kgh, T_C, P_bara, custom_gas=None):
 
 def calculate_two_phase_properties(
     P_bara, T_C,
-    gas_flows_kgh,      # dict: {species_name: kg/h}  e.g. {"H₂": 8.0, "O₂": 2.0}
-    liquid_type,        # str: one of LIQUID_PHASES
-    q_lye_m3h,
-    custom_gas=None,    # {"MW_gmol": float, "mu_upas": float}  — only for "Custom" species
-    custom_liquid=None, # {"rho_kgm3": float, "mu_mpas": float, "sigma_mnm": float}
-    use_coolprop=False, # opt-in: try CoolProp mixture calculations for gas phase
+    gas_flows_kgh,           # dict: {species_name: kg/h}  e.g. {"H₂": 8.0, "O₂": 2.0}
+    liquid_type,             # str: CoolProp species name or "Custom" (flash override)
+    q_lye_m3h,               # volumetric flow [m³/h] — used when liquid_flows_kgh is None
+    custom_gas=None,         # {"MW_gmol": float, "mu_upas": float}
+    custom_liquid=None,      # {"rho_kgm3": float, "mu_mpas": float, "sigma_mnm": float}
+    use_coolprop=False,
+    liquid_flows_kgh=None,   # dict: {species: kg/h} — CoolProp multi-species mode
 ):
     """
     Generic two-phase thermodynamic solver.
@@ -737,26 +657,26 @@ def calculate_two_phase_properties(
     T_K  = T_C + 273.15
 
     # ── Liquid properties ────────────────────────────────────────────────────
-    if liquid_type == "KOH 30 wt%":
-        rho_l = koh_density_kgm3(T_C)
-        mu_l  = koh_viscosity_pas(T_C)
-        sigma = koh_surface_tension_nm(T_C)
-    elif liquid_type == "KOH 15 wt%":
-        rho_l = koh15_density_kgm3(T_C)
-        mu_l  = koh15_viscosity_pas(T_C)
-        sigma = koh15_surface_tension_nm(T_C)
+    if liquid_flows_kgh:
+        # Primary path: multi-species CoolProp mixture
+        rho_l, mu_l, sigma = liquid_mixture_props(liquid_flows_kgh, T_K, P_pa)
+        m_lye_kgh = sum(liquid_flows_kgh.values())
+        aqueous   = any(LIQUID_AQUEOUS.get(sp, False) for sp in liquid_flows_kgh)
     elif liquid_type in LIQUID_COOLPROP_ID:
+        # Backward-compat: single species by name
         fluid_id  = LIQUID_COOLPROP_ID[liquid_type]
         sigma_fb  = LIQUID_SIGMA_FALLBACK.get(liquid_type, 0.020)
         rho_l, mu_l, sigma = _coolprop_liquid_by_id(fluid_id, T_K, P_pa, sigma_fb)
-    else:  # Custom
-        cl    = custom_liquid or {}
-        rho_l = cl.get("rho_kgm3", 1000.0)
-        mu_l  = cl.get("mu_mpas",  1.0) * 1e-3
-        sigma = cl.get("sigma_mnm", 72.0) * 1e-3
-
-    m_lye_kgh = q_lye_m3h * rho_l
-    aqueous   = LIQUID_AQUEOUS.get(liquid_type, False)
+        m_lye_kgh = q_lye_m3h * rho_l
+        aqueous   = LIQUID_AQUEOUS.get(liquid_type, False)
+    else:
+        # Custom: used by the PR-EOS flash-result override path
+        cl        = custom_liquid or {}
+        rho_l     = cl.get("rho_kgm3", 1000.0)
+        mu_l      = cl.get("mu_mpas",  1.0) * 1e-3
+        sigma     = cl.get("sigma_mnm", 72.0) * 1e-3
+        m_lye_kgh = q_lye_m3h * rho_l
+        aqueous   = False
 
     # ── Dry gas moles (mol/h = kg/h ÷ MW [kg/mol]) ──────────────────────────
     dry_moles = {}
@@ -885,14 +805,15 @@ def calculate_two_phase_properties(
         # ── Composition & display quantities (new) ──────────────────────────
         "composition":        composition,        # {species: {mol_h, kg_h, mol_frac}}
         "MW_mix_gmol":        MW_mix_kgmol * 1000.0,
-        "liquid_type":        liquid_type,
+        "liquid_type":        (" + ".join(liquid_flows_kgh.keys()) if liquid_flows_kgh else liquid_type),
         "m_gas_total_kgh":    m_gas_total_kgh,
         "m_lye_kgh":          m_lye_kgh,
         "m_liquid_total_kgh": m_liquid_total_kgh,
     }
 
 
-def validate_input_bounds(P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h):
+def validate_input_bounds(P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h,
+                          liquid_flows_kgh=None):
     """Sanity checks on inputs. Returns (is_valid: bool, warnings: list[str])."""
     warnings = []
     total_gas = sum(gas_flows_kgh.values())
@@ -903,9 +824,18 @@ def validate_input_bounds(P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h):
         warnings.append(f"⚠️ Temperature {T_C:.1f}°C outside validated range [5–95°C]")
     if total_gas < 0.05:
         warnings.append(f"⚠️ Total gas flow {total_gas:.3f} kg/h is very low")
-    if 0 < q_lye_m3h < 1e-4:
-        warnings.append(f"⚠️ Liquid volume flow {q_lye_m3h:.4f} m³/h is extremely low — verify intent")
-    if LIQUID_AQUEOUS.get(liquid_type, False):
+
+    if liquid_flows_kgh:
+        total_liq_kgh = sum(liquid_flows_kgh.values())
+        if 0 < total_liq_kgh < 0.1:
+            warnings.append(f"⚠️ Total liquid flow {total_liq_kgh:.3f} kg/h is very low — verify intent")
+        is_aqueous = any(LIQUID_AQUEOUS.get(sp, False) for sp in liquid_flows_kgh)
+    else:
+        if 0 < q_lye_m3h < 1e-4:
+            warnings.append(f"⚠️ Liquid volume flow {q_lye_m3h:.4f} m³/h is extremely low — verify intent")
+        is_aqueous = LIQUID_AQUEOUS.get(liquid_type, False)
+
+    if is_aqueous:
         try:
             P_sat = CP.PropsSI('P', 'T', T_C + 273.15, 'Q', 1, 'Water')
             if P_sat > P_bara * 1e5:
@@ -1270,6 +1200,7 @@ def calculate_segment_pressure_drop(
 def run_sensitivity(
     P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h, segments,
     custom_gas=None, custom_liquid=None,
+    liquid_flows_kgh=None,
     # VLE mode — when set, gas_flows_kgh / liquid_type / q_lye_m3h are ignored
     vle_fluid=None, vle_x_mass=None, vle_m_total_kgs=None,
 ):
@@ -1315,7 +1246,8 @@ def run_sensitivity(
                     else:
                         props_seg = calculate_two_phase_properties(
                             current_P / 1e5, T_C, gas_flows_kgh, liquid_type, q_lye_m3h,
-                            custom_gas=custom_gas, custom_liquid=custom_liquid)
+                            custom_gas=custom_gas, custom_liquid=custom_liquid,
+                            liquid_flows_kgh=liquid_flows_kgh)
                     angle  = _angle_map[seg["type"]]
                     le_fit = _seg_le_fit(seg, D_eff)
                     L_eff  = seg["length"] + le_fit
@@ -1380,3 +1312,123 @@ def calculate_erosion_velocity(rho_g, rho_l, x_gas, C=100):
     C_SI = C * 0.3048 * (16.018 ** 0.5)
     V_erosion = C_SI / (rho_mix ** 0.5)
     return V_erosion, rho_mix
+
+
+# ============================================================================
+# VALVE PRESSURE DROP  (IEC 60534 / ISA-75)
+# ============================================================================
+
+def calculate_valve_dp(props, Kv_m3h_rated, opening_pct=100.0,
+                       characteristic="equal-percentage", rangeability=50.0):
+    """
+    Two-phase valve pressure drop using the IEC 60534 liquid sizing equation
+    with homogeneous mixture density.
+
+    ΔP = (Q / Kv_eff)² · SG_hom    [bar]
+
+    where:
+      Q       = total volumetric flow  [m³/h]
+      Kv_eff  = effective Kv at the given opening
+      SG_hom  = ρ_hom / 999  (relative to water at 15°C)
+
+    Inherent characteristics:
+      equal-percentage : Kv_eff = Kv_rated · R^(f−1)  (R = rangeability, default 50)
+      linear           : Kv_eff = Kv_rated · f
+    where f = opening_pct / 100.
+
+    Valid for non-choked, incompressible-equivalent flow.  For highly
+    compressible (gas-dominated) streams this is approximate; use as a
+    first estimate and check against manufacturer's Fp correction.
+
+    Args:
+        props          : properties dict from calculate_two_phase_properties or calculate_vle_properties
+        Kv_m3h_rated   : rated Kv at full-open [m³/h per bar^0.5]
+        opening_pct    : valve opening [%], 0–100
+        characteristic : "equal-percentage" or "linear"
+        rangeability   : R for equal-percentage curve (default 50)
+
+    Returns dict with dP_Pa, Kv_eff, Q_m3h, rho_hom, and ΔP components.
+    """
+    f = max(0.001, min(1.0, opening_pct / 100.0))
+    if characteristic == "equal-percentage":
+        Kv_eff = Kv_m3h_rated * (rangeability ** (f - 1.0))
+    else:
+        Kv_eff = Kv_m3h_rated * f
+    Kv_eff = max(Kv_eff, 1e-9)
+
+    x     = props["x_gas"]
+    rho_g = props["rho_g"]
+    rho_l = props["rho_l"]
+
+    if x <= 0.0:
+        rho_hom = rho_l
+    elif x >= 1.0:
+        rho_hom = rho_g
+    else:
+        rho_hom = 1.0 / (x / rho_g + (1.0 - x) / rho_l)
+    rho_hom = max(rho_hom, 0.01)
+
+    Q_m3h  = props["m_total_kgs"] * 3600.0 / rho_hom
+    SG     = rho_hom / 999.0
+    dP_bar = (Q_m3h / Kv_eff) ** 2 * SG
+    dP_Pa  = dP_bar * 1e5
+
+    return {
+        "dP_Pa":       dP_Pa,
+        "Kv_eff":      Kv_eff,
+        "Q_m3h":       Q_m3h,
+        "rho_hom":     rho_hom,
+        "dP_fric_Pa":  dP_Pa,
+        "dP_grav_Pa":  0.0,
+        "dP_accel_Pa": 0.0,
+        "regime":      "Valve",
+    }
+
+
+# ============================================================================
+# MIXTURE HEAT CAPACITY  (for HX temperature change)
+# ============================================================================
+
+def estimate_mixture_cp(props, T_K, P_pa):
+    """
+    Mass-weighted mixture heat capacity [J/kg/K].
+
+    Liquid Cp: CoolProp lookup via LIQUID_COOLPROP_ID; falls back to 4 200 J/kg/K.
+    Gas   Cp:  CoolProp per species in composition dict; falls back to 1 040 J/kg/K (air).
+
+    Returns Cp_mix [J/kg/K].
+    """
+    x = props.get("x_gas", 0.0)
+
+    # ── Liquid Cp ─────────────────────────────────────────────────────────────
+    liq_name = props.get("liquid_type", "")
+    # liquid_type may be "Water + Methanol" for mixtures — try first token
+    liq_token = liq_name.split(" + ")[0].strip()
+    liq_id = LIQUID_COOLPROP_ID.get(liq_token) or LIQUID_COOLPROP_ID.get(liq_name)
+    Cp_l = 4200.0
+    if liq_id:
+        try:
+            Cp_l = float(CP.PropsSI("C", "T", T_K, "P", P_pa, liq_id))
+        except Exception:
+            pass
+
+    # ── Gas Cp ────────────────────────────────────────────────────────────────
+    comp = props.get("composition", {})
+    m_gas_total = sum(d.get("kg_h", 0.0) for d in comp.values())
+    Cp_g = 1040.0
+    if m_gas_total > 0.0 and comp:
+        Cp_g_weighted = 0.0
+        for sp, d in comp.items():
+            cp_id = d.get("coolprop_id")
+            w_frac = d.get("kg_h", 0.0) / m_gas_total
+            if cp_id:
+                try:
+                    Cp_g_weighted += float(CP.PropsSI("C", "T", T_K, "P", P_pa, cp_id)) * w_frac
+                except Exception:
+                    Cp_g_weighted += 1040.0 * w_frac
+            else:
+                Cp_g_weighted += 1040.0 * w_frac
+        if Cp_g_weighted > 0.0:
+            Cp_g = Cp_g_weighted
+
+    return (1.0 - x) * Cp_l + x * Cp_g

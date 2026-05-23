@@ -61,13 +61,12 @@ def _run_validation_case(key, case):
                 inp["vle_fluid"], P_Pa / 1e5,
                 inp["vle_x_mass"], inp["vle_m_total_kgs"])
         else:
-            # Gas+Liquid mode — use explicit liquid_type if present, else default KOH 30%
-            liquid_type = inp.get("liquid_type", "KOH 30 wt%")
-            q_lye       = inp.get("q_lye_m3h", 0.0)
-            gas_flows   = inp.get("gas_flows_kgh", {})
+            gas_flows        = inp.get("gas_flows_kgh", {})
+            liquid_flows_kgh = inp.get("liquid_flows_kgh")
             props = engine.calculate_two_phase_properties(
                 P_Pa / 1e5, inp["T_C"],
-                gas_flows, liquid_type, q_lye
+                gas_flows, "Custom", 0.0,
+                liquid_flows_kgh=liquid_flows_kgh,
             )
 
         angle = {"Horizontal": 0.0,
@@ -163,7 +162,8 @@ def _calc_dp_at_p_local(res, P_bara_override):
                   else engine.MATERIAL_ROUGHNESS[seg.get("material", "SS316L")])
         props  = engine.calculate_two_phase_properties(
             current_P / 1e5, res["T_C"],
-            res["gas_flows_kgh"], res["liquid_type"], res["q_lye"],
+            res["gas_flows_kgh"], res.get("liquid_type", "Custom"), res.get("q_lye", 0.0),
+            liquid_flows_kgh=res.get("liquid_flows_kgh"),
         )
         angle = {"Horizontal": 0.0,
                  "Vertical Upflow": math.pi / 2.0,
@@ -196,8 +196,7 @@ def test_pressure_clamping():
     res = {
         "T_C": 40.0,
         "gas_flows_kgh": {"H₂": 5.0, "O₂": 1.2},
-        "liquid_type": "KOH 30 wt%",
-        "q_lye": 2.5,
+        "liquid_flows_kgh": {"Water": 2480.0},
         "correlation": engine.TWO_PHASE_CORRELATIONS[0],
         "voidage_method": engine.VOIDAGE_METHODS[0],
         "segments": [seg],
@@ -238,8 +237,7 @@ def test_goal_seek():
     base = {
         "T_C": 40.0,
         "gas_flows_kgh": {"H₂": 5.0, "O₂": 1.2},
-        "liquid_type": "KOH 30 wt%",
-        "q_lye": 2.5,
+        "liquid_flows_kgh": {"Water": 2480.0},
         "correlation": engine.TWO_PHASE_CORRELATIONS[0],
         "voidage_method": engine.VOIDAGE_METHODS[0],
     }
@@ -291,7 +289,8 @@ def test_sensitivity():
     rows = engine.run_sensitivity(
         P_bara=5.0, T_C=25.0,
         gas_flows_kgh={"H₂": 2.0, "O₂": 0.5},
-        liquid_type="KOH 30 wt%", q_lye_m3h=3.0,
+        liquid_type="Custom", q_lye_m3h=0.0,
+        liquid_flows_kgh={"Water": 2991.0},
         segments=[seg],
     )
     n_expected = len(engine.TWO_PHASE_CORRELATIONS) * len(engine.VOIDAGE_METHODS)
@@ -321,7 +320,8 @@ def test_report_generator():
                 "P_bara": P_bara,
                 "T_C": 25.0,
                 "gas_flows_kgh": {"H₂": 26.0, "O₂": 0.0},
-                "liquid_type": "KOH 30 wt%",
+                "liquid_flows_kgh": {"Water": 13750.0},
+                "liquid_type": "Water",
                 "q_lye": 13.75,
                 "total_dp_kpa": dp_kpa,
                 "total_dp_fric_kpa": dp_kpa * 0.9,
@@ -335,7 +335,8 @@ def test_report_generator():
                 "voidage_method": engine.VOIDAGE_METHODS[0],
                 "props": engine.calculate_two_phase_properties(
                     P_bara, 25.0, {"H₂": 26.0, "O₂": 0.0},
-                    "KOH 30 wt%", 13.75
+                    "Custom", 0.0,
+                    liquid_flows_kgh={"Water": 13750.0},
                 ),
                 "fig_sch": None,
                 "fig_prof": None,
@@ -428,7 +429,7 @@ def test_header_goal_seek():
     corr = engine.TWO_PHASE_CORRELATIONS[0]
     void = engine.VOIDAGE_METHODS[0]
     T_C  = 60.0
-    liq  = "KOH 30 wt%"
+    liq  = "Water"
 
     # Left arm: 2 segments, each with a branch tapping gas + lye
     left_segs = [
@@ -449,7 +450,7 @@ def test_header_goal_seek():
     }
     res_ab_base = {
         "T_C": T_C, "gas_flows_kgh": {"H₂": 5.0},
-        "liquid_type": liq, "q_lye": 2.5,
+        "liquid_flows_kgh": {"Water": 2480.0},
         "correlation": corr, "voidage_method": void,
         "segments": [seg_ab],
     }
@@ -465,6 +466,7 @@ def test_header_goal_seek():
 
     res_c = {
         "T_C": T_C, "liquid_type": liq,
+        "liquid_flows_kgh": {"Water": 2480.0},
         "correlation": corr, "voidage_method": void,
         "left_segs": left_segs, "right_segs": right_segs,
         "total_dp_kpa": max(dp0_l, dp0_r),
