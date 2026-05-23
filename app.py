@@ -942,7 +942,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
     # ── OUTPUTS ───────────────────────────────────────────────────────────────
     with col_out:
         _key_results_ph = st.empty()   # filled after segment loop — ΔP summary
-        _hmb_ph         = st.empty()   # filled after segment loop — H&M balance
 
         # Initialise effective liquid state (overwritten in gas+liquid path below)
         _eff_liquid_flows = liquid_flows_kgh
@@ -1455,52 +1454,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     st.caption(f"Pipe length {pipe_length_m:.1f} m  ·  "
                                f"Eff. length (+ fittings) {cumulative_distance:.1f} m")
 
-        # ── Heat & Mass Balance — fill the second placeholder ─────────────────
-        if stream_records:
-            # Build the row-order for the inverted table
-            _hmb_rows_def = [("P  (bara)", "P (bara)"), ("T  (°C)", "T (°C)")]
-            if _is_vle:
-                _hmb_rows_def += [
-                    (f"  {vle_fluid_id} vapour  kg/h", f"{vle_fluid_id} vapour  kg/h"),
-                    (f"  {vle_fluid_id} liquid  kg/h", f"{vle_fluid_id} liquid  kg/h"),
-                ]
-            else:
-                for _gsp in (_eff_gas_flows or {}):
-                    _hmb_rows_def.append((f"  {_gsp}  kg/h", f"gas:{_gsp}"))
-                if _eff_gas_flows:
-                    _hmb_rows_def.append(("  Σ gas  kg/h", "Ṁ_gas (kg/h)"))
-                for _lsp in (_eff_liquid_flows or {}):
-                    _hmb_rows_def.append((f"  {_lsp}  kg/h", f"liq:{_lsp}"))
-                if _eff_liquid_flows:
-                    _hmb_rows_def.append(("  Σ liquid  kg/h", "Ṁ_liq (kg/h)"))
-            _hmb_rows_def += [
-                ("x  (−)",          "x (−)"),
-                ("α  (−)",          "α (−)"),
-                ("ρ_hom  kg/m³",    "ρ_hom (kg/m³)"),
-            ]
-
-            _hmb_table = []
-            for _prop_label, _key in _hmb_rows_def:
-                _row = {"Property": _prop_label}
-                for _sr in stream_records:
-                    _row[_sr["Stream"]] = _sr.get(_key, "—")
-                _hmb_table.append(_row)
-
-            _hmb_df = pd.DataFrame(_hmb_table)
-            _stream_cols = [sr["Stream"] for sr in stream_records]
-            _num_col_cfg = {col: st.column_config.NumberColumn(format="%.4g")
-                            for col in _stream_cols}
-
-            with _hmb_ph.container():
-                with st.container(border=True):
-                    st.markdown("**Heat & Mass Balance**")
-                    st.dataframe(
-                        _hmb_df,
-                        column_config=_num_col_cfg,
-                        hide_index=True,
-                        use_container_width=True,
-                    )
-
         # ΔP decomposition stacked bar chart
         _seg_labels = [r["Seg"] + " " + r["Pipe"] for r in grid_records]
         _dp_fric    = [r["ΔP_fric (kPa)"] for r in grid_records]
@@ -1585,10 +1538,13 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 ax=_x0+(_x1-_x0)*0.5, ay=_y0+(_y1-_y0)*0.5,
                 xref="x", yref="y", axref="x", ayref="y",
                 showarrow=True, arrowhead=2, arrowsize=1.8, arrowwidth=2.5, arrowcolor=_col)
+            _reg_short = _reg.split("/")[0].strip()[:18]
             fig_sch.add_annotation(
-                x=(_x0+_x1)/2, y=(_y0+_y1)/2, text=f"<b>#{_i+1}</b> {_seg.get('dn','')}",
-                showarrow=False, font=dict(size=10,color="#1E293B"),
-                bgcolor="rgba(255,255,255,0.85)", bordercolor=_col, borderwidth=1.5,
+                x=(_x0+_x1)/2, y=(_y0+_y1)/2,
+                text=f"<b>#{_i+1}</b> {_seg.get('dn','')}<br>"
+                     f"<span style='font-size:9px;color:{_col}'>{_reg_short}</span>",
+                showarrow=False, font=dict(size=10, color="#1E293B"),
+                bgcolor="rgba(255,255,255,0.88)", bordercolor=_col, borderwidth=1.5,
                 borderpad=3, xanchor="center", yanchor="middle")
 
     _all_x=[n[0] for n in _nodes]; _all_y=[n[1] for n in _nodes]
@@ -1640,13 +1596,98 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         yaxis=dict(gridcolor="#F1F5F9",zeroline=False,linecolor="#E2E8F0"),
         font=dict(size=12,color="#374151"))
 
+    # ── Flow Regime Map (V_sg vs V_sl, log-log) ─────────────────────────────
+    _pipe_recs = [r for r in grid_records if r.get("V_sg (m/s)", 0) > 0 or r.get("V_sl (m/s)", 0) > 0]
+    fig_regime = go.Figure()
+    _seen_reg_map = set()
+    for _r in _pipe_recs:
+        _vsg = max(_r["V_sg (m/s)"], 1e-4)
+        _vsl = max(_r["V_sl (m/s)"], 1e-4)
+        _reg = _r["Regime"]
+        _col = _regime_color(_reg, _REGIME_LINE_KW, "#64748B")
+        _show_leg = _reg not in _seen_reg_map; _seen_reg_map.add(_reg)
+        fig_regime.add_trace(go.Scatter(
+            x=[_vsl], y=[_vsg], mode="markers+text",
+            marker=dict(size=16, color=_col, line=dict(color="white", width=1.5)),
+            text=[_r["Seg"]], textposition="middle center",
+            textfont=dict(size=9, color="white"),
+            name=_reg, legendgroup=_reg, showlegend=_show_leg,
+            hovertemplate=(
+                f"<b>{_r['Seg']}  {_r['Pipe']}</b><br>"
+                f"Regime: {_reg}<br>"
+                f"V_sl = {_vsl:.4f} m/s<br>"
+                f"V_sg = {_vsg:.4f} m/s<br>"
+                f"ΔP = {_r['ΔP (kPa)']:.3f} kPa"
+                "<extra></extra>"
+            ),
+        ))
+    fig_regime.update_layout(
+        template="plotly_white", height=420,
+        margin=dict(l=70, r=20, t=40, b=70),
+        xaxis=dict(title="V_sl  superficial liquid velocity (m/s)", type="log",
+                   gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+        yaxis=dict(title="V_sg  superficial gas velocity (m/s)", type="log",
+                   gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+        legend=dict(title="Flow Regime", bgcolor="rgba(255,255,255,0.9)",
+                    bordercolor="#E2E8F0", borderwidth=1, font=dict(size=11)),
+        font=dict(size=12, color="#374151"),
+        title=dict(text="Flow Regime Map — operating points per segment", font=dict(size=13), x=0),
+    )
+
     st.divider()
-    tab_sch, tab_prof_tab = st.tabs(["Pipeline Schematic", "Pressure Profile"])
+    tab_sch, tab_prof_tab, tab_regime_map = st.tabs(
+        ["Pipeline Schematic", "Pressure Profile", "Flow Regime Map"])
     with tab_sch:
         st.plotly_chart(fig_sch, use_container_width=True, key=k("fig_sch"))
-        st.caption("Line width ∝ DN  ·  Colour = flow regime  ·  Arrow = flow direction")
+        st.caption("Line width ∝ DN  ·  Colour = flow regime  ·  Regime name on each segment")
     with tab_prof_tab:
         st.plotly_chart(fig_prof, use_container_width=True, key=k("fig_prof"))
+    with tab_regime_map:
+        if _pipe_recs:
+            st.plotly_chart(fig_regime, use_container_width=True, key=k("fig_regime"))
+            st.caption(
+                "Each point = one pipe segment, positioned by its superficial velocities. "
+                "Log–log axes follow the Mandhane (1974) convention. "
+                "Colour = regime classified by the engine (Taitel-Dukler / Mandhane / Wallis)."
+            )
+        else:
+            st.info("No pipe segments with velocity data to plot.")
+
+    # ── HEAT & MASS BALANCE (full width, below charts) ───────────────────────
+    if stream_records:
+        _hmb_rows_def = [("P  (bara)", "P (bara)"), ("T  (°C)", "T (°C)")]
+        if _is_vle:
+            _hmb_rows_def += [
+                (f"  {vle_fluid_id} vapour  kg/h", f"{vle_fluid_id} vapour  kg/h"),
+                (f"  {vle_fluid_id} liquid  kg/h", f"{vle_fluid_id} liquid  kg/h"),
+            ]
+        else:
+            for _gsp in (_eff_gas_flows or {}):
+                _hmb_rows_def.append((f"  {_gsp}  kg/h", f"gas:{_gsp}"))
+            if _eff_gas_flows:
+                _hmb_rows_def.append(("  Σ gas  kg/h", "Ṁ_gas (kg/h)"))
+            for _lsp in (_eff_liquid_flows or {}):
+                _hmb_rows_def.append((f"  {_lsp}  kg/h", f"liq:{_lsp}"))
+            if _eff_liquid_flows:
+                _hmb_rows_def.append(("  Σ liquid  kg/h", "Ṁ_liq (kg/h)"))
+        _hmb_rows_def += [
+            ("x  (−)",       "x (−)"),
+            ("α  (−)",       "α (−)"),
+            ("ρ_hom  kg/m³", "ρ_hom (kg/m³)"),
+        ]
+        _hmb_table = []
+        for _prop_label, _key in _hmb_rows_def:
+            _row = {"Property": _prop_label}
+            for _sr in stream_records:
+                _row[_sr["Stream"]] = _sr.get(_key, "—")
+            _hmb_table.append(_row)
+        _hmb_df      = pd.DataFrame(_hmb_table)
+        _stream_cols = [sr["Stream"] for sr in stream_records]
+        _num_col_cfg = {col: st.column_config.NumberColumn(format="%.4g")
+                        for col in _stream_cols}
+        st.subheader("Heat & Mass Balance")
+        st.dataframe(_hmb_df, column_config=_num_col_cfg,
+                     hide_index=True, use_container_width=True)
 
 
     # ── EXPORTS ───────────────────────────────────────────────────────────────
