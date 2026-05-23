@@ -1,4 +1,5 @@
 # multiphase_engine.py
+import math
 import numpy as np
 import CoolProp.CoolProp as CP
 from fluids.two_phase import (
@@ -7,6 +8,13 @@ from fluids.two_phase import (
 )
 from fluids.two_phase_voidage import liquid_gas_voidage
 from fluids.friction import friction_factor as _darcy_friction_factor
+
+try:
+    from thermo import ChemicalConstantsPackage, CEOSGas, CEOSLiquid, FlashVL
+    from thermo.eos_mix import PRMIX
+    _THERMO_AVAILABLE = True
+except ImportError:
+    _THERMO_AVAILABLE = False
 
 _g = 9.80665
 
@@ -254,7 +262,263 @@ LIQUID_AQUEOUS = {
 }
 
 # ============================================================================
-# 3A. KOH 30 wt% LIQUID PROPERTIES
+# 3A. EQUILIBRIUM FLASH (Peng-Robinson EOS via thermo library)
+# ============================================================================
+
+# Maps every display-name species to a thermo Chemical identifier.
+# None entries are handled specially (Air → N₂/O₂/Ar split).
+# KOH and Custom are absent — flash is not applicable for electrolytes/unknowns.
+SPECIES_THERMO_ID = {
+    # Gas species
+    "H₂":           "hydrogen",
+    "O₂":           "oxygen",
+    "N₂":           "nitrogen",
+    "CO₂":          "carbon dioxide",
+    "CO":           "carbon monoxide",
+    "Air":          None,           # expanded to N₂/O₂/Ar below
+    "Ar":           "argon",
+    "He":           "helium",
+    "NH₃":          "ammonia",
+    "H₂S":          "hydrogen sulfide",
+    "SO₂":          "sulfur dioxide",
+    "N₂O":          "nitrous oxide",
+    "Cl₂":          "chlorine",
+    "H₂O (steam)":  "water",
+    "CH₄":          "methane",
+    "C₂H₆":         "ethane",
+    "C₃H₈":         "propane",
+    "n-C₄H₁₀":      "n-butane",
+    "i-C₄H₁₀":      "isobutane",
+    "C₂H₄":         "ethylene",
+    "C₃H₆":         "propylene",
+    "n-C₅H₁₂":      "n-pentane",
+    "R-134a":        "R134a",
+    "R-22":          "chlorodifluoromethane",
+    "R-32":          "difluoromethane",
+    "R-125":         "pentafluoroethane",
+    # Liquid species
+    "Water":         "water",
+    "Methanol":      "methanol",
+    "Ethanol":       "ethanol",
+    "Acetone":       "acetone",
+    "Benzene":       "benzene",
+    "Toluene":       "toluene",
+    "n-Pentane":     "n-pentane",
+    "n-Hexane":      "n-hexane",
+    "n-Heptane":     "n-heptane",
+    "Cyclohexane":   "cyclohexane",
+    "Propane (liq.)":   "propane",
+    "n-Butane (liq.)":  "n-butane",
+    "Ammonia (liq.)":   "ammonia",
+    "R-134a (liq.)":    "R134a",
+    "CO₂ (liq.)":       "carbon dioxide",
+}
+
+# Air dry-air molar composition (mol/mol) — ICAO standard atmosphere
+_AIR_MOL_FRACS = {"N₂": 0.7809, "O₂": 0.2095, "Ar": 0.0093}
+_AIR_MW_KG_MOL = 28.966e-3  # kg/mol
+
+
+def _expand_air(feed_kgh: dict) -> dict:
+    """Replace 'Air' in feed_kgh with equivalent N₂/O₂/Ar flows."""
+    if "Air" not in feed_kgh:
+        return dict(feed_kgh)
+    expanded = {k: v for k, v in feed_kgh.items() if k != "Air"}
+    air_mol_h = feed_kgh["Air"] / _AIR_MW_KG_MOL
+    for sp, frac in _AIR_MOL_FRACS.items():
+        MW = GAS_SPECIES[sp]["MW"]
+        expanded[sp] = expanded.get(sp, 0.0) + air_mol_h * frac * MW
+    return expanded
+
+
+def _merge_water_species(feed_kgh: dict) -> dict:
+    """Merge 'H₂O (steam)' and 'Water' into a single 'Water' entry."""
+    merged = dict(feed_kgh)
+    if "H₂O (steam)" in merged:
+        merged["Water"] = merged.get("Water", 0.0) + merged.pop("H₂O (steam)")
+    return merged
+
+
+def flash_pt(gas_flows_kgh: dict, liquid_type: str, q_lye_m3h: float,
+             T_C: float, P_bara: float) -> dict:
+    """
+    Isothermal two-phase PT flash of the combined gas+liquid feed.
+
+    Uses Peng-Robinson EOS (thermo library). Returns a dict with:
+        feasible  : bool
+        VF_mol    : molar vapour fraction
+        VF_mass   : mass vapour fraction
+        gas_phase_kgh    : {species: kg/h} after equilibrium
+        liquid_phase_kgh : {species: kg/h} after equilibrium
+        feed_kgh         : unified feed composition
+        warnings  : list[str]
+
+    Returns feasible=False for KOH, Custom, or if thermo is unavailable.
+    """
+    if not _THERMO_AVAILABLE:
+        return {"feasible": False,
+                "warnings": ["thermo library not installed — flash unavailable."]}
+
+    if "KOH" in liquid_type:
+        return {"feasible": False,
+                "warnings": [f"{liquid_type} is an electrolyte — equilibrium flash "
+                             "is not applicable. Using specified phase split."]}
+    if liquid_type == "Custom":
+        return {"feasible": False,
+                "warnings": ["Custom liquid — no equation-of-state data. "
+                             "Using specified phase split."]}
+    if "Custom" in gas_flows_kgh:
+        return {"feasible": False,
+                "warnings": ["Custom gas species — no equation-of-state data. "
+                             "Using specified phase split."]}
+
+    # Build unified feed: expand Air, merge water variants, add liquid
+    feed = _expand_air(gas_flows_kgh)
+    feed = _merge_water_species(feed)
+
+    # Add liquid contribution
+    if q_lye_m3h > 0:
+        try:
+            cp_id = LIQUID_COOLPROP_ID.get(liquid_type)
+            liq_rho = CP.PropsSI("D", "T", T_C + 273.15, "P", P_bara * 1e5,
+                                  cp_id) if cp_id else 1000.0
+        except Exception:
+            liq_rho = 1000.0
+        liq_kgh = q_lye_m3h * liq_rho
+        # Map liquid display name to feed key (normalise to SPECIES_THERMO_ID keys)
+        liq_key = liquid_type
+        feed[liq_key] = feed.get(liq_key, 0.0) + liq_kgh
+
+    # Check every species has a thermo ID
+    missing = [sp for sp in feed if sp not in SPECIES_THERMO_ID]
+    if missing:
+        return {"feasible": False,
+                "warnings": [f"Species not in flash database: {missing}. "
+                             "Using specified phase split."]}
+
+    species = [sp for sp in feed if feed[sp] > 0]
+    if not species:
+        return {"feasible": False, "warnings": ["Zero total feed."]}
+
+    thermo_ids = [SPECIES_THERMO_ID[sp] for sp in species]
+
+    # MW for each species — prefer GAS_SPECIES table, fallback to thermo Chemical
+    MWs = {}
+    for sp in species:
+        if sp in GAS_SPECIES and GAS_SPECIES[sp]["MW"]:
+            MWs[sp] = GAS_SPECIES[sp]["MW"]
+        elif sp in LIQUID_COOLPROP_ID:
+            try:
+                MWs[sp] = CP.PropsSI("M", "T", T_C + 273.15, "P", P_bara * 1e5,
+                                      LIQUID_COOLPROP_ID[sp])
+            except Exception:
+                MWs[sp] = 18e-3
+        else:
+            MWs[sp] = 18e-3  # fallback (water)
+
+    mol_flows = {sp: feed[sp] / MWs[sp] for sp in species}  # mol/h
+    n_total = sum(mol_flows.values())
+    if n_total <= 0:
+        return {"feasible": False, "warnings": ["Zero total molar feed."]}
+    zs = [mol_flows[sp] / n_total for sp in species]
+
+    try:
+        constants, props = ChemicalConstantsPackage.from_IDs(thermo_ids)
+        kijs = [[0.0] * len(species) for _ in species]
+        eos_kw = dict(Tcs=constants.Tcs, Pcs=constants.Pcs,
+                      omegas=constants.omegas, kijs=kijs)
+        flasher = FlashVL(
+            constants, props,
+            liquid=CEOSLiquid(PRMIX, eos_kwargs=eos_kw,
+                              HeatCapacityGases=props.HeatCapacityGases),
+            gas=CEOSGas(PRMIX, eos_kwargs=eos_kw,
+                        HeatCapacityGases=props.HeatCapacityGases),
+        )
+        res = flasher.flash(T=T_C + 273.15, P=P_bara * 1e5, zs=zs)
+    except Exception as exc:
+        return {"feasible": False,
+                "warnings": [f"Flash solver failed: {str(exc)[:120]}"]}
+
+    VF_mol = float(res.VF) if res.VF is not None else 0.0
+    VF_mol = max(0.0, min(1.0, VF_mol))
+
+    gas_phase_kgh = {}
+    liquid_phase_kgh = {}
+
+    if VF_mol >= 1.0 - 1e-10:
+        gas_phase_kgh = {sp: feed[sp] for sp in species}
+    elif VF_mol <= 1e-10:
+        liquid_phase_kgh = {sp: feed[sp] for sp in species}
+    else:
+        for i, sp in enumerate(species):
+            mols_gas = n_total * VF_mol * res.gas.zs[i]
+            mols_liq = n_total * (1.0 - VF_mol) * res.liquid0.zs[i]
+            if mols_gas * MWs[sp] > 1e-6:
+                gas_phase_kgh[sp] = mols_gas * MWs[sp]
+            if mols_liq * MWs[sp] > 1e-6:
+                liquid_phase_kgh[sp] = mols_liq * MWs[sp]
+
+    m_gas  = sum(gas_phase_kgh.values()) if gas_phase_kgh else 0.0
+    m_liq  = sum(liquid_phase_kgh.values()) if liquid_phase_kgh else 0.0
+    VF_mass = m_gas / (m_gas + m_liq) if (m_gas + m_liq) > 0 else 0.0
+
+    return {
+        "feasible":          True,
+        "VF_mol":            VF_mol,
+        "VF_mass":           VF_mass,
+        "gas_phase_kgh":     gas_phase_kgh,
+        "liquid_phase_kgh":  liquid_phase_kgh,
+        "feed_kgh":          {sp: feed[sp] for sp in species},
+        "species":           species,
+        "warnings":          [],
+    }
+
+
+def liquid_mixture_props(liquid_phase_kgh: dict, T_K: float, P_pa: float):
+    """
+    Compute rho (kg/m³), mu (Pa·s), sigma (N/m) for a mixed liquid phase.
+
+    Uses mass-weighted CoolProp properties for each recognisable species.
+    Returns (rho, mu, sigma) — falls back to water defaults for unknowns.
+    """
+    m_total = sum(liquid_phase_kgh.values())
+    if m_total <= 0:
+        return 1000.0, 1e-3, 0.072
+
+    rho_sum = mu_log_sum = sigma_sum = 0.0
+    for sp, m_kgh in liquid_phase_kgh.items():
+        w = m_kgh / m_total
+        # Determine CoolProp ID: prefer LIQUID_COOLPROP_ID, fallback SPECIES_THERMO_ID
+        cp_id = LIQUID_COOLPROP_ID.get(sp) or SPECIES_THERMO_ID.get(sp)
+        if cp_id is None:
+            rho_sum += w * 1000.0
+            mu_log_sum += w * math.log(1e-3)
+            sigma_sum += w * 0.072
+            continue
+        try:
+            rho_i   = CP.PropsSI("D", "T", T_K, "P", P_pa, cp_id)
+            mu_i    = CP.PropsSI("V", "T", T_K, "P", P_pa, cp_id)
+            sig_fb  = LIQUID_SIGMA_FALLBACK.get(sp, 0.020)
+            try:
+                sigma_i = CP.PropsSI("I", "T", T_K, "Q", 0, cp_id)
+            except Exception:
+                sigma_i = sig_fb
+            rho_sum     += w * rho_i
+            mu_log_sum  += w * math.log(max(mu_i, 1e-9))
+            sigma_sum   += w * sigma_i
+        except Exception:
+            rho_sum     += w * 1000.0
+            mu_log_sum  += w * math.log(1e-3)
+            sigma_sum   += w * 0.072
+
+    rho   = max(rho_sum,  100.0)
+    mu    = math.exp(mu_log_sum) if mu_log_sum != 0.0 else 1e-3
+    sigma = max(sigma_sum, 1e-4)
+    return rho, mu, sigma
+
+
+# ============================================================================
+# 3B. KOH 30 wt% LIQUID PROPERTIES
 # Temperature-dependent correlations. Valid range: 0–100 °C.
 # Reference: Yaws' Chemical Properties Handbook; NIST aqueous KOH data.
 # ============================================================================
@@ -342,14 +606,28 @@ def _water_properties(T_C, P_bara):
 
 
 def _get_species_viscosity(species, T_K, P_pa):
-    """Dynamic viscosity (Pa·s) for a pure gas species via CoolProp, fallback to mu_ref."""
-    cid = GAS_SPECIES[species].get("coolprop_id")
-    if cid:
+    """Dynamic viscosity (Pa·s) for a gas-phase species via CoolProp, with fallbacks.
+
+    Handles species from GAS_SPECIES and also liquid-display-name species that
+    may appear in the gas phase after an equilibrium flash (e.g., 'Water').
+    """
+    info = GAS_SPECIES.get(species)
+    if info:
+        cid = info.get("coolprop_id")
+        if cid:
+            try:
+                return CP.PropsSI('V', 'T', T_K, 'P', P_pa, cid)
+            except Exception:
+                pass
+        return info.get("mu_ref") or 1e-5
+    # Species not in GAS_SPECIES — may be a liquid-named species in the gas phase
+    cp_id = LIQUID_COOLPROP_ID.get(species)
+    if cp_id:
         try:
-            return CP.PropsSI('V', 'T', T_K, 'P', P_pa, cid)
+            return CP.PropsSI('V', 'T', T_K, 'P', P_pa, cp_id)
         except Exception:
             pass
-    return GAS_SPECIES[species]["mu_ref"]
+    return 1e-5  # last-resort default
 
 
 def _coolprop_mixture_properties(gas_flows_kgh, T_C, P_bara, custom_gas=None):
@@ -487,6 +765,14 @@ def calculate_two_phase_properties(
             MW = custom_gas["MW_gmol"] * 1e-3
         else:
             MW = GAS_SPECIES.get(sp, {}).get("MW")
+            if MW is None:
+                # Flash may put liquid-named species in the gas phase (e.g., "Water")
+                cp_id = LIQUID_COOLPROP_ID.get(sp)
+                if cp_id:
+                    try:
+                        MW = CP.PropsSI("M", "T", T_K, "P", P_pa, cp_id)
+                    except Exception:
+                        pass
         if MW is None or MW <= 0:
             # skip unknown species here; they may be handled by CoolProp
             continue
@@ -570,6 +856,7 @@ def calculate_two_phase_properties(
         mu_g = max(5e-6, mu_g)
 
     # ── Phase mass balance ────────────────────────────────────────────────────
+    m_gas_total_kgh    = sum(v["kg_h"] for v in composition.values())
     m_liquid_total_kgh = max(0.1, m_lye_kgh - m_H2O_vapor_kgh)
     m_total_kgs        = (m_gas_total_kgh + m_liquid_total_kgh) / 3600.0
     x_gas              = m_gas_total_kgh / (m_gas_total_kgh + m_liquid_total_kgh)

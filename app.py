@@ -335,96 +335,6 @@ with st.sidebar:
 # ============================================================================
 # PRESETS  (shared across both cases)
 # ============================================================================
-# Presets: mode = "gas_liquid" or "vle"
-# Gas+Liquid presets: P, T, gas_flows, liquid_type, lye
-# VLE presets: P, vle_fluid, vle_x, vle_m_kgs
-PRESETS = {
-    # ── General engineering ──────────────────────────────────────────────────
-    "Custom (gas+liquid)": {
-        "mode": "gas_liquid",
-        "P": 3.0, "T": 25.0,
-        "gas_flows": {"Air": 10.0},
-        "liquid_type": "Water", "lye": 1.0,
-    },
-    "Air / Water — 25 °C, 3 bara": {
-        "mode": "gas_liquid",
-        "P": 3.0, "T": 25.0,
-        "gas_flows": {"Air": 50.0},
-        "liquid_type": "Water", "lye": 5.0,
-    },
-    "CO₂ / Water — 25 °C, 50 bara  (CCS)": {
-        "mode": "gas_liquid",
-        "P": 50.0, "T": 25.0,
-        "gas_flows": {"CO₂": 100.0},
-        "liquid_type": "Water", "lye": 5.0,
-    },
-    "N₂ / Water — 40 °C, 6 bara  (plant purge)": {
-        "mode": "gas_liquid",
-        "P": 6.0, "T": 40.0,
-        "gas_flows": {"N₂": 30.0},
-        "liquid_type": "Water", "lye": 2.0,
-    },
-    "CH₄ / n-Heptane — 40 °C, 20 bara  (gas condensate)": {
-        "mode": "gas_liquid",
-        "P": 20.0, "T": 40.0,
-        "gas_flows": {"CH₄": 50.0},
-        "liquid_type": "n-Heptane", "lye": 1.0,
-    },
-    "NH₃ / Water — 80 °C, 15 bara  (absorption)": {
-        "mode": "gas_liquid",
-        "P": 15.0, "T": 80.0,
-        "gas_flows": {"NH₃": 30.0},
-        "liquid_type": "Water", "lye": 3.0,
-    },
-    "C₃H₈ / n-Pentane — 40 °C, 12 bara  (LPG gathering)": {
-        "mode": "gas_liquid",
-        "P": 12.0, "T": 40.0,
-        "gas_flows": {"C₃H₈": 80.0},
-        "liquid_type": "n-Pentane", "lye": 2.0,
-    },
-    # ── VLE (saturated single-component) ────────────────────────────────────
-    "Steam / Water (VLE) — 10 bara, x = 0.3": {
-        "mode": "vle",
-        "P": 10.0,
-        "vle_fluid": "Water",
-        "vle_x": 0.3,
-        "vle_m_kgs": 1.0,
-    },
-    "R-134a (VLE) — 10 bara, x = 0.4  (refrigeration)": {
-        "mode": "vle",
-        "P": 10.0,
-        "vle_fluid": "R134a",
-        "vle_x": 0.4,
-        "vle_m_kgs": 0.5,
-    },
-    "Propane (VLE) — 8 bara, x = 0.2  (LPG)": {
-        "mode": "vle",
-        "P": 8.0,
-        "vle_fluid": "Propane",
-        "vle_x": 0.2,
-        "vle_m_kgs": 0.3,
-    },
-    "Ammonia (VLE) — 12 bara, x = 0.3  (refrigeration)": {
-        "mode": "vle",
-        "P": 12.0,
-        "vle_fluid": "Ammonia",
-        "vle_x": 0.3,
-        "vle_m_kgs": 0.2,
-    },
-    # ── Electrolyzer ─────────────────────────────────────────────────────────
-    "H₂ side — 80 °C, 16 bara, KOH 30%  (electrolyzer)": {
-        "mode": "gas_liquid",
-        "P": 16.0, "T": 80.0,
-        "gas_flows": {"H₂": 26.0},
-        "liquid_type": "KOH 30 wt%", "lye": 13.75,
-    },
-    "O₂ side — 80 °C, 16 bara, KOH 30%  (electrolyzer)": {
-        "mode": "gas_liquid",
-        "P": 16.0, "T": 80.0,
-        "gas_flows": {"O₂": 206.0},
-        "liquid_type": "KOH 30 wt%", "lye": 13.75,
-    },
-}
 
 _DEFAULT_SEGMENTS = [
     {"type": "Horizontal",      "dn": "DN50", "pn": "PN20", "material": "SS316L",
@@ -541,6 +451,16 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         st.session_state[k("flow_mode")] = "gas_liquid"
     if k("vle_fluid_widget") not in st.session_state:
         st.session_state[k("vle_fluid_widget")] = "Water"
+    if k("P_bara") not in st.session_state:
+        st.session_state[k("P_bara")] = 3.0
+    if k("T_C") not in st.session_state:
+        st.session_state[k("T_C")] = 25.0
+    if k("q_lye_widget") not in st.session_state:
+        st.session_state[k("q_lye_widget")] = 1.0
+    if k("vle_m_kgs_widget") not in st.session_state:
+        st.session_state[k("vle_m_kgs_widget")] = 1.0
+    if k("vle_x_widget") not in st.session_state:
+        st.session_state[k("vle_x_widget")] = 0.3
 
     # Migrate segments
     for _seg in st.session_state[k("segments")]:
@@ -555,30 +475,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
     # ── INPUTS ────────────────────────────────────────────────────────────────
     with col_in:
         st.subheader("Inputs")
-
-        # Presets
-        with st.container(border=True):
-            st.markdown("**Quick Presets**")
-            selected_preset = st.selectbox("Load preset conditions",
-                                           list(PRESETS.keys()), key=k("preset_sel"))
-            preset_vals = PRESETS[selected_preset]
-
-            if st.session_state.get(k("last_preset")) != selected_preset:
-                st.session_state[k("last_preset")] = selected_preset
-                _pmode = preset_vals.get("mode", "gas_liquid")
-                st.session_state[k("flow_mode")] = _pmode
-                st.session_state[k("P_bara")] = float(preset_vals["P"])
-                if _pmode == "vle":
-                    st.session_state[k("vle_fluid_widget")] = preset_vals.get("vle_fluid", "Water")
-                    st.session_state[k("vle_x_widget")]     = float(preset_vals.get("vle_x", 0.3))
-                    st.session_state[k("vle_m_kgs_widget")] = float(preset_vals.get("vle_m_kgs", 1.0))
-                else:
-                    st.session_state[k("T_C")]    = float(preset_vals.get("T", 25.0))
-                    st.session_state[k("gas_species_widget")] = list(preset_vals["gas_flows"].keys())
-                    st.session_state[k("liquid_type_widget")] = preset_vals["liquid_type"]
-                    for _sp, _fl in preset_vals["gas_flows"].items():
-                        st.session_state[k(f"gflow_{_sp}")] = float(_fl)
-                    st.session_state[k("q_lye_widget")] = float(preset_vals.get("lye", 1.0))
 
         # Flow mode selector
         flow_mode = st.radio(
@@ -599,17 +495,14 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             st.markdown("**Process Boundaries**")
             if _is_vle:
                 P_bara = st.number_input("Inlet Pressure (bara)", min_value=0.1, max_value=300.0,
-                                         value=float(preset_vals.get("P", 10.0)),
                                          step=1.0, key=k("P_bara"))
                 T_C = None  # derived from saturation in VLE mode
             else:
                 p1, p2 = st.columns(2)
                 P_bara = p1.number_input("Inlet Pressure (bara)", min_value=1.0, max_value=300.0,
-                                         value=float(preset_vals.get("P", 3.0)), step=1.0,
-                                         key=k("P_bara"))
+                                         step=1.0, key=k("P_bara"))
                 T_C    = p2.number_input("Temperature (°C)", min_value=-60.0, max_value=400.0,
-                                         value=float(preset_vals.get("T", 25.0)), step=5.0,
-                                         key=k("T_C"))
+                                         step=5.0, key=k("T_C"))
 
         # ── VLE input mode ────────────────────────────────────────────────────
         if _is_vle:
@@ -633,14 +526,10 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 _vv1, _vv2 = st.columns(2)
                 vle_m_kgs = _vv1.number_input(
                     "Total mass flow (kg/s)", min_value=0.001, max_value=500.0,
-                    value=float(st.session_state.get(k("vle_m_kgs_widget"),
-                                preset_vals.get("vle_m_kgs", 1.0))),
                     step=0.1, format="%.3f", key=k("vle_m_kgs_widget"))
                 vle_x = _vv2.slider(
                     "Inlet quality x  (0 = all liquid, 1 = all vapour)",
                     min_value=0.0, max_value=1.0,
-                    value=float(st.session_state.get(k("vle_x_widget"),
-                                preset_vals.get("vle_x", 0.3))),
                     step=0.01, key=k("vle_x_widget"))
 
                 # Show derived saturation properties
@@ -691,12 +580,12 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 if selected_species:
                     _ncols = min(len(selected_species), 3)
                     _fcols = st.columns(_ncols)
-                    _pflows = preset_vals.get("gas_flows", {})
                     for _ci, _sp in enumerate(selected_species):
-                        _default = float(_pflows.get(_sp, 1.0))
+                        _fkey = k(f"gflow_{_sp}")
+                        if _fkey not in st.session_state:
+                            st.session_state[_fkey] = 1.0
                         gas_flows_kgh[_sp] = _fcols[_ci % _ncols].number_input(
-                            f"{_sp}  (kg/h)", min_value=0.0, value=_default, step=0.1,
-                            key=k(f"gflow_{_sp}"))
+                            f"{_sp}  (kg/h)", min_value=0.0, step=0.1, key=_fkey)
 
                 custom_gas = None
                 if "Custom" in selected_species:
@@ -724,12 +613,11 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                                if _liq_saved in engine.LIQUID_PHASES else 0)
                 liquid_type = st.selectbox(
                     "Liquid type", engine.LIQUID_PHASES,
-                    index=_liq_idx, key=k("liquid_type_widget"),
+                    key=k("liquid_type_widget"),
                     help="KOH uses temperature-dependent correlations; all others use CoolProp.")
                 q_lye = st.number_input(
                     "Volume flow (m³/h)",
                     min_value=0.0,
-                    value=float(preset_vals.get("lye", 1.0)),
                     step=0.25, key=k("q_lye_widget"),
                     help="Set to 0 for single-phase gas flow (Darcy-Weisbach used automatically).")
                 custom_liquid = None
@@ -931,10 +819,71 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 P_bara, T_C, gas_flows_kgh, liquid_type, q_lye)
             for w in warn_list:
                 st.warning(w)
+
+            # ── Equilibrium Flash (Peng-Robinson EOS) ────────────────────────
+            _flash = engine.flash_pt(gas_flows_kgh, liquid_type, q_lye, T_C, P_bara)
+
+            if _flash["feasible"]:
+                with st.expander(
+                    f"Equilibrium Flash — {P_bara:.1f} bara / {T_C:.0f} °C  "
+                    f"(VF = {_flash['VF_mass']*100:.1f} % mass)", expanded=True):
+                    _feed   = _flash["feed_kgh"]
+                    _g_ph   = _flash["gas_phase_kgh"]
+                    _l_ph   = _flash["liquid_phase_kgh"]
+                    _frows  = []
+                    for _sp in _flash["species"]:
+                        _frows.append({
+                            "Species":           _sp,
+                            "Feed (kg/h)":       round(_feed.get(_sp, 0), 4),
+                            "Gas phase (kg/h)":  round(_g_ph.get(_sp, 0), 4),
+                            "Liquid phase (kg/h)": round(_l_ph.get(_sp, 0), 4),
+                        })
+                    st.dataframe(
+                        pd.DataFrame(_frows),
+                        column_config={c: st.column_config.NumberColumn(format="%.4f")
+                                       for c in ["Feed (kg/h)", "Gas phase (kg/h)",
+                                                 "Liquid phase (kg/h)"]},
+                        hide_index=True, use_container_width=True)
+                    _fv1, _fv2 = st.columns(2)
+                    _fv1.metric("Vapour fraction (mass)", f"{_flash['VF_mass']*100:.2f} %")
+                    _fv2.metric("Vapour fraction (mol)",  f"{_flash['VF_mol']*100:.2f} %")
+                    st.caption("Peng-Robinson EOS · binary interaction parameters = 0 "
+                               "· composition assumed constant along pipe")
+
+                # Derive effective inputs for pressure-drop engine
+                _fl_gas = _flash["gas_phase_kgh"]
+                _fl_liq = _flash["liquid_phase_kgh"]
+                if _fl_gas and _fl_liq:
+                    _fl_rho, _fl_mu, _fl_sig = engine.liquid_mixture_props(
+                        _fl_liq, T_C + 273.15, P_bara * 1e5)
+                    _eff_gas_flows  = _fl_gas
+                    _eff_liq_type   = "Custom"
+                    _eff_q_lye      = sum(_fl_liq.values()) / _fl_rho
+                    _eff_custom_liq = {"rho_kgm3": _fl_rho,
+                                       "mu_mpas":  _fl_mu * 1e3,
+                                       "sigma_mnm": _fl_sig * 1e3}
+                elif not _fl_liq:
+                    _eff_gas_flows  = _fl_gas or gas_flows_kgh
+                    _eff_liq_type   = liquid_type
+                    _eff_q_lye      = 0.0
+                    _eff_custom_liq = custom_liquid
+                else:
+                    _eff_gas_flows  = gas_flows_kgh
+                    _eff_liq_type   = liquid_type
+                    _eff_q_lye      = q_lye
+                    _eff_custom_liq = custom_liquid
+            else:
+                if _flash["warnings"]:
+                    st.caption(f"Flash equilibrium: {_flash['warnings'][0]}")
+                _eff_gas_flows  = gas_flows_kgh
+                _eff_liq_type   = liquid_type
+                _eff_q_lye      = q_lye
+                _eff_custom_liq = custom_liquid
+
             try:
                 props = engine.calculate_two_phase_properties(
-                    P_bara, T_C, gas_flows_kgh, liquid_type, q_lye,
-                    custom_gas=custom_gas, custom_liquid=custom_liquid,
+                    P_bara, T_C, _eff_gas_flows, _eff_liq_type, _eff_q_lye,
+                    custom_gas=custom_gas, custom_liquid=_eff_custom_liq,
                     use_coolprop=use_coolprop)
             except Exception as _calc_err:
                 st.error(f"Property calculation failed: {_calc_err}")
@@ -1034,8 +983,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     vle_fluid_id, current_P/1e5, vle_x, vle_m_kgs)
             else:
                 props_seg = engine.calculate_two_phase_properties(
-                    current_P/1e5, T_C, gas_flows_kgh, liquid_type, q_lye,
-                    custom_gas=custom_gas, custom_liquid=custom_liquid,
+                    current_P/1e5, T_C, _eff_gas_flows, _eff_liq_type, _eff_q_lye,
+                    custom_gas=custom_gas, custom_liquid=_eff_custom_liq,
                     use_coolprop=use_coolprop)
 
             angle = {"Horizontal": 0.0,
