@@ -1598,41 +1598,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
     # ── Flow Regime Map (V_sg vs V_sl, log-log) ─────────────────────────────
     _pipe_recs = [r for r in grid_records if r.get("V_sg (m/s)", 0) > 0 or r.get("V_sl (m/s)", 0) > 0]
-    fig_regime = go.Figure()
-    _seen_reg_map = set()
-    for _r in _pipe_recs:
-        _vsg = max(_r["V_sg (m/s)"], 1e-4)
-        _vsl = max(_r["V_sl (m/s)"], 1e-4)
-        _reg = _r["Regime"]
-        _col = _regime_color(_reg, _REGIME_LINE_KW, "#64748B")
-        _show_leg = _reg not in _seen_reg_map; _seen_reg_map.add(_reg)
-        fig_regime.add_trace(go.Scatter(
-            x=[_vsl], y=[_vsg], mode="markers+text",
-            marker=dict(size=16, color=_col, line=dict(color="white", width=1.5)),
-            text=[_r["Seg"]], textposition="middle center",
-            textfont=dict(size=9, color="white"),
-            name=_reg, legendgroup=_reg, showlegend=_show_leg,
-            hovertemplate=(
-                f"<b>{_r['Seg']}  {_r['Pipe']}</b><br>"
-                f"Regime: {_reg}<br>"
-                f"V_sl = {_vsl:.4f} m/s<br>"
-                f"V_sg = {_vsg:.4f} m/s<br>"
-                f"ΔP = {_r['ΔP (kPa)']:.3f} kPa"
-                "<extra></extra>"
-            ),
-        ))
-    fig_regime.update_layout(
-        template="plotly_white", height=420,
-        margin=dict(l=70, r=20, t=40, b=70),
-        xaxis=dict(title="V_sl  superficial liquid velocity (m/s)", type="log",
-                   gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-        yaxis=dict(title="V_sg  superficial gas velocity (m/s)", type="log",
-                   gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-        legend=dict(title="Flow Regime", bgcolor="rgba(255,255,255,0.9)",
-                    bordercolor="#E2E8F0", borderwidth=1, font=dict(size=11)),
-        font=dict(size=12, color="#374151"),
-        title=dict(text="Flow Regime Map — operating points per segment", font=dict(size=13), x=0),
-    )
 
     st.divider()
     tab_sch, tab_prof_tab, tab_regime_map = st.tabs(
@@ -1644,12 +1609,111 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         st.plotly_chart(fig_prof, use_container_width=True, key=k("fig_prof"))
     with tab_regime_map:
         if _pipe_recs:
-            st.plotly_chart(fig_regime, use_container_width=True, key=k("fig_regime"))
-            st.caption(
-                "Each point = one pipe segment, positioned by its superficial velocities. "
-                "Log–log axes follow the Mandhane (1974) convention. "
-                "Colour = regime classified by the engine (Taitel-Dukler / Mandhane / Wallis)."
+            _n_vert = sum(1 for r in _pipe_recs if r.get("Type", "Horizontal") != "Horizontal")
+            _map_choice = st.radio(
+                "Reference map:",
+                ["Horizontal – Mandhane (1974)", "Vertical upflow – Taitel-Dukler (1980)"],
+                index=1 if _n_vert > len(_pipe_recs) / 2 else 0,
+                horizontal=True, key=k("rmap_orient"),
             )
+            _use_horiz = "Horizontal" in _map_choice
+            if _use_horiz:
+                # Mandhane (1974) approximate zones — (name, fill, Vsl polygon, Vsg polygon, label pos)
+                # Boundaries: Stratified|Wavy split at Vsg=0.5; Stratified|Plug at Vsl=0.06;
+                #             Plug|Bubble at Vsl=0.4; Slug upper at Vsg=8; Dispersed at Vsl=4.
+                _rmap_zones = [
+                    ("Stratified",       "rgba(148,163,184,0.25)",
+                     [0.001,0.06, 0.06, 0.001,0.001], [0.001,0.001,0.5, 0.5, 0.001], (0.008, 0.022)),
+                    ("Wavy",             "rgba(100,116,139,0.25)",
+                     [0.001,0.06, 0.06, 0.001,0.001], [0.5,  0.5,  8.0, 8.0, 0.5  ], (0.008, 2.0  )),
+                    ("Plug",             "rgba(251,146,60, 0.25)",
+                     [0.06, 0.4,  0.4,  0.06, 0.06 ], [0.001,0.001,0.5, 0.5, 0.001], (0.155, 0.022)),
+                    ("Slug",             "rgba(239,68, 68, 0.18)",
+                     [0.06, 4.0,  4.0,  0.06, 0.06 ], [0.5,  0.5,  8.0, 8.0, 0.5  ], (0.49,  2.0  )),
+                    ("Bubble",           "rgba(34, 197,94, 0.25)",
+                     [0.4,  4.0,  4.0,  0.4,  0.4  ], [0.001,0.001,0.5, 0.5, 0.001], (1.26,  0.022)),
+                    ("Dispersed Bubble", "rgba(59, 130,246,0.25)",
+                     [4.0,  10,   10,   4.0,  4.0  ], [0.001,0.001,100, 100, 0.001], (6.32,  0.022)),
+                    ("Annular / Mist",   "rgba(139,92, 246,0.25)",
+                     [0.001,10,   10,   0.001,0.001], [8.0,  8.0,  100, 100, 8.0  ], (0.1,   28.3 )),
+                ]
+                _map_note = (
+                    "Mandhane (1974) horizontal-flow zone boundaries — air-water reference. "
+                    "Actual transitions shift with fluid properties and pipe diameter."
+                )
+            else:
+                # Taitel & Dukler (1980) vertical upflow approximate zones
+                # Boundaries: Bubble|Slug at Vsg≈0.3; Slug|Churn at Vsg≈2.5;
+                #             Churn|Annular at Vsg≈6; Dispersed Bubble at Vsl>3.
+                _rmap_zones = [
+                    ("Bubble",           "rgba(34, 197,94, 0.25)",
+                     [0.001,3.0, 3.0, 0.001,0.001], [0.001,0.001,0.3, 0.3, 0.001], (0.5,  0.06 )),
+                    ("Dispersed Bubble", "rgba(59, 130,246,0.25)",
+                     [3.0,  10,  10,  3.0,  3.0  ], [0.001,0.001,100, 100, 0.001], (5.5,  0.04 )),
+                    ("Slug",             "rgba(239,68, 68, 0.18)",
+                     [0.001,3.0, 3.0, 0.001,0.001], [0.3,  0.3,  2.5, 2.5, 0.3  ], (0.5,  0.87 )),
+                    ("Churn",            "rgba(234,88, 12, 0.22)",
+                     [0.001,3.0, 3.0, 0.001,0.001], [2.5,  2.5,  6.0, 6.0, 2.5  ], (0.5,  3.87 )),
+                    ("Annular / Mist",   "rgba(139,92, 246,0.25)",
+                     [0.001,10,  10,  0.001,0.001], [6.0,  6.0,  100, 100, 6.0  ], (0.1,  24.5 )),
+                ]
+                _map_note = (
+                    "Taitel & Dukler (1980) vertical-upflow zone boundaries — air-water reference. "
+                    "Actual transitions shift with fluid properties and pipe diameter."
+                )
+
+            fig_regime = go.Figure()
+            for _zn, _zc, _zvsl, _zvsg, (_zlx, _zly) in _rmap_zones:
+                fig_regime.add_trace(go.Scatter(
+                    x=_zvsl, y=_zvsg, fill="toself", fillcolor=_zc,
+                    line=dict(color="rgba(100,116,139,0.35)", width=0.8),
+                    mode="lines", name=_zn, showlegend=False, hoverinfo="skip",
+                ))
+                fig_regime.add_annotation(
+                    x=_zlx, y=_zly, xref="x", yref="y",
+                    text=f"<i>{_zn}</i>",
+                    showarrow=False, font=dict(size=9, color="#475569"),
+                )
+            _seen_reg_map = set()
+            for _r in _pipe_recs:
+                _vsg = max(_r["V_sg (m/s)"], 1e-4)
+                _vsl = max(_r["V_sl (m/s)"], 1e-4)
+                _reg = _r["Regime"]
+                _col = _regime_color(_reg, _REGIME_LINE_KW, "#64748B")
+                _sym = "circle" if _r.get("Type", "Horizontal") == "Horizontal" else "diamond"
+                _show_leg = _reg not in _seen_reg_map; _seen_reg_map.add(_reg)
+                fig_regime.add_trace(go.Scatter(
+                    x=[_vsl], y=[_vsg], mode="markers+text",
+                    marker=dict(size=16, color=_col, symbol=_sym,
+                                line=dict(color="white", width=1.5)),
+                    text=[_r["Seg"]], textposition="middle center",
+                    textfont=dict(size=9, color="white"),
+                    name=_reg, legendgroup=_reg, showlegend=_show_leg,
+                    hovertemplate=(
+                        f"<b>{_r['Seg']}  {_r['Pipe']}</b><br>"
+                        f"Orientation: {_r.get('Type', '—')}<br>"
+                        f"Regime: {_reg}<br>"
+                        f"V_sl = {_vsl:.4f} m/s<br>"
+                        f"V_sg = {_vsg:.4f} m/s<br>"
+                        f"ΔP = {_r['ΔP (kPa)']:.3f} kPa"
+                        "<extra></extra>"
+                    ),
+                ))
+            fig_regime.update_layout(
+                template="plotly_white", height=450,
+                margin=dict(l=70, r=20, t=40, b=70),
+                xaxis=dict(title="V_sl  superficial liquid velocity (m/s)", type="log",
+                           range=[-3, 1], gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+                yaxis=dict(title="V_sg  superficial gas velocity (m/s)", type="log",
+                           range=[-3, 2], gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+                legend=dict(title="Flow Regime", bgcolor="rgba(255,255,255,0.9)",
+                            bordercolor="#E2E8F0", borderwidth=1, font=dict(size=11)),
+                font=dict(size=12, color="#374151"),
+                title=dict(text="Flow Regime Map — operating points per segment",
+                           font=dict(size=13), x=0),
+            )
+            st.plotly_chart(fig_regime, use_container_width=True, key=k("fig_regime"))
+            st.caption(_map_note + "  ·  ● = horizontal segment  ◆ = vertical segment")
         else:
             st.info("No pipe segments with velocity data to plot.")
 
