@@ -597,7 +597,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     for _ci, _sp in enumerate(selected_species):
                         _fkey = k(f"gflow_{_sp}")
                         if _fkey not in st.session_state:
-                            st.session_state[_fkey] = 1.0
+                            st.session_state[_fkey] = 100.0
                         gas_flows_kgh[_sp] = _fcols[_ci % _ncols].number_input(
                             f"{_sp}  (kg/h)", min_value=0.0, step=0.1, key=_fkey)
 
@@ -626,6 +626,9 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     help="All species use CoolProp. Mixture properties are mass-weighted. "
                          "Leave empty for single-phase gas (Darcy-Weisbach fallback).",
                 )
+
+                if not liquid_species:
+                    st.caption("No liquid selected — calculating as **single-phase gas** (Darcy-Weisbach).")
 
                 liquid_flows_kgh = {}
                 if liquid_species:
@@ -670,22 +673,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     liquid_type   = "Custom"
                     custom_liquid = None
 
-        # Calculation Settings
-        with st.container(border=True):
-            st.markdown("**Calculation Settings**")
-            _cs1, _cs2 = st.columns(2)
-            correlation = _cs1.selectbox(
-                "ΔP correlation", engine.TWO_PHASE_CORRELATIONS,
-                key=k("correlation"),
-                help="Two-phase frictional pressure drop correlation. "
-                     "Beggs-Brill (default) also models inclined flow; "
-                     "others use gravity added separately.")
-            voidage_method = _cs2.selectbox(
-                "Void fraction model", engine.VOIDAGE_METHODS,
-                key=k("voidage_method"),
-                help="Homogeneous: α from density ratio (fast, conservative). "
-                     "Rouhani-1: slip-flow model (more accurate for stratified/annular).")
-
         # Pipe Geometry
         with st.container(border=True):
             st.markdown("**Pipe Geometry**")
@@ -697,49 +684,80 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             for i, seg in enumerate(st.session_state[k("segments")]):
                 _seg_kind = seg.get("kind", "pipe")
                 _kind_labels = {"pipe": "Pipe segment", "valve": "Valve", "hx": "Heat exchanger"}
-                st.markdown(f"**#{i+1} — {_kind_labels.get(_seg_kind, 'Pipe segment')}**")
+                _seg_hdr_col, _seg_del_col = st.columns([9, 1])
+                _seg_hdr_col.markdown(f"**#{i+1} — {_kind_labels.get(_seg_kind, 'Pipe segment')}**")
+                if len(st.session_state[k("segments")]) > 1:
+                    if _seg_del_col.button("×", key=k(f"del_seg_{i}"), help="Remove this segment"):
+                        st.session_state[k("segments")].pop(i)
+                        st.rerun()
 
                 # ── VALVE ──────────────────────────────────────────────────────
                 if _seg_kind == "valve":
-                    _vg1, _vg2, _vg3 = st.columns([1.0, 1.0, 1.0])
-                    _v_dn = _vg1.selectbox("Nominal DN", DN_OPTIONS, key=k(f"v_dn_{i}"),
+                    _vm1, _vm2, _vm3, _vm4 = st.columns([1.2, 1.0, 1.0, 1.0])
+                    _v_mode = _vm1.radio(
+                        "Mode", ["Specify ΔP → Kv", "Specify Kv → ΔP"],
+                        key=k(f"v_mode_{i}"),
+                        index=0 if seg.get("valve_mode", "dp") == "dp" else 1,
+                        horizontal=False,
+                        help="ΔP→Kv: budget a pressure drop, get required Kv (line sizing).\n"
+                             "Kv→ΔP: enter a known Kv, get the pressure drop.")
+                    _v_dn = _vm2.selectbox("Nominal DN", DN_OPTIONS, key=k(f"v_dn_{i}"),
                                            index=DN_OPTIONS.index(seg.get("dn", "DN50")))
-                    _v_pn = _vg2.selectbox("PN", PN_OPTIONS, key=k(f"v_pn_{i}"),
+                    _v_pn = _vm3.selectbox("PN", PN_OPTIONS, key=k(f"v_pn_{i}"),
                                            index=PN_OPTIONS.index(seg.get("pn", "PN40")))
-                    _v_char = _vg3.selectbox(
+                    _v_char = _vm4.selectbox(
                         "Characteristic", ["equal-percentage", "linear"],
                         key=k(f"v_char_{i}"),
                         index=["equal-percentage", "linear"].index(
                             seg.get("characteristic", "equal-percentage")),
-                        help="Inherent flow characteristic curve. "
-                             "Equal-percentage (R=50): Kv_eff = Kv_rated × 50^(f−1). "
+                        help="Equal-percentage (R=50): Kv_eff = Kv_rated × 50^(f−1).  "
                              "Linear: Kv_eff = Kv_rated × f.")
-                    _vg4, _vg5 = st.columns([1.2, 1.0])
-                    _v_kv = _vg4.number_input(
-                        "Kv rated  (m³/h per bar^0.5)", min_value=0.001, max_value=50000.0,
-                        value=float(seg.get("Kv_m3h", 10.0)), step=1.0, format="%.3f",
-                        key=k(f"v_kv_{i}"),
-                        help="Valve flow coefficient at full-open. "
-                             "Kv [m³/h·bar^0.5] = Cv [US gal/min·psi^0.5] / 1.156")
-                    _v_open = _vg5.slider(
-                        "Opening (%)", min_value=0, max_value=100,
-                        value=int(seg.get("opening_pct", 100)),
-                        key=k(f"v_open_{i}"),
-                        help="Valve opening position. Drives effective Kv via the chosen characteristic.")
-                    # Show derived effective Kv and Cv equivalent
-                    _f_open = max(0.001, _v_open / 100.0)
-                    if _v_char == "equal-percentage":
-                        _kv_eff_preview = _v_kv * (50.0 ** (_f_open - 1.0))
+
+                    _v_mode_key = "dp" if _v_mode.startswith("Specify ΔP") else "kv"
+
+                    if _v_mode_key == "dp":
+                        _vc1, _vc2 = st.columns([1.2, 1.0])
+                        _v_dp_kpa = _vc1.number_input(
+                            "Target ΔP  (kPa)", min_value=0.1, max_value=10000.0,
+                            value=float(seg.get("dp_kpa", 50.0)), step=5.0, format="%.1f",
+                            key=k(f"v_dp_{i}"),
+                            help="Pressure drop budget allocated to this valve.")
+                        _v_open = _vc2.slider(
+                            "Opening (%)", min_value=1, max_value=100,
+                            value=int(seg.get("opening_pct", 100)),
+                            key=k(f"v_open_{i}"),
+                            help="Valve opening at operating point.")
+                        _v_kv = seg.get("Kv_m3h", 10.0)  # kept for storage, computed at runtime
+                        st.caption(f"Required Kv calculated from ΔP = {_v_dp_kpa:.1f} kPa "
+                                   f"at {_v_open} % opening — shown in results.")
                     else:
-                        _kv_eff_preview = _v_kv * _f_open
-                    st.caption(
-                        f"Kv_eff = **{_kv_eff_preview:.3f}** m³/h·bar^0.5  ·  "
-                        f"Cv_rated ≈ {_v_kv * 1.156:.2f} US gal/min·psi^0.5  ·  "
-                        f"Cv_eff ≈ {_kv_eff_preview * 1.156:.2f}"
-                    )
+                        _vc1, _vc2 = st.columns([1.2, 1.0])
+                        _v_kv = _vc1.number_input(
+                            "Kv rated  (m³/h·bar^0.5)", min_value=0.001, max_value=50000.0,
+                            value=float(seg.get("Kv_m3h", 10.0)), step=1.0, format="%.3f",
+                            key=k(f"v_kv_{i}"),
+                            help="Valve flow coefficient at full-open. "
+                                 "Kv = Cv / 1.156")
+                        _v_open = _vc2.slider(
+                            "Opening (%)", min_value=1, max_value=100,
+                            value=int(seg.get("opening_pct", 100)),
+                            key=k(f"v_open_{i}"),
+                            help="Valve opening position.")
+                        _f_open = max(0.001, _v_open / 100.0)
+                        _kv_eff_p = (_v_kv * (50.0 ** (_f_open - 1.0))
+                                     if _v_char == "equal-percentage"
+                                     else _v_kv * _f_open)
+                        _v_dp_kpa = seg.get("dp_kpa", 50.0)  # kept for storage
+                        st.caption(
+                            f"Kv_eff = **{_kv_eff_p:.3f}**  ·  "
+                            f"Cv_rated ≈ {_v_kv * 1.156:.2f}  ·  "
+                            f"Cv_eff ≈ {_kv_eff_p * 1.156:.2f}")
+
                     current_specs.append({
                         "kind": "valve", "dn": _v_dn, "pn": _v_pn,
-                        "Kv_m3h": _v_kv, "opening_pct": float(_v_open),
+                        "valve_mode": _v_mode_key,
+                        "Kv_m3h": float(_v_kv), "dp_kpa": float(_v_dp_kpa),
+                        "opening_pct": float(_v_open),
                         "characteristic": _v_char,
                     })
                     continue
@@ -939,9 +957,26 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 st.session_state[k("segments")].pop()
                 st.rerun()
 
+        # Calculation Settings
+        with st.container(border=True):
+            st.markdown("**Calculation Settings**")
+            _cs1, _cs2 = st.columns(2)
+            correlation = _cs1.selectbox(
+                "ΔP correlation", engine.TWO_PHASE_CORRELATIONS,
+                key=k("correlation"),
+                help="Two-phase frictional pressure drop correlation. "
+                     "Beggs-Brill (default) also models inclined flow; "
+                     "others use gravity added separately.")
+            voidage_method = _cs2.selectbox(
+                "Void fraction model", engine.VOIDAGE_METHODS,
+                key=k("voidage_method"),
+                help="Homogeneous: α from density ratio (fast, conservative). "
+                     "Rouhani-1: slip-flow model (more accurate for stratified/annular).")
+
     # ── OUTPUTS ───────────────────────────────────────────────────────────────
     with col_out:
         st.subheader("Results")
+        _key_results_ph = st.empty()   # filled after the segment loop
 
         # Initialise effective liquid state (overwritten in gas+liquid path below)
         _eff_liquid_flows = liquid_flows_kgh
@@ -977,8 +1012,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     icon="ℹ️",
                 )
                 with st.expander(
-                    f"Equilibrium Flash — {P_bara:.1f} bara / {T_C:.0f} °C  "
-                    f"(VF = {_flash['VF_mass']*100:.1f} % mass)", expanded=False):
+                    f"Feed / phase-split detail  (VF = {_flash['VF_mass']*100:.1f} wt%)",
+                    expanded=False):
                     _feed   = _flash["feed_kgh"]
                     _g_ph   = _flash["gas_phase_kgh"]
                     _l_ph   = _flash["liquid_phase_kgh"]
@@ -1056,6 +1091,11 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             with col_gas:
                 _gas_label = "Vapour phase" if _is_vle else "Gas phase"
                 st.markdown(f"**{_gas_label}**")
+                g1, g2, g3 = st.columns(3)
+                g1.metric("ρ_gas",  f"{props['rho_g']:.3f} kg/m³")
+                g2.metric("MW",     f"{props['MW_mix_gmol']:.2f} g/mol")
+                if props.get("P_sat_H2O_pa", 0) > 0:
+                    g3.metric("P_sat H₂O", f"{props['P_sat_H2O_pa']/1e5:.3f} bara")
                 _comp     = props["composition"]
                 _n_total  = sum(v["mol_h"] for v in _comp.values())
                 _comp_rows = []
@@ -1071,39 +1111,41 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                              column_config={"kg/h": st.column_config.NumberColumn(format="%.3f"),
                                             "mol/h": st.column_config.NumberColumn(format="%.1f")},
                              hide_index=True, use_container_width=True)
-                g1, g2, g3 = st.columns(3)
-                g1.metric("ρ_gas",  f"{props['rho_g']:.3f} kg/m³")
-                g2.metric("MW",     f"{props['MW_mix_gmol']:.2f} g/mol")
-                if props.get("P_sat_H2O_pa", 0) > 0:
-                    g3.metric("P_sat H₂O", f"{props['P_sat_H2O_pa']/1e5:.3f} bara")
             with col_liq:
-                st.markdown(f"**Liquid phase ({props['liquid_type']})**")
+                # Resolve liquid composition source for display
+                _liq_disp = None
+                if not _is_vle:
+                    if _flash.get("feasible") and _flash.get("liquid_phase_kgh"):
+                        _liq_disp = _flash["liquid_phase_kgh"]
+                    elif _eff_liquid_flows:
+                        _liq_disp = _eff_liquid_flows
 
-                _is_multi_liq = bool(_eff_liquid_flows and len(_eff_liquid_flows) > 1)
-                if _is_multi_liq:
-                    _m_liq_total = sum(_eff_liquid_flows.values())
-                    _liq_rows = [{"Component": sp,
-                                  "kg/h": round(m, 2),
-                                  "wt %": f"{m/_m_liq_total*100:.1f}"}
-                                 for sp, m in _eff_liquid_flows.items()]
-                    _liq_rows.append({"Component": "Total",
-                                      "kg/h": round(_m_liq_total, 2), "wt %": "100.0"})
-                    st.dataframe(pd.DataFrame(_liq_rows),
-                                 column_config={"kg/h": st.column_config.NumberColumn(format="%.2f")},
-                                 hide_index=True, use_container_width=True)
+                # Header: list actual species instead of "Custom"
+                if _liq_disp:
+                    _liq_label = " + ".join(_liq_disp.keys())
                 else:
-                    l1, l2, l3, l4 = st.columns(4)
-                    l1.metric("ṁ_liq", f"{props['m_lye_kgh']:.1f} kg/h")
-                    l2.metric("ρ_liq", f"{props['rho_l']:.1f} kg/m³")
-                    l3.metric("μ_liq", f"{props['mu_l']*1e3:.3f} mPa·s")
-                    l4.metric("σ_liq", f"{props['sigma']*1e3:.2f} mN/m")
+                    _liq_label = props["liquid_type"]
+                st.markdown(f"**Liquid phase ({_liq_label})**")
 
-                if _is_multi_liq:
-                    lp1, lp2, lp3, lp4 = st.columns(4)
-                    lp1.metric("ṁ_liq",  f"{props['m_lye_kgh']:.1f} kg/h")
-                    lp2.metric("ρ_liq",  f"{props['rho_l']:.1f} kg/m³")
-                    lp3.metric("μ_liq",  f"{props['mu_l']*1e3:.3f} mPa·s")
-                    lp4.metric("σ_liq",  f"{props['sigma']*1e3:.2f} mN/m")
+                # Composition table — shown whenever we have species-level data
+                if _liq_disp:
+                    _m_liq_total = sum(_liq_disp.values())
+                    _liq_rows = [{"Component": sp,
+                                  "kg/h": round(m, 3),
+                                  "wt %": f"{m / _m_liq_total * 100:.1f}"}
+                                 for sp, m in _liq_disp.items() if m > 0]
+                    _liq_rows.append({"Component": "Total",
+                                      "kg/h": round(_m_liq_total, 3), "wt %": "100.0"})
+                    st.dataframe(pd.DataFrame(_liq_rows),
+                                 column_config={"kg/h": st.column_config.NumberColumn(format="%.3f")},
+                                 hide_index=True, use_container_width=True)
+
+                # Mixture properties — always shown
+                lp1, lp2, lp3, lp4 = st.columns(4)
+                lp1.metric("ṁ_liq", f"{props['m_lye_kgh']:.2f} kg/h")
+                lp2.metric("ρ_liq", f"{props['rho_l']:.1f} kg/m³")
+                lp3.metric("μ_liq", f"{props['mu_l']*1e3:.3f} mPa·s")
+                lp4.metric("σ_liq", f"{props['sigma']*1e3:.2f} mN/m")
 
                 st.markdown("**Two-phase mixture**")
                 _m_total_kgh = props["m_gas_total_kgh"] + props["m_liquid_total_kgh"]
@@ -1129,7 +1171,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         with st.container(border=True):
             _ln1 = (f" + {_seg1['liner_material']} {_seg1['liner_thickness_mm']:.1f}mm"
                     if _seg1.get("lined") else "")
-            st.subheader(f"Inlet Flow Conditions  ({_seg1['dn']}/{_seg1['pn']}{_ln1})")
+            st.subheader(f"Inlet Flow Conditions")
+            st.caption(f"Segment #1 — {_seg1['dn']}/{_seg1['pn']}{_ln1}")
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("V_sg (gas)",    f"{Vsg_in:.3f} m/s")
             v2.metric("V_sl (liquid)", f"{Vsl_in:.3f} m/s")
@@ -1142,6 +1185,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         current_T_C        = T_C if T_C is not None else 25.0  # updated at HX segments
         grid_records       = []
         stream_records     = []
+        valve_sizing       = []   # collects ΔP-mode valve results for display
         cumulative_positions = []
         cumulative_distance  = 0.0
         pressure_profile_x   = [0.0]
@@ -1192,11 +1236,39 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
             # ── VALVE ──────────────────────────────────────────────────────────
             if _seg_kind == "valve":
-                _vp   = _props_at_current()
-                _vres = engine.calculate_valve_dp(
-                    _vp, seg.get("Kv_m3h", 1.0),
-                    seg.get("opening_pct", 100.0),
-                    seg.get("characteristic", "equal-percentage"))
+                _vp       = _props_at_current()
+                _v_mode   = seg.get("valve_mode", "kv")
+                if _v_mode == "dp":
+                    _vres = engine.calculate_valve_kv(
+                        _vp, seg.get("dp_kpa", 50.0) * 1000.0,
+                        seg.get("opening_pct", 100.0),
+                        seg.get("characteristic", "equal-percentage"))
+                    _v_label = (f"ΔP={seg.get('dp_kpa',50):.1f} kPa → "
+                                f"Kv_req={_vres['Kv_rated']:.2f}  "
+                                f"Kv_eff={_vres['Kv_eff']:.2f}  "
+                                f"{seg.get('opening_pct',100):.0f}% open")
+                    valve_sizing.append({
+                        "seg":       i + 1,
+                        "dn":        seg.get("dn", ""),
+                        "pn":        seg.get("pn", ""),
+                        "dp_kpa":    seg.get("dp_kpa", 50.0),
+                        "opening":   seg.get("opening_pct", 100.0),
+                        "char":      seg.get("characteristic", "equal-percentage"),
+                        "Q_m3h":     _vres["Q_m3h"],
+                        "rho_hom":   _vres["rho_hom"],
+                        "Kv_eff":    _vres["Kv_eff"],
+                        "Kv_rated":  _vres["Kv_rated"],
+                        "Cv_rated":  _vres["Kv_rated"] * 1.156,
+                        "P_in":      current_P / 1e5,
+                    })
+                else:
+                    _vres = engine.calculate_valve_dp(
+                        _vp, seg.get("Kv_m3h", 1.0),
+                        seg.get("opening_pct", 100.0),
+                        seg.get("characteristic", "equal-percentage"))
+                    _v_label = (f"Kv={seg.get('Kv_m3h',1.0):.2g}  "
+                                f"Kv_eff={_vres['Kv_eff']:.3f}  "
+                                f"{seg.get('opening_pct',100):.0f}% open")
                 _v_dP_Pa  = _vres["dP_Pa"]
                 _v_end_P  = current_P - _v_dP_Pa
                 _v_D      = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
@@ -1207,8 +1279,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     "ID (mm)":       round(_v_D*1000, 1),
                     "L (m)":         0.0,
                     "L_eq (m)":      0.0,
-                    "Fittings":      f"Kv={seg.get('Kv_m3h',1.0):.2g}  {seg.get('opening_pct',100):.0f}% open",
-                    "Regime":        f"Kv_eff={_vres['Kv_eff']:.3f}  Q={_vres['Q_m3h']:.3f} m³/h",
+                    "Fittings":      _v_label,
+                    "Regime":        f"Q={_vres['Q_m3h']:.3f} m³/h  ρ_hom={_vres['rho_hom']:.1f} kg/m³",
                     "ΔP (kPa)":      round(_v_dP_Pa/1000, 3),
                     "P_in (bara)":   round(current_P/1e5, 4),
                     "P_out (bara)":  round(_v_end_P/1e5, 4),
@@ -1381,30 +1453,29 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             st.success(f"Erosion check OK — worst {_worst_seg}: "
                        f"V_m/V_e = {_max_ratio:.2f}  (API RP 14E, C=100, limit = 1.0).")
 
-        # System Totals  (shown before the detail table)
-        total_dp_kpa         = ((P_bara*1e5) - current_P) / 1000.0
-        outlet_pressure_bara = max(0.1, current_P/1e5)
-        pipe_length_m        = sum(s.get("length", 0.0) for s in st.session_state[k("segments")])
+        # ── Valve Sizing Results ──────────────────────────────────────────────
+        if valve_sizing:
+            with st.container(border=True):
+                st.markdown("**Valve Sizing**")
+                for _vs in valve_sizing:
+                    st.markdown(f"Segment #{_vs['seg']} — {_vs['dn']}/{_vs['pn']}  "
+                                f"·  ΔP = {_vs['dp_kpa']:.1f} kPa  "
+                                f"·  {_vs['opening']:.0f} % open  "
+                                f"·  {_vs['char']}")
+                    _vc1, _vc2, _vc3, _vc4, _vc5 = st.columns(5)
+                    _vc1.metric("Q",       f"{_vs['Q_m3h']:.3f} m³/h")
+                    _vc2.metric("ρ_hom",   f"{_vs['rho_hom']:.1f} kg/m³")
+                    _vc3.metric("Kv_eff",  f"{_vs['Kv_eff']:.2f} m³/h·bar^0.5")
+                    _vc4.metric("Kv_rated (req.)", f"{_vs['Kv_rated']:.2f} m³/h·bar^0.5")
+                    _vc5.metric("Cv_rated (req.)", f"{_vs['Cv_rated']:.2f} US gal/min·psi^0.5")
+                    st.caption(f"P_in = {_vs['P_in']:.3f} bara  ·  "
+                               f"Kv_rated is the minimum full-open Kv needed to pass "
+                               f"{_vs['Q_m3h']:.3f} m³/h at {_vs['dp_kpa']:.1f} kPa "
+                               f"with valve at {_vs['opening']:.0f} % opening.")
+                    if len(valve_sizing) > 1:
+                        st.divider()
 
-        with st.container(border=True):
-            st.subheader("System Totals")
-            s1, s2, s3, s4 = st.columns(4)
-            s1.metric("Total ΔP",       f"{total_dp_kpa:.3f} kPa",
-                      delta=f"−{total_dp_kpa/100:.4f} bar", delta_color="inverse")
-            s2.metric("Outlet Pressure", f"{outlet_pressure_bara:.4f} bara")
-            s3.metric("Pipe Length",     f"{pipe_length_m:.1f} m")
-            s4.metric("Eff. Length",     f"{cumulative_distance:.1f} m")
-            st.divider()
-            st.markdown("**ΔP decomposition**")
-            d1, d2, d3 = st.columns(3)
-            d1.metric("Σ Frictional",    f"{total_dp_fric_kpa:.3f} kPa",
-                      help="Sum of frictional component across all segments")
-            d2.metric("Σ Gravitational", f"{total_dp_grav_kpa:.3f} kPa",
-                      help="Sum of gravitational component (negative = pressure recovery from downflow)")
-            d3.metric("Σ Accelerational",f"{total_dp_accel_kpa:.3f} kPa",
-                      help="Residual (B&B inclination correction). Zero for non-B&B correlations.")
-
-        # Segment table
+        # ── Segment Analysis (before Key Results so it's visible immediately) ──
         st.subheader("Segment Analysis")
         st.dataframe(pd.DataFrame(grid_records),
             column_config={
@@ -1426,6 +1497,64 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 "α (void)":        st.column_config.NumberColumn(format="%.4f"),
                 "dP/dz (Pa/m)":    st.column_config.NumberColumn(format="%.2f"),
             }, hide_index=True, use_container_width=True)
+
+        # ── Key Results — fill the top-of-column placeholder ─────────────────
+        total_dp_kpa         = ((P_bara*1e5) - current_P) / 1000.0
+        outlet_pressure_bara = max(0.1, current_P/1e5)
+        pipe_length_m        = sum(s.get("length", 0.0) for s in st.session_state[k("segments")])
+        _T_out  = current_T_C
+        _T_in   = T_C if T_C is not None else _T_out
+        _dT     = _T_out - _T_in
+        _has_hx = any(s.get("kind") == "hx" for s in st.session_state[k("segments")])
+
+        with _key_results_ph.container():
+            with st.container(border=True):
+                # Accent banner: ΔP at a glance
+                st.markdown(
+                    f'<div style="background:{accent};border-radius:6px;'
+                    f'padding:0.45rem 1rem 0.3rem;margin-bottom:0.6rem">'
+                    f'<span style="color:white;font-size:1.55rem;font-weight:700">'
+                    f'ΔP = {total_dp_kpa:.2f} kPa</span>'
+                    f'<span style="color:rgba(255,255,255,0.75);font-size:0.95rem;'
+                    f'margin-left:1rem">({total_dp_kpa/100:.4f} bar'
+                    f' &nbsp;·&nbsp; {total_dp_kpa*1000:.0f} Pa)</span>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+
+                # Pressure / temperature metrics
+                _kr1, _kr2, _kr3, _kr4 = st.columns(4)
+                _kr1.metric("P_in",  f"{P_bara:.3f} bara")
+                _kr2.metric("P_out", f"{outlet_pressure_bara:.4f} bara",
+                            delta=-(total_dp_kpa / 100), delta_color="inverse")
+                _kr3.metric("T_in",  f"{_T_in:.1f} °C")
+                _kr4.metric("T_out", f"{_T_out:.1f} °C",
+                            delta=(_dT if _has_hx else None))
+
+                # Outlet composition (compact)
+                _out_gas_flows = _eff_gas_flows or {}
+                _out_liq_kgh   = props.get("m_lye_kgh", 0.0)
+                _gas_parts = [f"**{sp}** {m:.3g} kg/h"
+                              for sp, m in _out_gas_flows.items() if m > 0]
+                _gas_total = sum(_out_gas_flows.values())
+                if _gas_parts:
+                    st.markdown("**Outlet composition** &nbsp; *(constant along pipe)*",
+                                unsafe_allow_html=True)
+                    _oc1, _oc2 = st.columns([3, 1])
+                    _oc1.caption("Gas phase:  " + "  ·  ".join(_gas_parts)
+                                 + f"  ·  Total {_gas_total:.3g} kg/h")
+                    _oc2.caption(f"Liquid:  {_out_liq_kgh:.3g} kg/h")
+
+                # ΔP decomposition (collapsed by default)
+                with st.expander("ΔP decomposition"):
+                    d1, d2, d3 = st.columns(3)
+                    d1.metric("Σ Frictional",     f"{total_dp_fric_kpa:.3f} kPa",
+                              help="Sum of frictional component across all segments")
+                    d2.metric("Σ Gravitational",  f"{total_dp_grav_kpa:.3f} kPa",
+                              help="Gravitational head loss (negative = recovery on downflow)")
+                    d3.metric("Σ Accelerational", f"{total_dp_accel_kpa:.3f} kPa",
+                              help="Residual B&B inclination correction; zero for other correlations.")
+                    st.caption(f"Pipe length {pipe_length_m:.1f} m  ·  "
+                               f"Eff. length (+ fittings) {cumulative_distance:.1f} m")
 
         # ΔP decomposition stacked bar chart
         _seg_labels = [r["Seg"] + " " + r["Pipe"] for r in grid_records]
@@ -1459,12 +1588,14 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
     _nodes = [(0.0, 0.0)]
     for _seg in st.session_state[k("segments")]:
         _xl, _yl = _nodes[-1]
-        if _seg["type"] == "Horizontal":
-            _nodes.append((_xl+_seg["length"], _yl))
-        elif _seg["type"] == "Vertical Upflow":
-            _nodes.append((_xl, _yl+_seg["length"]))
+        _seg_type = _seg.get("type", "Horizontal")
+        _seg_len  = _seg.get("length", 0.0)
+        if _seg_type == "Horizontal":
+            _nodes.append((_xl+_seg_len, _yl))
+        elif _seg_type == "Vertical Upflow":
+            _nodes.append((_xl, _yl+_seg_len))
         else:
-            _nodes.append((_xl, _yl-_seg["length"]))
+            _nodes.append((_xl, _yl-_seg_len))
 
     _DN_LW = {"DN20":2,"DN25":3,"DN40":5,"DN50":7,"DN80":9,"DN100":11,"DN150":15,"DN200":19,"DN250":23}
 
@@ -1474,28 +1605,46 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         _x0,_y0 = _nodes[_i]; _x1,_y1 = _nodes[_i+1]
         _reg = _rec["Regime"]
         _col = _regime_color(_reg, _REGIME_LINE_KW, "#64748B")
-        _lw  = _DN_LW.get(_seg["dn"], 10)
+        _lw  = _DN_LW.get(_seg.get("dn","DN50"), 10)
         _show = _reg not in _seen_reg; _seen_reg.add(_reg)
+        _seg_kind = _seg.get("kind", "pipe")
         _lh = (f"Liner: {_seg['liner_material']} {_seg['liner_thickness_mm']:.1f} mm"
                f"  →  ID {_rec['ID (mm)']:.1f} mm<br>" if _seg.get("lined") else "")
-        fig_sch.add_trace(go.Scatter(
-            x=[_x0,_x1], y=[_y0,_y1], mode="lines",
-            line=dict(color=_col, width=_lw), name=_reg, legendgroup=_reg,
-            showlegend=_show,
-            hovertemplate=(f"<b>Seg #{_i+1}  {_seg['dn']}/{_seg['pn']}</b><br>"
-                           +_lh+f"{_seg['type']},  L={_seg['length']:.1f} m<br>"
-                           f"Regime: {_reg}<br>ΔP: {_rec['ΔP (kPa)']:.3f} kPa  ·  "
-                           f"V_sg: {_rec['V_sg (m/s)']:.3f} m/s<extra></extra>")))
-        fig_sch.add_annotation(
-            x=_x0+(_x1-_x0)*0.65, y=_y0+(_y1-_y0)*0.65,
-            ax=_x0+(_x1-_x0)*0.5, ay=_y0+(_y1-_y0)*0.5,
-            xref="x", yref="y", axref="x", ayref="y",
-            showarrow=True, arrowhead=2, arrowsize=1.8, arrowwidth=2.5, arrowcolor=_col)
-        fig_sch.add_annotation(
-            x=(_x0+_x1)/2, y=(_y0+_y1)/2, text=f"<b>#{_i+1}</b> {_seg['dn']}",
-            showarrow=False, font=dict(size=10,color="#1E293B"),
-            bgcolor="rgba(255,255,255,0.85)", bordercolor=_col, borderwidth=1.5,
-            borderpad=3, xanchor="center", yanchor="middle")
+        _hover = (f"<b>Seg #{_i+1}  {_seg.get('dn','')}/{_seg.get('pn','')}</b><br>"
+                  +_lh+f"{_seg.get('type', _seg_kind)},  L={_seg.get('length',0.0):.1f} m<br>"
+                  f"Regime: {_reg}<br>ΔP: {_rec['ΔP (kPa)']:.3f} kPa  ·  "
+                  f"V_sg: {_rec['V_sg (m/s)']:.3f} m/s<extra></extra>")
+        if _seg_kind in ("valve", "hx"):
+            # Zero-length inline component — render as a diamond marker
+            _sym = "diamond" if _seg_kind == "valve" else "square"
+            fig_sch.add_trace(go.Scatter(
+                x=[_x0], y=[_y0], mode="markers",
+                marker=dict(symbol=_sym, size=14, color=_col,
+                            line=dict(color="white", width=2)),
+                name=_reg, legendgroup=_reg, showlegend=_show,
+                hovertemplate=_hover))
+            fig_sch.add_annotation(
+                x=_x0, y=_y0,
+                text=f"<b>#{_i+1}</b>",
+                showarrow=False, font=dict(size=9, color="#1E293B"),
+                bgcolor="rgba(255,255,255,0.85)", bordercolor=_col, borderwidth=1.5,
+                borderpad=2, xanchor="left", yanchor="bottom", xshift=10)
+        else:
+            fig_sch.add_trace(go.Scatter(
+                x=[_x0,_x1], y=[_y0,_y1], mode="lines",
+                line=dict(color=_col, width=_lw), name=_reg, legendgroup=_reg,
+                showlegend=_show,
+                hovertemplate=_hover))
+            fig_sch.add_annotation(
+                x=_x0+(_x1-_x0)*0.65, y=_y0+(_y1-_y0)*0.65,
+                ax=_x0+(_x1-_x0)*0.5, ay=_y0+(_y1-_y0)*0.5,
+                xref="x", yref="y", axref="x", ayref="y",
+                showarrow=True, arrowhead=2, arrowsize=1.8, arrowwidth=2.5, arrowcolor=_col)
+            fig_sch.add_annotation(
+                x=(_x0+_x1)/2, y=(_y0+_y1)/2, text=f"<b>#{_i+1}</b> {_seg.get('dn','')}",
+                showarrow=False, font=dict(size=10,color="#1E293B"),
+                bgcolor="rgba(255,255,255,0.85)", bordercolor=_col, borderwidth=1.5,
+                borderpad=3, xanchor="center", yanchor="middle")
 
     _all_x=[n[0] for n in _nodes]; _all_y=[n[1] for n in _nodes]
     _xspan=max(_all_x)-min(_all_x); _yspan=max(_all_y)-min(_all_y)
@@ -1587,7 +1736,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             "P": P_bara, "T": T_C,
             "gas_flows": {_kk: float(_vv) for _kk,_vv in gas_flows_kgh.items()},
             "liq_flows": {_kk: float(_vv) for _kk,_vv in liquid_flows_kgh.items()},
-            "segs": [(s["type"],s["dn"],s["pn"],s["length"],
+            "segs": [(s.get("type", s.get("kind","")),s.get("dn",""),s.get("pn",""),s.get("length",0.0),
                       tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
                       s.get("lined",False),
                       s.get("liner_material","FEP"),s.get("liner_thickness_mm",1.0))
@@ -2926,7 +3075,7 @@ def _sens_hash(ra, rb):
             "P": ra["P_bara"], "T": ra["T_C"],
             "gas": {_k: float(_v) for _k, _v in ra["gas_flows_kgh"].items()},
             "liq": ra["liquid_type"], "lye": ra["q_lye"],
-            "segs": [(s["type"], s["dn"], s["pn"], float(s["length"]),
+            "segs": [(s.get("type", s.get("kind","")), s.get("dn",""), s.get("pn",""), float(s.get("length",0.0)),
                       tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
                       bool(s.get("lined", False)), s.get("liner_material", "FEP"),
                       float(s.get("liner_thickness_mm", 1.0)))
@@ -2936,7 +3085,7 @@ def _sens_hash(ra, rb):
             "P": rb["P_bara"], "T": rb["T_C"],
             "gas": {_k: float(_v) for _k, _v in rb["gas_flows_kgh"].items()},
             "liq": rb["liquid_type"], "lye": rb["q_lye"],
-            "segs": [(s["type"], s["dn"], s["pn"], float(s["length"]),
+            "segs": [(s.get("type", s.get("kind","")), s.get("dn",""), s.get("pn",""), float(s.get("length",0.0)),
                       tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
                       bool(s.get("lined", False)), s.get("liner_material", "FEP"),
                       float(s.get("liner_thickness_mm", 1.0)))
@@ -3241,7 +3390,8 @@ with tab_cmp:
             rows = []
             for i, seg in enumerate(segments_list):
                 seg_id   = f"#{i+1}"
-                orient   = seg["type"].replace("Vertical Upflow", "V Up").replace(
+                orient   = seg.get("type", seg.get("kind", "—")).replace(
+                               "Vertical Upflow", "V Up").replace(
                                "Vertical Downflow", "V Down").replace("Horizontal", "Horiz")
                 dn_str   = f"{seg['dn']}/{seg['pn']}"
                 # Group regimes by void fraction model (correlation doesn't change regime)

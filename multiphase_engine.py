@@ -524,6 +524,28 @@ def _water_properties(T_C, P_bara):
     return _coolprop_liquid_properties("Water", T_C, P_bara)
 
 
+def _species_gas_props(sp, T_K, P_pa, custom_gas=None):
+    """Return (MW_kg_mol, coolprop_id) for *sp* in the gas phase.
+
+    Checks GAS_SPECIES first, then LIQUID_COOLPROP_ID — the latter covers
+    species that an equilibrium flash has placed in the vapour phase
+    (e.g. Benzene, Toluene, n-Hexane).  Returns (None, None) if unknown.
+    """
+    if sp == "Custom" and custom_gas:
+        return custom_gas["MW_gmol"] * 1e-3, None
+    info = GAS_SPECIES.get(sp)
+    if info:
+        return info["MW"], info.get("coolprop_id")
+    cp_id = LIQUID_COOLPROP_ID.get(sp)
+    if cp_id:
+        try:
+            MW = CP.PropsSI("M", "T", T_K, "P", P_pa, cp_id)
+            return MW, cp_id
+        except Exception:
+            return None, cp_id
+    return None, None
+
+
 def _get_species_viscosity(species, T_K, P_pa):
     """Dynamic viscosity (Pa·s) for a gas-phase species via CoolProp, with fallbacks.
 
@@ -562,14 +584,10 @@ def _coolprop_mixture_properties(gas_flows_kgh, T_C, P_bara, custom_gas=None):
     mol_flows = {}
     cp_parts = []
     for sp, m_kgh in gas_flows_kgh.items():
-        if sp == "Custom" and custom_gas:
-            MW = custom_gas["MW_gmol"] * 1e-3
-        else:
-            MW = GAS_SPECIES.get(sp, {}).get("MW")
+        MW, cid = _species_gas_props(sp, T_K, P_pa, custom_gas)
         if MW is None or MW <= 0:
             continue
         mol_flows[sp] = m_kgh / MW
-        cid = GAS_SPECIES.get(sp, {}).get("coolprop_id")
         if cid:
             cp_parts.append((cid, mol_flows[sp]))
 
@@ -593,15 +611,12 @@ def _coolprop_mixture_properties(gas_flows_kgh, T_C, P_bara, custom_gas=None):
             # Build composition dict
             composition = {}
             for sp, n_mol_h in mol_flows.items():
-                if sp == "Custom" and custom_gas:
-                    MW = custom_gas["MW_gmol"] * 1e-3
-                else:
-                    MW = GAS_SPECIES.get(sp, {}).get("MW")
+                MW, cid = _species_gas_props(sp, T_K, P_pa, custom_gas)
                 composition[sp] = {
                     "mol_h": n_mol_h,
-                    "kg_h": n_mol_h * MW,
+                    "kg_h": n_mol_h * (MW or 0.0),
                     "mol_frac": n_mol_h / n_total if n_total > 0 else 0.0,
-                    "coolprop_id": GAS_SPECIES.get(sp, {}).get("coolprop_id"),
+                    "coolprop_id": cid,
                 }
             return rho, mu, MW_mix_kgmol, composition
     except Exception:
@@ -623,12 +638,12 @@ def _coolprop_mixture_properties(gas_flows_kgh, T_C, P_bara, custom_gas=None):
     mu_mix = max(5e-6, mu_mix)
     composition = {}
     for sp, n_mol_h in mol_flows.items():
-        MW = custom_gas["MW_gmol"] * 1e-3 if sp == "Custom" and custom_gas else GAS_SPECIES.get(sp, {}).get("MW")
+        MW, cid = _species_gas_props(sp, T_K, P_pa, custom_gas)
         composition[sp] = {
             "mol_h": n_mol_h,
-            "kg_h": n_mol_h * MW,
+            "kg_h": n_mol_h * (MW or 0.0),
             "mol_frac": n_mol_h / n_total if n_total > 0 else 0.0,
-            "coolprop_id": GAS_SPECIES.get(sp, {}).get("coolprop_id"),
+            "coolprop_id": cid,
         }
     return rho_ideal, mu_mix, MW_mix_kgmol, composition
 
@@ -743,16 +758,17 @@ def calculate_two_phase_properties(
         composition = {}
         for sp, n_mol_h in all_moles.items():
             if sp == "H₂O (vapour)":
-                MW = 18.015e-3
+                MW, cid = 18.015e-3, "Water"
             elif sp == "Custom" and custom_gas:
-                MW = custom_gas["MW_gmol"] * 1e-3
+                MW, cid = custom_gas["MW_gmol"] * 1e-3, None
             else:
-                MW = GAS_SPECIES.get(sp, {}).get("MW", 2.016e-3)
+                MW, cid = _species_gas_props(sp, T_K, P_pa, custom_gas)
+                MW = MW or 2.016e-3
             composition[sp] = {
                 "mol_h":    n_mol_h,
                 "kg_h":     n_mol_h * MW,
                 "mol_frac": n_mol_h / n_total if n_total > 0 else 0.0,
-                "coolprop_id": GAS_SPECIES.get(sp, {}).get("coolprop_id"),
+                "coolprop_id": cid,
             }
 
         m_gas_total_kgh = sum(v["kg_h"] for v in composition.values())
@@ -1382,6 +1398,48 @@ def calculate_valve_dp(props, Kv_m3h_rated, opening_pct=100.0,
         "dP_grav_Pa":  0.0,
         "dP_accel_Pa": 0.0,
         "regime":      "Valve",
+    }
+
+
+def calculate_valve_kv(props, dp_Pa, opening_pct=100.0,
+                       characteristic="equal-percentage", rangeability=50.0):
+    """
+    Back-calculate required Kv from a target pressure drop (IEC 60534).
+
+    Kv_eff  = Q / sqrt(ΔP_bar / SG_hom)
+    Kv_rated = Kv_eff / f_char(opening)
+
+    Returns dict with Kv_eff, Kv_rated, Q_m3h, rho_hom, dP_Pa.
+    """
+    x     = props["x_gas"]
+    rho_g = props["rho_g"]
+    rho_l = props["rho_l"]
+    if x <= 0.0:
+        rho_hom = rho_l
+    elif x >= 1.0:
+        rho_hom = rho_g
+    else:
+        rho_hom = 1.0 / (x / rho_g + (1.0 - x) / rho_l)
+    rho_hom = max(rho_hom, 0.01)
+
+    Q_m3h  = props["m_total_kgs"] * 3600.0 / rho_hom
+    SG     = rho_hom / 999.0
+    dp_bar = max(dp_Pa, 1.0) / 1e5
+    Kv_eff = Q_m3h / (dp_bar / SG) ** 0.5
+
+    f = max(0.001, min(1.0, opening_pct / 100.0))
+    if characteristic == "equal-percentage":
+        f_char = rangeability ** (f - 1.0)
+    else:
+        f_char = f
+    Kv_rated = Kv_eff / max(f_char, 1e-9)
+
+    return {
+        "dP_Pa":    dp_Pa,
+        "Kv_eff":   Kv_eff,
+        "Kv_rated": Kv_rated,
+        "Q_m3h":    Q_m3h,
+        "rho_hom":  rho_hom,
     }
 
 
