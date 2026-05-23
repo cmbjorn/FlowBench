@@ -68,39 +68,7 @@ hr { margin: 0.75rem 0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("FlowBench — General Flow Workbench")
-st.caption("Two-phase pressure drop · Any CoolProp fluid · Six correlations · VLE mode · Steady-state")
-
-with st.expander("About this tool", expanded=False):
-    st.markdown("""
-    **FlowBench** is an engineering-focused two-phase hydraulic workbench. It calculates steady-state
-    pressure drop for any gas–liquid combination that CoolProp can handle.  Two flow input modes are available:
-
-    - **Gas + Liquid** — specify a multi-component gas mixture and a multi-component liquid phase,
-      each as individual species with kg/h flow rates.  Liquid species backed by CoolProp
-      (Water, Methanol, Ethanol, Propane, CO₂ and more — mixture properties mass-weighted).
-    - **Saturated / VLE** — specify one pure fluid (e.g. Water, Propane, R-134a, Ammonia) plus
-      total mass flow and inlet quality *x*.  CoolProp derives all saturation properties at each
-      segment.  Ideal for steam systems, refrigeration, and flash-tank outlets.
-
-    **Typical workflow**
-    1. **Line A / Line B** tabs — set inlet conditions, select fluid system, build pipe geometry
-       segment-by-segment (DN, PN, material, length, fittings, optional liner).
-    2. **Header / Manifold** tabs — collecting manifolds with tap-position goal-seek.
-    3. **Compare** tab — overlay pressure profiles; sensitivity sweep across all 12 correlation ×
-       voidage combinations shows the uncertainty spread.
-    4. Export Word (.docx) or Excel (.xlsx) reports from any tab.
-
-    **Method** — Beggs & Brill (1973) default; Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck,
-    Chisholm, Kim-Mudawar for cross-checking. Pressure marching re-evaluates fluid density at every
-    segment inlet. ΔP split into frictional, gravitational, and accelerational components. Flow regime
-    classified automatically (Taitel-Dukler, Mandhane-Gregory-Aziz, Wallis). Erosion check: API RP 14E,
-    *C* = 100.  Single-phase gas or liquid falls back to Darcy-Weisbach automatically.
-
-    **Accuracy note** — Correlations were developed for oil/gas systems. Expected uncertainty ±20–30 % for
-    non-hydrocarbon fluids.  Use for design guidance and relative comparison; validate against
-    commissioning data.
-    """)
+st.title("FlowBench")
 
 # ============================================================================
 # SAVE / LOAD  (defined here so sidebar can call them on first render)
@@ -198,61 +166,52 @@ def _apply_save_state(data: dict) -> None:
 # SIDEBAR
 # ============================================================================
 with st.sidebar:
-    st.header("Method Reference")
-    with st.expander("Capabilities", expanded=False):
+    st.header("FlowBench")
+    with st.expander("About & Capabilities", expanded=False):
         st.markdown("""
-        **Cases** — Run Gas pipe A and Gas pipe B independently, then compare side by side.
-        Useful for: alternative pipe routings, diameter studies, full-flow vs. turndown.
+        Two-phase steady-state hydraulic workbench — pressure drop for any
+        gas–liquid combination that CoolProp can handle.
 
-        **Gas species** — H₂, O₂, N₂, CO₂, CH₄, Ar, He, Air, or Custom (user-defined MW and viscosity).
-        Water vapour added automatically for aqueous liquids via Dalton's Law.
+        **Flow modes**
+        - **Gas + Liquid** — multi-component gas and liquid, each as individual
+          species (kg/h). Equilibrium flash (Peng-Robinson EOS) at inlet.
+        - **Saturated / VLE** — pure fluid at saturation; CoolProp derives phase
+          properties from the saturation curve at each segment.
 
-        **Liquid species** — Water, Methanol, Ethanol, Propane, n-Butane, CO₂, Ammonia,
-        Acetone, Benzene, Toluene, n-Pentane, n-Hexane, n-Heptane, Cyclohexane, R-134a.
-        Multi-component mixtures: properties mass-weighted via CoolProp.
+        **Workflow:** tabs **A / B** for individual lines, **Header A / B** for
+        collecting manifolds, **Compare** for overlay and uncertainty sweep (12
+        correlation × void-fraction combinations). Export Word or Excel from any tab.
 
-        **ΔP correlations** — Beggs-Brill (default), Friedel, Lockhart-Martinelli,
+        **Correlations** — Beggs-Brill (default), Friedel, Lockhart-Martinelli,
         Müller-Steinhagen & Heck, Chisholm, Kim-Mudawar.
 
-        **Minor losses** — Equivalent length (Le/D, Crane TP-410). 17 fitting types.
+        **Pipe library** — DN40–DN250, PN20/25/40, 5 materials, optional liner
+        (PTFE, FEP, PFA, PVDF). 17 fitting types (Crane TP-410).
 
-        **Pipe geometry** — DN40–DN250, PN20/PN25/PN40, 5 metallic materials,
-        optional fluoropolymer liner (PTFE, FEP, PFA, PVDF).
-
-        **Erosion check** — API RP 14E, V_e = C/√ρ_mix, C = 100 continuous service.
-
-        **Exports** — Word report (.docx) with embedded charts; Excel (.xlsx).
+        **Accuracy** — ±20–30 % for non-hydrocarbon fluids. Validate against
+        commissioning data before design decisions.
         """)
-    with st.expander("Model Assumptions", expanded=False):
+    with st.expander("Model details", expanded=False):
         st.markdown("""
+        **Assumptions**
         1. Ideal gas behaviour for gas mixture
         2. Continuous liquid phase; no flooding or flow inversion
         3. Bore = f(DN, PN) only — ANSI B36.10/19, material-independent
         4. Lined segments: effective ID = metal bore − 2 × liner thickness
         5. Pressure marching: gas density re-evaluated at each segment inlet
-        6. Erosion check: API RP 14E, V_e = 122/√ρ_mix (m/s), C=100
-        7. Steady-state only — no transient effects
-        8. Void fraction: homogeneous α = (x/ρg)/(x/ρg+(1−x)/ρl), or Rouhani-1 slip model
-        9. Flow regime: Taitel-Dukler + Mandhane (horizontal), Wallis/Taitel (vertical)
-        """)
-    with st.expander("Flow Regimes", expanded=False):
-        st.markdown("""
-        **Horizontal** — Stratified / Intermittent (Slug) / Annular-Dispersed
-        **Vertical Up** — Bubble/Slug / Churn/Annular
-        **Vertical Down** — Falling Film / Annular
-        """)
-    with st.expander("Liquid Properties", expanded=False):
-        st.markdown("""
-        All liquid species backed by **CoolProp** (IAPWS-IF97 for Water; DIPPR / REFPROP
-        equations for organics and refrigerants).  Multi-species mixtures:
-        ρ and σ mass-weighted, μ log-mean by mass fraction.
-        """)
-    with st.expander("References", expanded=False):
-        st.markdown("""
-        - Beggs & Brill (1973) — SPE-4007-PA
-        - CoolProp — open-source thermodynamic library
-        - fluids — Python fluid dynamics library
-        - Crane TP-410 (2013) · API RP 14E (2007)
+        6. Steady-state only — no transient effects
+        7. Void fraction: homogeneous α = (x/ρg)/(x/ρg+(1−x)/ρl), or Rouhani-1
+
+        **Flow regimes**
+        Horizontal: Stratified / Intermittent / Annular-Dispersed (Taitel-Dukler, Mandhane)
+        Vertical up: Bubble-Slug / Churn-Annular (Wallis/Taitel)
+        Vertical down: Falling Film / Annular
+
+        **Liquid species** — CoolProp backed (IAPWS-IF97 for Water; DIPPR / REFPROP for
+        organics and refrigerants). Mixture: ρ and σ mass-weighted, μ log-mean.
+
+        **References** — Beggs & Brill (1973) SPE-4007-PA · CoolProp · fluids library ·
+        Crane TP-410 (2013) · API RP 14E (2007)
         """)
     with st.expander("Validation", expanded=False):
         st.markdown("Run a built-in reference case and compare the calculated ΔP against the expected value.")
@@ -318,6 +277,13 @@ with st.sidebar:
 
     st.divider()
     st.header("Session")
+
+    # ── Case labels ───────────────────────────────────────────────────────────
+    _slcol1, _slcol2 = st.columns(2)
+    _slcol1.text_input("Tab A label", key="label_a", max_chars=20,
+                       help="Short name used in tabs, charts, and reports.")
+    _slcol2.text_input("Tab B label", key="label_b", max_chars=20,
+                       help="Short name used in tabs, charts, and reports.")
 
     # ── Save ──────────────────────────────────────────────────────────────────
     _save_json = json.dumps(_collect_save_state(), indent=2, ensure_ascii=False)
@@ -975,8 +941,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
     # ── OUTPUTS ───────────────────────────────────────────────────────────────
     with col_out:
-        st.subheader("Results")
-        _key_results_ph = st.empty()   # filled after the segment loop
+        _key_results_ph = st.empty()   # filled after segment loop — ΔP summary
+        _hmb_ph         = st.empty()   # filled after segment loop — H&M balance
 
         # Initialise effective liquid state (overwritten in gas+liquid path below)
         _eff_liquid_flows = liquid_flows_kgh
@@ -1005,12 +971,19 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                                      liquid_flows_kgh=liquid_flows_kgh)
 
             if _flash["feasible"]:
-                st.info(
-                    f"Equilibrium flash applied at {P_bara:.1f} bara / {T_C:.0f} °C — "
-                    f"vapour fraction {_flash['VF_mass']*100:.1f} wt%. "
-                    "Phase split shown below; adjusted compositions used for pressure-drop calculation.",
-                    icon="ℹ️",
-                )
+                _vf_pct = _flash["VF_mass"] * 100
+                if _vf_pct >= 1.0:
+                    st.info(
+                        f"Equilibrium flash at {P_bara:.1f} bara / {T_C:.0f} °C — "
+                        f"vapour fraction {_vf_pct:.1f} wt%. "
+                        "Adjusted compositions used for pressure-drop calculation.",
+                        icon="ℹ️",
+                    )
+                else:
+                    st.caption(
+                        f"Flash: VF = {_vf_pct:.2f} wt% — effectively single-phase liquid "
+                        f"at {P_bara:.1f} bara / {T_C:.0f} °C."
+                    )
                 with st.expander(
                     f"Feed / phase-split detail  (VF = {_flash['VF_mass']*100:.1f} wt%)",
                     expanded=False):
@@ -1081,105 +1054,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 st.error(f"Property calculation failed: {_calc_err}")
                 st.stop()
 
-        # Phase Properties
-        with st.container(border=True):
-            _phase_title = (f"Phase Properties  —  {vle_display_name} @ {P_bara:.1f} bara  "
-                            f"(T_sat = {props['T_sat_C']:.1f} °C)"
-                            if _is_vle else "Phase Properties")
-            st.subheader(_phase_title)
-            col_gas, col_liq = st.columns(2)
-            with col_gas:
-                _gas_label = "Vapour phase" if _is_vle else "Gas phase"
-                st.markdown(f"**{_gas_label}**")
-                g1, g2, g3 = st.columns(3)
-                g1.metric("ρ_gas",  f"{props['rho_g']:.3f} kg/m³")
-                g2.metric("MW",     f"{props['MW_mix_gmol']:.2f} g/mol")
-                if props.get("P_sat_H2O_pa", 0) > 0:
-                    g3.metric("P_sat H₂O", f"{props['P_sat_H2O_pa']/1e5:.3f} bara")
-                _comp     = props["composition"]
-                _n_total  = sum(v["mol_h"] for v in _comp.values())
-                _comp_rows = []
-                for _sp, _data in _comp.items():
-                    _comp_rows.append({"Component": _sp,
-                                       "kg/h":  round(_data["kg_h"], 3),
-                                       "mol/h": round(_data["mol_h"], 1),
-                                       "mol %": f"{_data['mol_frac']*100:.1f}"})
-                _comp_rows.append({"Component": "Total",
-                                   "kg/h":  round(props["m_gas_total_kgh"], 3),
-                                   "mol/h": round(_n_total, 1), "mol %": "100.0"})
-                st.dataframe(pd.DataFrame(_comp_rows),
-                             column_config={"kg/h": st.column_config.NumberColumn(format="%.3f"),
-                                            "mol/h": st.column_config.NumberColumn(format="%.1f")},
-                             hide_index=True, use_container_width=True)
-            with col_liq:
-                # Resolve liquid composition source for display
-                _liq_disp = None
-                if not _is_vle:
-                    if _flash.get("feasible") and _flash.get("liquid_phase_kgh"):
-                        _liq_disp = _flash["liquid_phase_kgh"]
-                    elif _eff_liquid_flows:
-                        _liq_disp = _eff_liquid_flows
-
-                # Header: list actual species instead of "Custom"
-                if _liq_disp:
-                    _liq_label = " + ".join(_liq_disp.keys())
-                else:
-                    _liq_label = props["liquid_type"]
-                st.markdown(f"**Liquid phase ({_liq_label})**")
-
-                # Composition table — shown whenever we have species-level data
-                if _liq_disp:
-                    _m_liq_total = sum(_liq_disp.values())
-                    _liq_rows = [{"Component": sp,
-                                  "kg/h": round(m, 3),
-                                  "wt %": f"{m / _m_liq_total * 100:.1f}"}
-                                 for sp, m in _liq_disp.items() if m > 0]
-                    _liq_rows.append({"Component": "Total",
-                                      "kg/h": round(_m_liq_total, 3), "wt %": "100.0"})
-                    st.dataframe(pd.DataFrame(_liq_rows),
-                                 column_config={"kg/h": st.column_config.NumberColumn(format="%.3f")},
-                                 hide_index=True, use_container_width=True)
-
-                # Mixture properties — always shown
-                lp1, lp2, lp3, lp4 = st.columns(4)
-                lp1.metric("ṁ_liq", f"{props['m_lye_kgh']:.2f} kg/h")
-                lp2.metric("ρ_liq", f"{props['rho_l']:.1f} kg/m³")
-                lp3.metric("μ_liq", f"{props['mu_l']*1e3:.3f} mPa·s")
-                lp4.metric("σ_liq", f"{props['sigma']*1e3:.2f} mN/m")
-
-                st.markdown("**Two-phase mixture**")
-                _m_total_kgh = props["m_gas_total_kgh"] + props["m_liquid_total_kgh"]
-                m1, m2, m3 = st.columns(3)
-                m1.metric("ṁ_total",        f"{_m_total_kgh:.2f} kg/h")
-                m2.metric("Mass quality x",  f"{props['x_gas']:.4f}",
-                          help="Dimensionless (0 = all liquid, 1 = all vapour)")
-                m3.metric("Void fraction α", f"{props['alpha']:.4f}",
-                          help="Gas volume fraction (0 = all liquid, 1 = all gas)")
-
-        # Inlet Flow Conditions
-        _seg1    = st.session_state[k("segments")][0]
-        _D_bore1 = engine.PIPE_DATABASE[_seg1["dn"]][_seg1["pn"]]
-        _lthk1   = _seg1.get("liner_thickness_mm",1.0) / 1000.0
-        _D_in    = _D_bore1 - 2*_lthk1 if _seg1.get("lined",False) else _D_bore1
-        _A_in    = 0.25 * np.pi * _D_in**2
-        Vsg_in = (props["x_gas"]*props["m_total_kgs"]/props["rho_g"])/_A_in \
-                 if props["rho_g"] > 0 else 0.0
-        Vsl_in = ((1-props["x_gas"])*props["m_total_kgs"]/props["rho_l"])/_A_in \
-                 if props["rho_l"] > 0 else 0.0
-        Re_sl  = props["rho_l"]*Vsl_in*_D_in/props["mu_l"] if props["mu_l"] > 0 else 0.0
-
-        with st.container(border=True):
-            _ln1 = (f" + {_seg1['liner_material']} {_seg1['liner_thickness_mm']:.1f}mm"
-                    if _seg1.get("lined") else "")
-            st.subheader(f"Inlet Flow Conditions")
-            st.caption(f"Segment #1 — {_seg1['dn']}/{_seg1['pn']}{_ln1}")
-            v1, v2, v3, v4 = st.columns(4)
-            v1.metric("V_sg (gas)",    f"{Vsg_in:.3f} m/s")
-            v2.metric("V_sl (liquid)", f"{Vsl_in:.3f} m/s")
-            v3.metric("V_m (mixture)", f"{Vsg_in+Vsl_in:.3f} m/s")
-            v4.metric("Re_sl", f"{Re_sl:,.0f}",
-                      help="Superficial liquid Reynolds number: ρ_l · V_sl · D / μ_l")
-
         # Segment loop
         current_P          = P_bara * 1e5
         current_T_C        = T_C if T_C is not None else 25.0  # updated at HX segments
@@ -1216,18 +1090,29 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 _rh = 1.0 / (_x / max(_rg, 1e-9) + (1.0 - _x) / max(_rl, 1e-9))
             else:
                 _rh = _rg if _x >= 1.0 else _rl
-            stream_records.append({
-                "Stream":         label,
-                "P (bara)":       round(max(1e-4, current_P / 1e5), 4),
-                "T (°C)":         round(current_T_C, 1),
-                "Ṁ_gas (kg/h)":  round(sp.get("m_gas_total_kgh", 0.0), 2),
-                "Ṁ_liq (kg/h)":  round(sp.get("m_liquid_total_kgh", 0.0), 2),
-                "x (−)":          round(_x, 5),
-                "α (−)":          round(sp.get("alpha", 0.0), 4),
-                "ρ_g (kg/m³)":   round(_rg, 3),
-                "ρ_l (kg/m³)":   round(_rl, 3),
-                "ρ_hom (kg/m³)": round(_rh, 2),
+            _rec = {
+                "Stream":        label,
+                "P (bara)":      round(max(1e-4, current_P / 1e5), 4),
+                "T (°C)":        round(current_T_C, 1),
+            }
+            if _is_vle:
+                _rec[f"{vle_fluid_id} vapour  kg/h"] = round(sp.get("m_gas_total_kgh", 0.0), 2)
+                _rec[f"{vle_fluid_id} liquid  kg/h"] = round(sp.get("m_liquid_total_kgh", 0.0), 2)
+            else:
+                for _gsp, _gflow in (_eff_gas_flows or {}).items():
+                    _rec[f"gas:{_gsp}"] = round(_gflow, 3)
+                _rec["Ṁ_gas (kg/h)"] = round(sp.get("m_gas_total_kgh", 0.0), 2)
+                for _lsp, _lflow in (_eff_liquid_flows or {}).items():
+                    _rec[f"liq:{_lsp}"] = round(_lflow, 3)
+                _rec["Ṁ_liq (kg/h)"] = round(sp.get("m_liquid_total_kgh", 0.0), 2)
+            _rec.update({
+                "x (−)":         round(_x, 5),
+                "α (−)":         round(sp.get("alpha", 0.0), 4),
+                "ρ_g (kg/m³)":  round(_rg, 3),
+                "ρ_l (kg/m³)":  round(_rl, 3),
+                "ρ_hom (kg/m³)":round(_rh, 2),
             })
+            stream_records.append(_rec)
 
         _snap_stream("S0 — Inlet", props)
 
@@ -1439,7 +1324,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             pressure_profile_y.append(max(0.1, current_P/1e5))
             regime_bands.append(regime)
 
-        # Erosion banner
+        # Erosion — only banner on actionable conditions; OK is shown inline in table
         _max_ratio = max((r["V_m/V_e"] for r in grid_records), default=0.0)
         _worst_seg = next((r["Seg"] for r in grid_records if r["V_m/V_e"]==_max_ratio), "")
         if _max_ratio >= 1.0:
@@ -1449,9 +1334,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         elif _max_ratio >= 0.8:
             st.warning(f"**Approaching erosion limit** — Segment {_worst_seg}: "
                        f"V_m/V_e = **{_max_ratio:.2f}** (API RP 14E, limit = 1.0).")
-        else:
-            st.success(f"Erosion check OK — worst {_worst_seg}: "
-                       f"V_m/V_e = {_max_ratio:.2f}  (API RP 14E, C=100, limit = 1.0).")
 
         # ── Valve Sizing Results ──────────────────────────────────────────────
         if valve_sizing:
@@ -1475,28 +1357,45 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     if len(valve_sizing) > 1:
                         st.divider()
 
-        # ── Segment Analysis (before Key Results so it's visible immediately) ──
+        # ── Segment Analysis ──────────────────────────────────────────────────
+        _primary_cols = ["Seg", "Type", "Pipe", "ID (mm)", "L (m)", "Fittings",
+                         "Regime", "ΔP (kPa)", "P_in (bara)", "P_out (bara)",
+                         "V_m (m/s)", "V_m/V_e"]
+        _detail_cols  = ["V_sg (m/s)", "V_sl (m/s)", "V_e (m/s)",
+                         "ΔP_fric (kPa)", "ΔP_grav (kPa)", "ΔP_accel (kPa)",
+                         "ρ_g (kg/m³)", "L_eff (m)", "α (void)", "dP/dz (Pa/m)", "Material"]
+        _grid_df = pd.DataFrame(grid_records)
+        _seg_col_cfg = {
+            "ID (mm)":         st.column_config.NumberColumn(format="%.1f"),
+            "L (m)":           st.column_config.NumberColumn(format="%.1f"),
+            "ΔP (kPa)":        st.column_config.NumberColumn(format="%.3f"),
+            "P_in (bara)":     st.column_config.NumberColumn(format="%.4f"),
+            "P_out (bara)":    st.column_config.NumberColumn(format="%.4f"),
+            "V_m (m/s)":       st.column_config.NumberColumn(format="%.3f"),
+            "V_m/V_e":         st.column_config.ProgressColumn(
+                                   format="%.3f", min_value=0.0, max_value=1.0),
+            "V_sg (m/s)":      st.column_config.NumberColumn(format="%.3f"),
+            "V_sl (m/s)":      st.column_config.NumberColumn(format="%.3f"),
+            "V_e (m/s)":       st.column_config.NumberColumn(format="%.2f"),
+            "ΔP_fric (kPa)":   st.column_config.NumberColumn(format="%.3f"),
+            "ΔP_grav (kPa)":   st.column_config.NumberColumn(format="%.3f"),
+            "ΔP_accel (kPa)":  st.column_config.NumberColumn(format="%.3f"),
+            "ρ_g (kg/m³)":    st.column_config.NumberColumn(format="%.4f"),
+            "L_eff (m)":       st.column_config.NumberColumn(format="%.2f"),
+            "α (void)":        st.column_config.NumberColumn(format="%.4f"),
+            "dP/dz (Pa/m)":    st.column_config.NumberColumn(format="%.2f"),
+        }
+        _existing_primary = [c for c in _primary_cols if c in _grid_df.columns]
         st.subheader("Segment Analysis")
-        st.dataframe(pd.DataFrame(grid_records),
-            column_config={
-                "ID (mm)":         st.column_config.NumberColumn(format="%.1f"),
-                "L (m)":           st.column_config.NumberColumn(format="%.1f"),
-                "ΔP (kPa)":        st.column_config.NumberColumn(format="%.3f"),
-                "P_in (bara)":     st.column_config.NumberColumn(format="%.4f"),
-                "P_out (bara)":    st.column_config.NumberColumn(format="%.4f"),
-                "V_m (m/s)":       st.column_config.NumberColumn(format="%.3f"),
-                "V_m/V_e":         st.column_config.NumberColumn(format="%.3f"),
-                "V_sg (m/s)":      st.column_config.NumberColumn(format="%.3f"),
-                "V_sl (m/s)":      st.column_config.NumberColumn(format="%.3f"),
-                "V_e (m/s)":       st.column_config.NumberColumn(format="%.2f"),
-                "ΔP_fric (kPa)":   st.column_config.NumberColumn(format="%.3f"),
-                "ΔP_grav (kPa)":   st.column_config.NumberColumn(format="%.3f"),
-                "ΔP_accel (kPa)":  st.column_config.NumberColumn(format="%.3f"),
-                "ρ_g (kg/m³)":    st.column_config.NumberColumn(format="%.4f"),
-                "L_eff (m)":       st.column_config.NumberColumn(format="%.2f"),
-                "α (void)":        st.column_config.NumberColumn(format="%.4f"),
-                "dP/dz (Pa/m)":    st.column_config.NumberColumn(format="%.2f"),
-            }, hide_index=True, use_container_width=True)
+        st.dataframe(_grid_df[_existing_primary],
+                     column_config=_seg_col_cfg,
+                     hide_index=True, use_container_width=True)
+        _existing_detail = [c for c in _detail_cols if c in _grid_df.columns]
+        if _existing_detail:
+            with st.expander("Detail columns"):
+                st.dataframe(_grid_df[["Seg"] + _existing_detail],
+                             column_config=_seg_col_cfg,
+                             hide_index=True, use_container_width=True)
 
         # ── Key Results — fill the top-of-column placeholder ─────────────────
         total_dp_kpa         = ((P_bara*1e5) - current_P) / 1000.0
@@ -1555,6 +1454,52 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                               help="Residual B&B inclination correction; zero for other correlations.")
                     st.caption(f"Pipe length {pipe_length_m:.1f} m  ·  "
                                f"Eff. length (+ fittings) {cumulative_distance:.1f} m")
+
+        # ── Heat & Mass Balance — fill the second placeholder ─────────────────
+        if stream_records:
+            # Build the row-order for the inverted table
+            _hmb_rows_def = [("P  (bara)", "P (bara)"), ("T  (°C)", "T (°C)")]
+            if _is_vle:
+                _hmb_rows_def += [
+                    (f"  {vle_fluid_id} vapour  kg/h", f"{vle_fluid_id} vapour  kg/h"),
+                    (f"  {vle_fluid_id} liquid  kg/h", f"{vle_fluid_id} liquid  kg/h"),
+                ]
+            else:
+                for _gsp in (_eff_gas_flows or {}):
+                    _hmb_rows_def.append((f"  {_gsp}  kg/h", f"gas:{_gsp}"))
+                if _eff_gas_flows:
+                    _hmb_rows_def.append(("  Σ gas  kg/h", "Ṁ_gas (kg/h)"))
+                for _lsp in (_eff_liquid_flows or {}):
+                    _hmb_rows_def.append((f"  {_lsp}  kg/h", f"liq:{_lsp}"))
+                if _eff_liquid_flows:
+                    _hmb_rows_def.append(("  Σ liquid  kg/h", "Ṁ_liq (kg/h)"))
+            _hmb_rows_def += [
+                ("x  (−)",          "x (−)"),
+                ("α  (−)",          "α (−)"),
+                ("ρ_hom  kg/m³",    "ρ_hom (kg/m³)"),
+            ]
+
+            _hmb_table = []
+            for _prop_label, _key in _hmb_rows_def:
+                _row = {"Property": _prop_label}
+                for _sr in stream_records:
+                    _row[_sr["Stream"]] = _sr.get(_key, "—")
+                _hmb_table.append(_row)
+
+            _hmb_df = pd.DataFrame(_hmb_table)
+            _stream_cols = [sr["Stream"] for sr in stream_records]
+            _num_col_cfg = {col: st.column_config.NumberColumn(format="%.4g")
+                            for col in _stream_cols}
+
+            with _hmb_ph.container():
+                with st.container(border=True):
+                    st.markdown("**Heat & Mass Balance**")
+                    st.dataframe(
+                        _hmb_df,
+                        column_config=_num_col_cfg,
+                        hide_index=True,
+                        use_container_width=True,
+                    )
 
         # ΔP decomposition stacked bar chart
         _seg_labels = [r["Seg"] + " " + r["Pipe"] for r in grid_records]
@@ -1703,30 +1648,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
     with tab_prof_tab:
         st.plotly_chart(fig_prof, use_container_width=True, key=k("fig_prof"))
 
-    # ── STREAM BALANCE ────────────────────────────────────────────────────────
-    if stream_records:
-        st.subheader("Stream Balance")
-        st.caption(
-            "Node conditions from system inlet (S0) to outlet. "
-            "Mass flows are conserved; P, T, x, α and densities reflect local thermodynamic state."
-        )
-        _sf_df = pd.DataFrame(stream_records)
-        st.dataframe(
-            _sf_df,
-            column_config={
-                "P (bara)":       st.column_config.NumberColumn(format="%.4f"),
-                "T (°C)":         st.column_config.NumberColumn(format="%.1f"),
-                "Ṁ_gas (kg/h)":  st.column_config.NumberColumn(format="%.2f"),
-                "Ṁ_liq (kg/h)":  st.column_config.NumberColumn(format="%.2f"),
-                "x (−)":          st.column_config.NumberColumn(format="%.5f"),
-                "α (−)":          st.column_config.NumberColumn(format="%.4f"),
-                "ρ_g (kg/m³)":   st.column_config.NumberColumn(format="%.3f"),
-                "ρ_l (kg/m³)":   st.column_config.NumberColumn(format="%.3f"),
-                "ρ_hom (kg/m³)": st.column_config.NumberColumn(format="%.2f"),
-            },
-            hide_index=True,
-            use_container_width=True,
-        )
 
     # ── EXPORTS ───────────────────────────────────────────────────────────────
     st.divider()
@@ -3012,9 +2933,9 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
 
 
 if "label_a" not in st.session_state:
-    st.session_state["label_a"] = "Case A"
+    st.session_state["label_a"] = "A"
 if "label_b" not in st.session_state:
-    st.session_state["label_b"] = "Case B"
+    st.session_state["label_b"] = "B"
 
 # Forward any pending goal-seek apply values BEFORE widgets render
 if "stack_apply_a_pending" in st.session_state:
@@ -3022,21 +2943,13 @@ if "stack_apply_a_pending" in st.session_state:
 if "stack_apply_b_pending" in st.session_state:
     st.session_state["b_P_bara"] = max(0.1, st.session_state.pop("stack_apply_b_pending"))
 
-with st.container(border=True):
-    _lab_col1, _lab_col2 = st.columns(2)
-    _lab_col1.text_input("Case A label", key="label_a", max_chars=40,
-                         help="Name used in all tabs, headers, charts, and reports.")
-    _lab_col2.text_input("Case B label", key="label_b", max_chars=40,
-                         help="Name used in all tabs, headers, charts, and reports.")
-
 _la = st.session_state["label_a"]
 _lb = st.session_state["label_b"]
-_lc = f"{_la} Header"
-_ld = f"{_lb} Header"
+_lc = f"Header {_la}"
+_ld = f"Header {_lb}"
 
 tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_gs = st.tabs(
-    [_la, _lb, _lc, _ld,
-     f"Compare {_la} vs {_lb}", "Goal Seek"])
+    [_la, _lb, _lc, _ld, "Compare", "Goal Seek"])
 
 with tab_a:
     results_a = run_case("a", accent="#2563EB")
