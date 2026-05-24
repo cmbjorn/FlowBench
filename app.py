@@ -402,7 +402,7 @@ def _compute_regime_grid(
     Returns (td_grid, full_grid, vsl_list, vsg_list) — all plain Python
     lists so Streamlit can cache and serialise them cleanly.
     """
-    N = 50
+    N = 120
     _g = 9.80665
     vsl_arr = np.logspace(-3, 1, N)   # V_sl: 0.001 → 10 m/s
     vsg_arr = np.logspace(-3, 2, N)   # V_sg: 0.001 → 100 m/s
