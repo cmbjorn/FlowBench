@@ -8,6 +8,8 @@ import validation_cases as val_cases
 import report_generator
 import hashlib
 import json
+from fluids.two_phase import (Taitel_Dukler_regime as _TD_regime,
+                               Mandhane_Gregory_Aziz_regime as _MGA_regime)
 
 st.set_page_config(
     page_title="FlowBench — General Flow Workbench",
@@ -384,6 +386,78 @@ _REGIME_BORDER_KW = [        # (keyword, border colour) — pressure profile ban
 def _regime_color(regime_str, kw_list, default):
     r = regime_str.lower()
     return next((col for kw, col in kw_list if kw in r), default)
+
+
+@st.cache_data(show_spinner="Computing regime map…")
+def _compute_regime_grid(
+    rhol: float, rhog: float, mul: float, mug: float,
+    sigma: float, D: float, roughness: float, use_horiz: bool,
+) -> tuple:
+    """
+    Sweep a 50×50 log-log V_sl × V_sg grid and classify each cell using
+    exactly the same correlations as the engine (Taitel-Dukler 1976 +
+    Mandhane-Gregory-Aziz 1974 for horizontal; Wallis + void-fraction
+    thresholds for vertical upflow).
+
+    Returns (td_grid, full_grid, vsl_list, vsg_list) — all plain Python
+    lists so Streamlit can cache and serialise them cleanly.
+    """
+    N = 50
+    _g = 9.80665
+    vsl_arr = np.logspace(-3, 1, N)   # V_sl: 0.001 → 10 m/s
+    vsg_arr = np.logspace(-3, 2, N)   # V_sg: 0.001 → 100 m/s
+    A = np.pi / 4 * D ** 2
+
+    td_grid   = [[""] * N for _ in range(N)]   # coloring key (TD regime or vert label)
+    full_grid = [[""] * N for _ in range(N)]   # hover label
+
+    if use_horiz:
+        for i, vsg in enumerate(vsg_arr):
+            for j, vsl in enumerate(vsl_arr):
+                ml = vsl * rhol * A
+                mg = vsg * rhog * A
+                m  = ml + mg
+                x  = mg / m if m > 0 else 0.0
+                try:
+                    td  = _TD_regime(m=m, x=x, rhol=rhol, rhog=rhog,
+                                     mul=mul, mug=mug, D=D,
+                                     angle=0.0, roughness=roughness)[0]
+                    mga = _MGA_regime(m=m, x=x, rhol=rhol, rhog=rhog,
+                                      mul=mul, mug=mug, sigma=sigma, D=D)[0]
+                    td_grid[i][j]   = td
+                    full_grid[i][j] = f"{td} / {mga}"
+                except Exception:
+                    td_grid[i][j]   = "intermittent"
+                    full_grid[i][j] = "intermittent / slug"
+    else:
+        # Vertical upflow: Wallis annular onset + homogeneous void fraction
+        # (mirrors the engine's _classify_regime logic for |θ|≥75°)
+        try:
+            V_ann = 3.1 * (_g * sigma * (rhol - rhog) / rhog ** 2) ** 0.25
+        except Exception:
+            V_ann = 1e9
+        for i, vsg in enumerate(vsg_arr):
+            for j, vsl in enumerate(vsl_arr):
+                mg = vsg * rhog * A
+                ml = vsl * rhol * A
+                m  = ml + mg
+                x  = mg / m if m > 0 else 0.0
+                alpha_h = vsg / (vsg + vsl)   # homogeneous void fraction
+                if x > 0.90:
+                    reg = "mist / annular"
+                elif vsg >= V_ann:
+                    reg = "annular"
+                elif alpha_h >= 0.52:
+                    reg = "churn"
+                elif alpha_h >= 0.25:
+                    reg = "slug"
+                else:
+                    reg = "bubble"
+                td_grid[i][j]   = reg
+                full_grid[i][j] = reg
+
+    return td_grid, full_grid, vsl_arr.tolist(), vsg_arr.tolist()
+
 
 # ============================================================================
 # CASE RUNNER  — renders one full case and returns results for Compare tab
@@ -1612,68 +1686,87 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             _n_vert = sum(1 for r in _pipe_recs if r.get("Type", "Horizontal") != "Horizontal")
             _map_choice = st.radio(
                 "Reference map:",
-                ["Horizontal – Mandhane (1974)", "Vertical upflow – Taitel-Dukler (1980)"],
+                ["Horizontal – Taitel-Dukler + Mandhane-Gregory-Aziz",
+                 "Vertical upflow – Wallis / void-fraction"],
                 index=1 if _n_vert > len(_pipe_recs) / 2 else 0,
                 horizontal=True, key=k("rmap_orient"),
             )
             _use_horiz = "Horizontal" in _map_choice
-            if _use_horiz:
-                # Mandhane (1974) approximate zones — (name, fill, Vsl polygon, Vsg polygon, label pos)
-                # Boundaries: Stratified|Wavy split at Vsg=0.5; Stratified|Plug at Vsl=0.06;
-                #             Plug|Bubble at Vsl=0.4; Slug upper at Vsg=8; Dispersed at Vsl=4.
-                _rmap_zones = [
-                    ("Stratified",       "rgba(148,163,184,0.25)",
-                     [0.001,0.06, 0.06, 0.001,0.001], [0.001,0.001,0.5, 0.5, 0.001], (0.008, 0.022)),
-                    ("Wavy",             "rgba(100,116,139,0.25)",
-                     [0.001,0.06, 0.06, 0.001,0.001], [0.5,  0.5,  8.0, 8.0, 0.5  ], (0.008, 2.0  )),
-                    ("Plug",             "rgba(251,146,60, 0.25)",
-                     [0.06, 0.4,  0.4,  0.06, 0.06 ], [0.001,0.001,0.5, 0.5, 0.001], (0.155, 0.022)),
-                    ("Slug",             "rgba(239,68, 68, 0.18)",
-                     [0.06, 4.0,  4.0,  0.06, 0.06 ], [0.5,  0.5,  8.0, 8.0, 0.5  ], (0.49,  2.0  )),
-                    ("Bubble",           "rgba(34, 197,94, 0.25)",
-                     [0.4,  4.0,  4.0,  0.4,  0.4  ], [0.001,0.001,0.5, 0.5, 0.001], (1.26,  0.022)),
-                    ("Dispersed Bubble", "rgba(59, 130,246,0.25)",
-                     [4.0,  10,   10,   4.0,  4.0  ], [0.001,0.001,100, 100, 0.001], (6.32,  0.022)),
-                    ("Annular / Mist",   "rgba(139,92, 246,0.25)",
-                     [0.001,10,   10,   0.001,0.001], [8.0,  8.0,  100, 100, 8.0  ], (0.1,   28.3 )),
-                ]
-                _map_note = (
-                    "Mandhane (1974) horizontal-flow zone boundaries — air-water reference. "
-                    "Actual transitions shift with fluid properties and pipe diameter."
-                )
-            else:
-                # Taitel & Dukler (1980) vertical upflow approximate zones
-                # Boundaries: Bubble|Slug at Vsg≈0.3; Slug|Churn at Vsg≈2.5;
-                #             Churn|Annular at Vsg≈6; Dispersed Bubble at Vsl>3.
-                _rmap_zones = [
-                    ("Bubble",           "rgba(34, 197,94, 0.25)",
-                     [0.001,3.0, 3.0, 0.001,0.001], [0.001,0.001,0.3, 0.3, 0.001], (0.5,  0.06 )),
-                    ("Dispersed Bubble", "rgba(59, 130,246,0.25)",
-                     [3.0,  10,  10,  3.0,  3.0  ], [0.001,0.001,100, 100, 0.001], (5.5,  0.04 )),
-                    ("Slug",             "rgba(239,68, 68, 0.18)",
-                     [0.001,3.0, 3.0, 0.001,0.001], [0.3,  0.3,  2.5, 2.5, 0.3  ], (0.5,  0.87 )),
-                    ("Churn",            "rgba(234,88, 12, 0.22)",
-                     [0.001,3.0, 3.0, 0.001,0.001], [2.5,  2.5,  6.0, 6.0, 2.5  ], (0.5,  3.87 )),
-                    ("Annular / Mist",   "rgba(139,92, 246,0.25)",
-                     [0.001,10,  10,  0.001,0.001], [6.0,  6.0,  100, 100, 6.0  ], (0.1,  24.5 )),
-                ]
-                _map_note = (
-                    "Taitel & Dukler (1980) vertical-upflow zone boundaries — air-water reference. "
-                    "Actual transitions shift with fluid properties and pipe diameter."
+
+            # ── Compute regime grid using engine correlations ─────────────────
+            _p      = props          # inlet flash result, in scope from run_case
+            _D_repr = (_pipe_recs[0]["ID (mm)"] / 1000.0) if _pipe_recs else 0.05
+            _td_grid, _full_grid, _vsl_arr, _vsg_arr = _compute_regime_grid(
+                rhol=float(_p["rho_l"]),
+                rhog=float(_p["rho_g"]),
+                mul=float(_p["mu_l"]),
+                mug=float(_p["mu_g"]),
+                sigma=float(_p.get("sigma") or 0.072),
+                D=float(_D_repr),
+                roughness=4.6e-5,
+                use_horiz=_use_horiz,
+            )
+
+            # ── Map regime strings → integer z-values & colours ───────────────
+            _all_regs = sorted(set(r for row in _td_grid for r in row if r))
+            _reg_to_idx = {r: i for i, r in enumerate(_all_regs)}
+            _idx_to_col = [_regime_color(r, _REGIME_LINE_KW, "#94A3B8") for r in _all_regs]
+            _n_reg = len(_all_regs)
+
+            _z = [[_reg_to_idx.get(_td_grid[i][j], 0) for j in range(len(_vsl_arr))]
+                  for i in range(len(_vsg_arr))]
+
+            # Discrete colorscale: each regime gets a flat band
+            _cs = []
+            for _ci, _cc in enumerate(_idx_to_col):
+                _cs.extend([[_ci / _n_reg, _cc], [(_ci + 1) / _n_reg, _cc]])
+
+            # ── Build figure ──────────────────────────────────────────────────
+            fig_regime = go.Figure()
+
+            # Background heatmap (computed regime zones)
+            fig_regime.add_trace(go.Heatmap(
+                x=_vsl_arr, y=_vsg_arr, z=_z,
+                text=_full_grid,
+                colorscale=_cs,
+                zmin=0, zmax=_n_reg,
+                showscale=False,
+                opacity=0.30,
+                hovertemplate=(
+                    "V_sl = %{x:.4f} m/s<br>"
+                    "V_sg = %{y:.4f} m/s<br>"
+                    "Regime: %{text}<extra></extra>"
+                ),
+            ))
+
+            # Zone labels at each regime's log-space centroid
+            _zone_acc = {}   # regime → [Σlog_vsl, Σlog_vsg, count]
+            _log_vsl = np.log10(_vsl_arr)
+            _log_vsg = np.log10(_vsg_arr)
+            for _gi, _row in enumerate(_td_grid):
+                for _gj, _reg in enumerate(_row):
+                    if not _reg:
+                        continue
+                    if _reg not in _zone_acc:
+                        _zone_acc[_reg] = [0.0, 0.0, 0]
+                    _zone_acc[_reg][0] += _log_vsl[_gj]
+                    _zone_acc[_reg][1] += _log_vsg[_gi]
+                    _zone_acc[_reg][2] += 1
+
+            for _zreg, (_svsl, _svsg, _cnt) in _zone_acc.items():
+                if _cnt == 0:
+                    continue
+                fig_regime.add_annotation(
+                    x=10 ** (_svsl / _cnt), y=10 ** (_svsg / _cnt),
+                    xref="x", yref="y",
+                    text=f"<b>{_zreg}</b>",
+                    showarrow=False,
+                    font=dict(size=9, color="#1E293B"),
+                    bgcolor="rgba(255,255,255,0.55)",
+                    borderpad=2,
                 )
 
-            fig_regime = go.Figure()
-            for _zn, _zc, _zvsl, _zvsg, (_zlx, _zly) in _rmap_zones:
-                fig_regime.add_trace(go.Scatter(
-                    x=_zvsl, y=_zvsg, fill="toself", fillcolor=_zc,
-                    line=dict(color="rgba(100,116,139,0.35)", width=0.8),
-                    mode="lines", name=_zn, showlegend=False, hoverinfo="skip",
-                ))
-                fig_regime.add_annotation(
-                    x=_zlx, y=_zly, xref="x", yref="y",
-                    text=f"<i>{_zn}</i>",
-                    showarrow=False, font=dict(size=9, color="#475569"),
-                )
+            # Operating point markers
             _seen_reg_map = set()
             for _r in _pipe_recs:
                 _vsg = max(_r["V_sg (m/s)"], 1e-4)
@@ -1699,21 +1792,29 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                         "<extra></extra>"
                     ),
                 ))
+
             fig_regime.update_layout(
-                template="plotly_white", height=450,
+                template="plotly_white", height=470,
                 margin=dict(l=70, r=20, t=40, b=70),
                 xaxis=dict(title="V_sl  superficial liquid velocity (m/s)", type="log",
                            range=[-3, 1], gridcolor="#F1F5F9", linecolor="#E2E8F0"),
                 yaxis=dict(title="V_sg  superficial gas velocity (m/s)", type="log",
                            range=[-3, 2], gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-                legend=dict(title="Flow Regime", bgcolor="rgba(255,255,255,0.9)",
+                legend=dict(title="Computed regime", bgcolor="rgba(255,255,255,0.9)",
                             bordercolor="#E2E8F0", borderwidth=1, font=dict(size=11)),
                 font=dict(size=12, color="#374151"),
                 title=dict(text="Flow Regime Map — operating points per segment",
                            font=dict(size=13), x=0),
             )
             st.plotly_chart(fig_regime, use_container_width=True, key=k("fig_regime"))
-            st.caption(_map_note + "  ·  ● = horizontal segment  ◆ = vertical segment")
+            _corr_note = ("Taitel-Dukler (1976) + Mandhane-Gregory-Aziz (1974)"
+                          if _use_horiz else "Wallis annular criterion + void-fraction thresholds")
+            st.caption(
+                f"Background zones computed for inlet conditions: "
+                f"ρ_l = {_p['rho_l']:.1f} kg/m³, ρ_g = {_p['rho_g']:.4f} kg/m³, "
+                f"D = {_D_repr*1000:.1f} mm  —  {_corr_note}.  "
+                "● horizontal  ◆ vertical segment"
+            )
         else:
             st.info("No pipe segments with velocity data to plot.")
 
