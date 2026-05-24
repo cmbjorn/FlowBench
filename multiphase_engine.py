@@ -231,6 +231,53 @@ LIQUID_AQUEOUS = {
     "CO₂ (liq.)":       False,
 }
 
+# Liquids handled by built-in correlations (not CoolProp).
+# The UI pre-computes properties and passes them as custom_liquid;
+# the engine uses this set to bypass liquid_mixture_props for these species.
+LIQUID_BUILTIN = frozenset({"KOH solution"})
+
+
+def koh_properties(T_C: float, conc_wt_pct: float) -> tuple:
+    """
+    Physical properties of aqueous KOH solution.
+
+    Args:
+        T_C:           Temperature (°C), valid 10–90 °C.
+        conc_wt_pct:   KOH concentration (wt%), valid 0–40 wt%.
+
+    Returns:
+        (rho_kg_m3, mu_Pa_s, sigma_N_m)
+
+    Correlations:
+        Density   — fit to ICT / Perry's tabulated data at 25 °C + linear T correction.
+                    Accuracy ≈ ±1 %, 0–40 wt%, 10–90 °C.
+        Viscosity — Vogel equation for water × exponential concentration factor
+                    calibrated to alkaline-electrolyzer reference values
+                    (Gilliam et al. 2007, Int. J. Hydrogen Energy 32:359).
+                    Accuracy ≈ ±15 % — adequate for hydraulic sizing.
+        Surface tension — water σ(T) + small KOH correction (~1 % per 10 wt%).
+    """
+    import math
+    w  = max(0.0, min(40.0, conc_wt_pct))
+    T  = max(10.0, min(90.0, T_C))
+    TK = T + 273.15
+
+    # Density (kg/m³)
+    rho_25 = 997.0 + 7.725 * w + 0.0638 * w ** 2
+    rho    = max(900.0, rho_25 - 0.45 * (T - 25.0))
+
+    # Dynamic viscosity (Pa·s) — Vogel water × KOH concentration factor
+    mu_w   = math.exp(-3.7188 + 578.919 / (TK - 137.546)) * 1e-3
+    a_conc = 0.0388 - 7.45e-5 * (T - 25.0)
+    mu     = max(1e-4, mu_w * math.exp(a_conc * w))
+
+    # Surface tension (N/m)
+    sigma_w = max(0.040, 0.0728 - 1.66e-4 * (T - 20.0))
+    sigma   = sigma_w * (1.0 + 0.001 * w)
+
+    return rho, mu, sigma
+
+
 # ============================================================================
 # 3A. EQUILIBRIUM FLASH (Peng-Robinson EOS via thermo library)
 # ============================================================================
@@ -673,10 +720,21 @@ def calculate_two_phase_properties(
 
     # ── Liquid properties ────────────────────────────────────────────────────
     if liquid_flows_kgh:
-        # Primary path: multi-species CoolProp mixture
-        rho_l, mu_l, sigma = liquid_mixture_props(liquid_flows_kgh, T_K, P_pa)
-        m_lye_kgh = sum(liquid_flows_kgh.values())
-        aqueous   = any(LIQUID_AQUEOUS.get(sp, False) for sp in liquid_flows_kgh)
+        _has_builtin = any(sp in LIQUID_BUILTIN for sp in liquid_flows_kgh)
+        if _has_builtin and custom_liquid:
+            # Built-in liquid (e.g. KOH): UI pre-computes properties and passes
+            # them as custom_liquid; mass flow still comes from liquid_flows_kgh.
+            cl        = custom_liquid
+            rho_l     = cl.get("rho_kgm3", 1000.0)
+            mu_l      = cl.get("mu_mpas",  1.0) * 1e-3
+            sigma     = cl.get("sigma_mnm", 72.0) * 1e-3
+            m_lye_kgh = sum(liquid_flows_kgh.values())
+            aqueous   = True  # KOH is aqueous — include water-vapour correction
+        else:
+            # Primary path: multi-species CoolProp mixture
+            rho_l, mu_l, sigma = liquid_mixture_props(liquid_flows_kgh, T_K, P_pa)
+            m_lye_kgh = sum(liquid_flows_kgh.values())
+            aqueous   = any(LIQUID_AQUEOUS.get(sp, False) for sp in liquid_flows_kgh)
     elif liquid_type in LIQUID_COOLPROP_ID:
         # Backward-compat: single species by name
         fluid_id  = LIQUID_COOLPROP_ID[liquid_type]
@@ -793,9 +851,19 @@ def calculate_two_phase_properties(
 
     # ── Phase mass balance ────────────────────────────────────────────────────
     m_gas_total_kgh    = sum(v["kg_h"] for v in composition.values())
-    m_liquid_total_kgh = max(0.1, m_lye_kgh - m_H2O_vapor_kgh)
-    m_total_kgs        = (m_gas_total_kgh + m_liquid_total_kgh) / 3600.0
-    x_gas              = m_gas_total_kgh / (m_gas_total_kgh + m_liquid_total_kgh)
+    m_liq_raw          = m_lye_kgh - m_H2O_vapor_kgh
+    # No phantom liquid: single-phase cases get x=1 or x=0 exactly.
+    # Only apply a small guard (0.01) when both phases genuinely present to
+    # avoid x=NaN when liquid flow is set to an effectively zero value.
+    if m_gas_total_kgh > 0 and m_liq_raw <= 0:
+        m_liquid_total_kgh = 0.0          # gas-only
+    elif m_gas_total_kgh <= 0 and m_liq_raw > 0:
+        m_liquid_total_kgh = m_liq_raw    # liquid-only
+    else:
+        m_liquid_total_kgh = max(0.01, m_liq_raw)  # two-phase; tiny guard
+    m_total_kgs = (m_gas_total_kgh + m_liquid_total_kgh) / 3600.0
+    _m_sum      = m_gas_total_kgh + m_liquid_total_kgh
+    x_gas       = m_gas_total_kgh / _m_sum if _m_sum > 0 else 0.0
 
     # ── Void fraction (homogeneous model) ─────────────────────────────────────
     alpha = 0.0
@@ -838,7 +906,7 @@ def validate_input_bounds(P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h,
         warnings.append(f"⚠️ System pressure {P_bara:.1f} bara outside typical range [1–100 bara]")
     if T_C < 5.0 or T_C > 95.0:
         warnings.append(f"⚠️ Temperature {T_C:.1f}°C outside validated range [5–95°C]")
-    if total_gas < 0.05:
+    if 0 < total_gas < 0.05:
         warnings.append(f"⚠️ Total gas flow {total_gas:.3f} kg/h is very low")
 
     if liquid_flows_kgh:
@@ -898,23 +966,48 @@ VLE_FLUID_DISPLAY = {
 }
 
 
-def calculate_vle_properties(fluid_id, P_bara, x_mass, m_total_kgs):
+def vle_inlet_enthalpy(fluid_id: str, P_bara: float, x_mass: float) -> float:
+    """Specific enthalpy (J/kg) of a pure saturated mixture at inlet conditions."""
+    P_pa = P_bara * 1e5
+    h_l  = CP.PropsSI('H', 'P', P_pa, 'Q', 0, fluid_id)
+    h_v  = CP.PropsSI('H', 'P', P_pa, 'Q', 1, fluid_id)
+    return h_l + max(0.0, min(1.0, x_mass)) * (h_v - h_l)
+
+
+def _vle_quality_from_enthalpy(fluid_id: str, P_pa: float, h_spec: float) -> float:
+    """Mass quality at pressure P_pa given constant specific enthalpy h_spec (isenthalpic flash)."""
+    h_l = CP.PropsSI('H', 'P', P_pa, 'Q', 0, fluid_id)
+    h_v = CP.PropsSI('H', 'P', P_pa, 'Q', 1, fluid_id)
+    if h_spec <= h_l:
+        return 0.0   # fully condensed — subcooled liquid
+    if h_spec >= h_v:
+        return 1.0   # fully vaporised — superheated vapour
+    return (h_spec - h_l) / (h_v - h_l)
+
+
+def calculate_vle_properties(fluid_id, P_bara, x_mass, m_total_kgs, h_spec=None):
     """
     Single-component saturated two-phase properties via CoolProp.
 
     Args:
         fluid_id:      CoolProp fluid name (e.g. "Water", "Propane", "R134a")
         P_bara:        Inlet pressure (bara)
-        x_mass:        Mass quality (0 = all liquid, 1 = all vapour)
+        x_mass:        Mass quality at inlet (0 = liquid, 1 = vapour). Used only
+                       when h_spec is None (first call / preview).
         m_total_kgs:   Total mass flow (kg/s)
+        h_spec:        Specific enthalpy (J/kg) carried from the inlet. When
+                       provided, x_mass is derived via isenthalpic flash so that
+                       vapour fraction evolves correctly as pressure drops along
+                       the pipe.
 
     Returns the same dict shape as calculate_two_phase_properties() so the
     pressure-drop solver and pressure-marching loop are unchanged.
-    At each segment the caller re-invokes this function at the updated inlet
-    pressure, so T_sat and all phase properties track the saturation curve.
     """
-    P_pa   = P_bara * 1e5
-    x_mass = max(0.0, min(1.0, x_mass))
+    P_pa = P_bara * 1e5
+    if h_spec is not None:
+        x_mass = _vle_quality_from_enthalpy(fluid_id, P_pa, h_spec)
+    else:
+        x_mass = max(0.0, min(1.0, x_mass))
 
     try:
         T_sat = CP.PropsSI('T',  'P', P_pa, 'Q', 0.5, fluid_id)
@@ -1241,6 +1334,14 @@ def run_sensitivity(
         "Vertical Upflow":   np.pi / 2.0,
         "Vertical Downflow": -np.pi / 2.0,
     }
+    # Compute inlet enthalpy once for VLE isenthalpic flash
+    _vle_h_spec = None
+    if vle_fluid is not None and vle_x_mass is not None:
+        try:
+            _vle_h_spec = vle_inlet_enthalpy(vle_fluid, P_bara, vle_x_mass)
+        except Exception:
+            _vle_h_spec = None
+
     results = []
     for corr in TWO_PHASE_CORRELATIONS:
         for void in VOIDAGE_METHODS:
@@ -1258,7 +1359,8 @@ def run_sensitivity(
                                  else MATERIAL_ROUGHNESS[seg.get("material", "SS316L")])
                     if vle_fluid is not None:
                         props_seg = calculate_vle_properties(
-                            vle_fluid, current_P / 1e5, vle_x_mass, vle_m_total_kgs)
+                            vle_fluid, current_P / 1e5, vle_x_mass, vle_m_total_kgs,
+                            h_spec=_vle_h_spec)
                     else:
                         props_seg = calculate_two_phase_properties(
                             current_P / 1e5, T_C, gas_flows_kgh, liquid_type, q_lye_m3h,

@@ -171,42 +171,48 @@ with st.sidebar:
     st.header("FlowBench")
     with st.expander("About & Capabilities", expanded=False):
         st.markdown("""
-        Two-phase steady-state hydraulic workbench — pressure drop for any
-        gas–liquid combination that CoolProp can handle.
+        Steady-state pipe hydraulics workbench — pressure drop, flow regime, and
+        velocity analysis for single-phase and two-phase flows.
 
         **Flow modes**
-        - **Gas + Liquid** — multi-component gas and liquid, each as individual
-          species (kg/h). Equilibrium flash (Peng-Robinson EOS) at inlet.
-        - **Saturated / VLE** — pure fluid at saturation; CoolProp derives phase
-          properties from the saturation curve at each segment.
+        - **Single-phase liquid** — incompressible Darcy-Weisbach with CoolProp
+          physical properties (ρ, μ, σ).
+        - **Single-phase gas** — isothermal compressible Darcy-Weisbach; ideal-gas
+          density is recalculated at each segment inlet from the marched pressure.
+          Choking / Fanno-flow is not modelled.
+        - **Gas + liquid (two-phase)** — six industry correlations (Beggs-Brill,
+          Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm,
+          Kim-Mudawar) × two void-fraction models, with full pressure marching.
+        - **Saturated / VLE** — single-component pure fluid at saturation; CoolProp
+          derives all phase properties from the saturation curve at each segment.
 
         **Workflow:** tabs **A / B** for individual lines, **Header A / B** for
-        collecting manifolds, **Compare** for overlay and uncertainty sweep (12
-        correlation × void-fraction combinations). Export Word or Excel from any tab.
+        collecting manifolds, **Compare** for side-by-side overlay and method
+        uncertainty sweep (12 correlation × void-fraction combinations).
+        Export Word or Excel from any case tab.
 
-        **Correlations** — Beggs-Brill (default), Friedel, Lockhart-Martinelli,
-        Müller-Steinhagen & Heck, Chisholm, Kim-Mudawar.
+        **Pipe library** — DN20–DN250, PN20/25/40, 5 materials, optional fluoropolymer
+        liner (PTFE, FEP, PFA, PVDF). 17 fitting types (Crane TP-410).
 
-        **Pipe library** — DN40–DN250, PN20/25/40, 5 materials, optional liner
-        (PTFE, FEP, PFA, PVDF). 17 fitting types (Crane TP-410).
-
-        **Accuracy** — ±20–30 % for non-hydrocarbon fluids. Validate against
-        commissioning data before design decisions.
+        **Accuracy** — two-phase correlations: ±20–30 % typical. Single-phase
+        Darcy-Weisbach: ±5 % for turbulent flow. Validate against commissioning data
+        before design decisions.
         """)
     with st.expander("Model details", expanded=False):
         st.markdown("""
         **Assumptions**
-        1. Ideal gas behaviour for gas mixture
-        2. Continuous liquid phase; no flooding or flow inversion
+        1. Ideal-gas law for gas density (ρ = PM/RT); CoolProp viscosity
+        2. Liquid treated as incompressible at the inlet T and P
         3. Bore = f(DN, PN) only — ANSI B36.10/19, material-independent
         4. Lined segments: effective ID = metal bore − 2 × liner thickness
-        5. Pressure marching: gas density re-evaluated at each segment inlet
-        6. Steady-state only — no transient effects
-        7. Void fraction: homogeneous α = (x/ρg)/(x/ρg+(1−x)/ρl), or Rouhani-1
+        5. Pressure marching: all properties re-evaluated at each segment inlet
+        6. Steady-state only — no transient, surge, or waterhammer effects
+        7. Two-phase void fraction: homogeneous α = (x/ρg)/(x/ρg+(1−x)/ρl), or Rouhani-1 slip model
+        8. Single-phase gas: isothermal compressible only — no Fanno-flow choking check
 
-        **Flow regimes**
-        Horizontal: Stratified / Intermittent / Annular-Dispersed (Taitel-Dukler, Mandhane)
-        Vertical up: Bubble-Slug / Churn-Annular (Wallis/Taitel)
+        **Flow regimes (two-phase only)**
+        Horizontal: Stratified / Intermittent / Annular-Dispersed (Taitel-Dukler 1976, Mandhane 1974)
+        Vertical up: Bubble / Slug / Churn / Annular (Wallis criterion + void-fraction thresholds)
         Vertical down: Falling Film / Annular
 
         **Liquid species** — CoolProp backed (IAPWS-IF97 for Water; DIPPR / REFPROP for
@@ -530,18 +536,53 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         st.subheader("Inputs")
 
         # Flow mode selector
-        flow_mode = st.radio(
+        _FM_OPTS = {
+            "liquid_only": "Single-phase liquid",
+            "gas_only":    "Single-phase gas",
+            "gas_liquid":  "Gas + liquid (two-phase)",
+            "vle":         "Saturated / VLE",
+        }
+        _FM_BY_LABEL = {v: fk for fk, v in _FM_OPTS.items()}
+        _saved_fm = st.session_state.get(k("flow_mode"), "gas_liquid")
+        if _saved_fm not in _FM_OPTS:
+            _saved_fm = "gas_liquid"  # migrate old values
+        _fm_labels = list(_FM_OPTS.values())
+        flow_mode = _FM_BY_LABEL[st.radio(
             "Flow mode",
-            ["Gas + Liquid", "Two-phase Saturated (VLE)"],
+            _fm_labels,
             horizontal=True,
             key=k("flow_mode_radio"),
-            index=0 if st.session_state.get(k("flow_mode"), "gas_liquid") == "gas_liquid" else 1,
-            help="**Gas + Liquid**: separate gas mixture and liquid stream.  "
-                 "**Two-phase Saturated (VLE)**: single pure fluid at saturation — "
-                 "CoolProp derives both phase properties from the saturation curve at each segment.",
-        )
-        st.session_state[k("flow_mode")] = "gas_liquid" if flow_mode == "Gas + Liquid" else "vle"
-        _is_vle = (st.session_state[k("flow_mode")] == "vle")
+            index=_fm_labels.index(_FM_OPTS[_saved_fm]),
+            help=(
+                "**Single-phase liquid** — incompressible Darcy-Weisbach, CoolProp liquid props.  \n"
+                "**Single-phase gas** — isothermal compressible Darcy-Weisbach; gas density "
+                "recalculated at each segment inlet via the ideal-gas law.  \n"
+                "**Gas + liquid (two-phase)** — six industry correlations (Beggs-Brill, Friedel, "
+                "Lockhart-Martinelli, Müller-Steinhagen-Heck, Chisholm, Kim-Mudawar) × two void-fraction "
+                "models with pressure marching.  \n"
+                "**Saturated / VLE** — single-component pure-fluid saturation; CoolProp derives "
+                "phase properties at each segment pressure."
+            ),
+        )]
+        st.session_state[k("flow_mode")] = flow_mode
+        _is_vle = (flow_mode == "vle")
+
+        _FM_CAPTIONS = {
+            "liquid_only": "Incompressible Darcy-Weisbach. Use for pumped liquid lines — water, "
+                           "caustic, solvents, etc. CoolProp provides ρ, μ, and σ.",
+            "gas_only":    "Darcy-Weisbach with ideal-gas density. Gas density is updated at each "
+                           "segment inlet as pressure drops (isothermal compressible). "
+                           "No choking check.",
+            "gas_liquid":  "Separate gas and liquid streams flowing together. Choose from six "
+                           "industry correlations (Beggs-Brill, Friedel, Lockhart-Martinelli, "
+                           "Müller-Steinhagen & Heck, Chisholm, Kim-Mudawar) and two void-fraction "
+                           "models. Pressure is marched segment by segment.",
+            "vle":         "Single pure component on its own saturation curve — e.g. steam/water, "
+                           "propane, ammonia, or a refrigerant. T_sat is derived from pressure. "
+                           "Vapour quality x evolves along the pipe via isenthalpic flash; "
+                           "you set the inlet x only.",
+        }
+        st.caption(_FM_CAPTIONS[flow_mode])
 
         # Inlet Conditions
         with st.container(border=True):
@@ -557,14 +598,119 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 T_C    = p2.number_input("Temperature (°C)", min_value=-60.0, max_value=400.0,
                                          step=5.0, key=k("T_C"))
 
-        # ── VLE input mode ────────────────────────────────────────────────────
-        if _is_vle:
+        # ── Helper: render Gas Phase container ───────────────────────────────
+        def _render_gas_inputs():
+            _all_species = list(engine.GAS_SPECIES.keys())
+            _sel = st.multiselect(
+                "Gas species  (select one or more)",
+                _all_species, key=k("gas_species_widget"),
+                help="Common process gases, hydrocarbons and refrigerants. "
+                     "All use the ideal-gas law with CoolProp viscosity.")
+            if not _sel:
+                st.info("Select at least one gas species.")
+            _flows = {}
+            if _sel:
+                _nc = min(len(_sel), 3)
+                _fc = st.columns(_nc)
+                for _ci, _sp in enumerate(_sel):
+                    _fk = k(f"gflow_{_sp}")
+                    if _fk not in st.session_state:
+                        st.session_state[_fk] = 100.0
+                    _flows[_sp] = _fc[_ci % _nc].number_input(
+                        f"{_sp}  (kg/h)", min_value=0.0, step=0.1, key=_fk)
+            _cgas = None
+            if "Custom" in _sel:
+                st.markdown("*Custom gas properties*")
+                _cg1, _cg2 = st.columns(2)
+                _cg_mw = _cg1.number_input("MW (g/mol)", min_value=1.0, value=28.0,
+                                            step=1.0, key=k("cg_mw"))
+                _cg_mu = _cg2.number_input("μ (µPa·s)", min_value=1.0, value=18.5,
+                                            step=0.5, key=k("cg_mu"))
+                _cgas = {"MW_gmol": _cg_mw, "mu_upas": _cg_mu}
+            _use_cp = any(engine.GAS_SPECIES.get(sp, {}).get("coolprop_id")
+                          for sp in _sel if sp != "Custom")
+            return _flows, _cgas, _use_cp
+
+        # ── Helper: render Liquid Phase container ────────────────────────────
+        def _render_liquid_inputs(T_C_val, P_bara_val):
+            _coolprop_opts = list(engine.LIQUID_COOLPROP_ID.keys())
+            _all_liq_opts  = _coolprop_opts + ["KOH solution"]
+            _lsp = st.multiselect(
+                "Liquid species  (select one or more)",
+                _all_liq_opts, key=k("liquid_species_widget"),
+                help="CoolProp-backed species can be freely mixed. "
+                     "KOH solution uses built-in empirical correlations "
+                     "(density ±1 %, viscosity ±15 %) and must be selected alone.")
+            _lflows = {}
+            if _lsp:
+                _lnc = min(len(_lsp), 3)
+                _lfc = st.columns(_lnc)
+                for _li, _ls in enumerate(_lsp):
+                    _lfk = k(f"lflow_{_ls}")
+                    if _lfk not in st.session_state:
+                        st.session_state[_lfk] = 1000.0
+                    _lf = _lfc[_li % _lnc].number_input(
+                        f"{_ls}  (kg/h)", min_value=0.0, step=100.0, key=_lfk)
+                    if _lf > 0:
+                        _lflows[_ls] = _lf
+
+            _liq_type = "Custom"; _q = 0.0; _cliq = None
+            _has_koh  = "KOH solution" in _lflows
+            _has_cp   = any(s in engine.LIQUID_COOLPROP_ID for s in _lflows)
+
+            if _has_koh and _has_cp:
+                st.warning("KOH solution cannot be mixed with other liquid species in this version. "
+                           "Remove the other species or use KOH alone.")
+                return {}, "Custom", 0.0, None
+
+            if _has_koh:
+                # ── KOH built-in path ─────────────────────────────────────────
+                _koh_conc = st.slider(
+                    "KOH concentration (wt%)", min_value=20, max_value=40,
+                    value=int(st.session_state.get(k("koh_conc"), 30)),
+                    step=1, key=k("koh_conc"),
+                    help="Mass fraction of KOH in water. Typical alkaline electrolyser: 25–32 wt%.")
+                _T_koh = T_C_val if T_C_val is not None else 25.0
+                _koh_rho, _koh_mu, _koh_sig = engine.koh_properties(_T_koh, _koh_conc)
+                _lm1, _lm2, _lm3 = st.columns(3)
+                _lm1.metric("ρ", f"{_koh_rho:.1f} kg/m³")
+                _lm2.metric("μ", f"{_koh_mu*1e3:.3f} mPa·s")
+                _lm3.metric("σ", f"{_koh_sig*1e3:.2f} mN/m")
+                _cliq = {"rho_kgm3": _koh_rho,
+                         "mu_mpas":  _koh_mu * 1e3,
+                         "sigma_mnm": _koh_sig * 1e3}
+                _q    = _lflows["KOH solution"] / _koh_rho if _koh_rho > 0 else 0.0
+                _liq_type = "Custom"
+
+            elif _lflows:
+                # ── CoolProp mixture path ─────────────────────────────────────
+                try:
+                    _T_K  = (T_C_val + 273.15) if T_C_val is not None else 298.15
+                    _rl, _mul, _sigl = engine.liquid_mixture_props(
+                        _lflows, _T_K, P_bara_val * 1e5)
+                    _lm1, _lm2, _lm3 = st.columns(3)
+                    _lm1.metric("ρ_mix", f"{_rl:.1f} kg/m³")
+                    _lm2.metric("μ_mix", f"{_mul*1e3:.3f} mPa·s")
+                    _lm3.metric("σ_mix", f"{_sigl*1e3:.2f} mN/m")
+                    _q = sum(_lflows.values()) / _rl
+                    if len(_lflows) == 1:
+                        _liq_type = next(iter(_lflows)); _cliq = None
+                    else:
+                        _liq_type = "Custom"
+                        _cliq = {"rho_kgm3": _rl, "mu_mpas": _mul * 1e3,
+                                 "sigma_mnm": _sigl * 1e3}
+                except Exception:
+                    pass
+
+            return _lflows, _liq_type, _q, _cliq
+
+        # ── Mode-specific inputs ──────────────────────────────────────────────
+        if flow_mode == "vle":
             with st.container(border=True):
                 st.markdown("**Saturated Fluid (VLE)**")
                 _vle_display_list = list(engine.VLE_FLUID_DISPLAY.keys())
                 _vle_names_to_id  = engine.VLE_FLUID_DISPLAY
                 _vle_saved_fluid  = st.session_state.get(k("vle_fluid_widget"), "Water")
-                # Find display name that maps to the saved fluid ID
                 _vle_display_saved = next(
                     (dn for dn, fid in _vle_names_to_id.items() if fid == _vle_saved_fluid),
                     _vle_display_list[0])
@@ -572,146 +718,65 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                                 if _vle_display_saved in _vle_display_list else 0)
                 vle_display_name = st.selectbox(
                     "Fluid", _vle_display_list, index=_vle_sel_idx, key=k("vle_fluid_sel"),
-                    help="CoolProp saturation data is used. T_sat is derived from inlet pressure.")
+                    help="Single pure component on its own saturation curve. "
+                         "T_sat and phase densities are derived from pressure at each segment. "
+                         "Quality x evolves along the pipe via isenthalpic flash — "
+                         "flashing is computed automatically as pressure drops.")
                 vle_fluid_id = _vle_names_to_id[vle_display_name]
                 st.session_state[k("vle_fluid_widget")] = vle_fluid_id
-
                 _vv1, _vv2 = st.columns(2)
                 vle_m_kgs = _vv1.number_input(
                     "Total mass flow (kg/s)", min_value=0.001, max_value=500.0,
                     step=0.1, format="%.3f", key=k("vle_m_kgs_widget"))
                 vle_x = _vv2.slider(
-                    "Inlet quality x  (0 = all liquid, 1 = all vapour)",
-                    min_value=0.0, max_value=1.0,
-                    step=0.01, key=k("vle_x_widget"))
-
-                # Show derived saturation properties
+                    "Inlet quality  x  (0 = sat. liquid, 1 = sat. vapour)",
+                    min_value=0.0, max_value=1.0, step=0.01, key=k("vle_x_widget"),
+                    help="Mass fraction vapour at pipe inlet. Downstream quality is "
+                         "calculated automatically via isenthalpic flash.")
                 try:
-                    _vle_props_preview = engine.calculate_vle_properties(
-                        vle_fluid_id, P_bara, vle_x, vle_m_kgs)
+                    _vle_prev = engine.calculate_vle_properties(vle_fluid_id, P_bara, vle_x, vle_m_kgs)
                     _vc1, _vc2, _vc3, _vc4 = st.columns(4)
-                    _vc1.metric("T_sat", f"{_vle_props_preview['T_sat_C']:.1f} °C")
-                    _vc2.metric("ρ_liq", f"{_vle_props_preview['rho_l']:.1f} kg/m³")
-                    _vc3.metric("ρ_vap", f"{_vle_props_preview['rho_g']:.3f} kg/m³")
-                    _vc4.metric("σ", f"{_vle_props_preview['sigma']*1e3:.2f} mN/m")
+                    _vc1.metric("T_sat", f"{_vle_prev['T_sat_C']:.1f} °C")
+                    _vc2.metric("ρ_liq", f"{_vle_prev['rho_l']:.1f} kg/m³")
+                    _vc3.metric("ρ_vap", f"{_vle_prev['rho_g']:.3f} kg/m³")
+                    _vc4.metric("σ", f"{_vle_prev['sigma']*1e3:.2f} mN/m")
                 except Exception as _vle_err:
                     st.error(f"CoolProp VLE error: {_vle_err}")
-                    vle_fluid_id = "Water"
-                    vle_m_kgs   = 1.0
-                    vle_x       = 0.5
+                    vle_fluid_id = "Water"; vle_m_kgs = 1.0; vle_x = 0.5
+            # Stubs for unused variables
+            gas_flows_kgh = {}; liquid_type = f"{vle_fluid_id} (VLE)"; q_lye = 0.0
+            liquid_flows_kgh = None; custom_gas = None; custom_liquid = None
+            use_coolprop = False; T_C = None
 
-            # Dummy values for non-VLE variables (keep references valid)
-            gas_flows_kgh    = {}
-            liquid_type      = f"{vle_fluid_id} (VLE)"
-            q_lye            = 0.0
-            liquid_flows_kgh = None
-            custom_gas       = None
-            custom_liquid    = None
-            use_coolprop     = False
-            T_C              = None  # will be set from VLE props
-
-        else:
-            # ── Gas + Liquid mode ─────────────────────────────────────────────
-            vle_fluid_id = None
-            vle_m_kgs    = None
-            vle_x        = None
-
-            # Gas Phase
+        elif flow_mode == "gas_only":
+            vle_fluid_id = None; vle_m_kgs = None; vle_x = None
             with st.container(border=True):
                 st.markdown("**Gas Phase**")
-                # Grouped species selector
-                _all_species = list(engine.GAS_SPECIES.keys())
-                selected_species = st.multiselect(
-                    "Gas species  (select one or more)",
-                    _all_species, key=k("gas_species_widget"),
-                    help="All species are CoolProp-backed. "
-                         "Categories: Common Process, Hydrocarbons, Refrigerants.")
-                if not selected_species:
-                    st.info("Select at least one gas species, or switch to Saturated / VLE mode.")
-                    selected_species = []
+                st.caption(
+                    "Single-phase gas — Darcy-Weisbach with ideal-gas density. "
+                    "Density is updated at each segment inlet (isothermal compressible). "
+                    "Choking / Fanno-flow is not modelled.")
+                gas_flows_kgh, custom_gas, use_coolprop = _render_gas_inputs()
+            # No liquid
+            liquid_flows_kgh = {}; q_lye = 0.0; liquid_type = "Custom"; custom_liquid = None
 
-                gas_flows_kgh = {}
-                if selected_species:
-                    _ncols = min(len(selected_species), 3)
-                    _fcols = st.columns(_ncols)
-                    for _ci, _sp in enumerate(selected_species):
-                        _fkey = k(f"gflow_{_sp}")
-                        if _fkey not in st.session_state:
-                            st.session_state[_fkey] = 100.0
-                        gas_flows_kgh[_sp] = _fcols[_ci % _ncols].number_input(
-                            f"{_sp}  (kg/h)", min_value=0.0, step=0.1, key=_fkey)
-
-                custom_gas = None
-                if "Custom" in selected_species:
-                    st.markdown("*Custom gas properties*")
-                    _cg1, _cg2 = st.columns(2)
-                    _cg_mw = _cg1.number_input("MW (g/mol)", min_value=1.0, value=28.0,
-                                                step=1.0, key=k("cg_mw"))
-                    _cg_mu = _cg2.number_input("μ (µPa·s)", min_value=1.0, value=18.5,
-                                                step=0.5, key=k("cg_mu"))
-                    custom_gas = {"MW_gmol": _cg_mw, "mu_upas": _cg_mu}
-
-                # Use CoolProp for gas mixture when at least one species has a CoolProp ID
-                use_coolprop = any(engine.GAS_SPECIES.get(sp, {}).get("coolprop_id")
-                                   for sp in selected_species if sp != "Custom")
-
-            # Liquid Phase
+        elif flow_mode == "liquid_only":
+            vle_fluid_id = None; vle_m_kgs = None; vle_x = None
             with st.container(border=True):
                 st.markdown("**Liquid Phase**")
-                _liq_options = list(engine.LIQUID_COOLPROP_ID.keys())
-                liquid_species = st.multiselect(
-                    "Liquid species  (select one or more)",
-                    _liq_options,
-                    key=k("liquid_species_widget"),
-                    help="All species use CoolProp. Mixture properties are mass-weighted. "
-                         "Leave empty for single-phase gas (Darcy-Weisbach fallback).",
-                )
+                st.caption("Single-phase liquid — incompressible Darcy-Weisbach with CoolProp properties.")
+                liquid_flows_kgh, liquid_type, q_lye, custom_liquid = _render_liquid_inputs(T_C, P_bara)
+            # No gas
+            gas_flows_kgh = {}; custom_gas = None; use_coolprop = False
 
-                if not liquid_species:
-                    st.caption("No liquid selected — calculating as **single-phase gas** (Darcy-Weisbach).")
-
-                liquid_flows_kgh = {}
-                if liquid_species:
-                    _lncols = min(len(liquid_species), 3)
-                    _lfcols = st.columns(_lncols)
-                    for _li, _ls in enumerate(liquid_species):
-                        _lfk = k(f"lflow_{_ls}")
-                        if _lfk not in st.session_state:
-                            st.session_state[_lfk] = 1000.0
-                        _lf = _lfcols[_li % _lncols].number_input(
-                            f"{_ls}  (kg/h)", min_value=0.0, step=100.0, key=_lfk,
-                        )
-                        if _lf > 0:
-                            liquid_flows_kgh[_ls] = _lf
-
-                if liquid_flows_kgh:
-                    try:
-                        _T_K  = (T_C + 273.15) if T_C is not None else 298.15
-                        _P_pa = P_bara * 1e5
-                        _rl, _mul, _sigl = engine.liquid_mixture_props(
-                            liquid_flows_kgh, _T_K, _P_pa)
-                        _lm1, _lm2, _lm3 = st.columns(3)
-                        _lm1.metric("ρ_mix", f"{_rl:.1f} kg/m³")
-                        _lm2.metric("μ_mix", f"{_mul*1e3:.3f} mPa·s")
-                        _lm3.metric("σ_mix", f"{_sigl*1e3:.2f} mN/m")
-                        # Compute q_lye for header/helper compat
-                        q_lye = sum(liquid_flows_kgh.values()) / _rl
-                        if len(liquid_flows_kgh) == 1:
-                            liquid_type   = next(iter(liquid_flows_kgh))
-                            custom_liquid = None
-                        else:
-                            liquid_type   = "Custom"
-                            custom_liquid = {"rho_kgm3": _rl,
-                                             "mu_mpas":  _mul * 1e3,
-                                             "sigma_mnm": _sigl * 1e3}
-                    except Exception:
-                        q_lye         = 0.0
-                        liquid_type   = "Custom"
-                        custom_liquid = None
-                else:
-                    q_lye         = 0.0
-                    liquid_type   = "Custom"
-                    custom_liquid = None
+        else:  # gas_liquid (two-phase)
+            vle_fluid_id = None; vle_m_kgs = None; vle_x = None
+            with st.container(border=True):
+                st.markdown("**Gas Phase**")
+                gas_flows_kgh, custom_gas, use_coolprop = _render_gas_inputs()
+            with st.container(border=True):
+                st.markdown("**Liquid Phase**")
+                liquid_flows_kgh, liquid_type, q_lye, custom_liquid = _render_liquid_inputs(T_C, P_bara)
 
         # Pipe Geometry
         with st.container(border=True):
@@ -997,21 +1062,26 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 st.session_state[k("segments")].pop()
                 st.rerun()
 
-        # Calculation Settings
-        with st.container(border=True):
-            st.markdown("**Calculation Settings**")
-            _cs1, _cs2 = st.columns(2)
-            correlation = _cs1.selectbox(
-                "ΔP correlation", engine.TWO_PHASE_CORRELATIONS,
-                key=k("correlation"),
-                help="Two-phase frictional pressure drop correlation. "
-                     "Beggs-Brill (default) also models inclined flow; "
-                     "others use gravity added separately.")
-            voidage_method = _cs2.selectbox(
-                "Void fraction model", engine.VOIDAGE_METHODS,
-                key=k("voidage_method"),
-                help="Homogeneous: α from density ratio (fast, conservative). "
-                     "Rouhani-1: slip-flow model (more accurate for stratified/annular).")
+        # Calculation Settings — two-phase modes only
+        if flow_mode in ("gas_liquid", "vle"):
+            with st.container(border=True):
+                st.markdown("**Calculation Settings**")
+                _cs1, _cs2 = st.columns(2)
+                correlation = _cs1.selectbox(
+                    "ΔP correlation", engine.TWO_PHASE_CORRELATIONS,
+                    key=k("correlation"),
+                    help="Two-phase frictional pressure drop correlation. "
+                         "Beggs-Brill also accounts for pipe inclination; "
+                         "the others add gravity as a separate term.")
+                voidage_method = _cs2.selectbox(
+                    "Void fraction model", engine.VOIDAGE_METHODS,
+                    key=k("voidage_method"),
+                    help="Homogeneous: α from the density ratio (fast, conservative). "
+                         "Rouhani-1: slip-flow model, better for stratified or annular flow.")
+        else:
+            # Single-phase: read last-used values from session state (not shown as widgets)
+            correlation    = st.session_state.get(k("correlation"),    engine.TWO_PHASE_CORRELATIONS[0])
+            voidage_method = st.session_state.get(k("voidage_method"), engine.VOIDAGE_METHODS[0])
 
     # ── OUTPUTS ───────────────────────────────────────────────────────────────
     with col_out:
@@ -1026,8 +1096,11 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
         if _is_vle:
             try:
+                # Compute inlet enthalpy once — carried through the segment loop
+                # so quality evolves correctly as pressure drops (isenthalpic flash).
+                _vle_h_inlet = engine.vle_inlet_enthalpy(vle_fluid_id, P_bara, vle_x)
                 props = engine.calculate_vle_properties(
-                    vle_fluid_id, P_bara, vle_x, vle_m_kgs)
+                    vle_fluid_id, P_bara, vle_x, vle_m_kgs, h_spec=_vle_h_inlet)
                 T_C = props["T_sat_C"]
             except Exception as _vle_calc_err:
                 st.error(f"VLE calculation failed: {_vle_calc_err}")
@@ -1146,7 +1219,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             """Evaluate fluid properties at the current P and T (used for stream snaps and valve/HX)."""
             if _is_vle:
                 return engine.calculate_vle_properties(
-                    vle_fluid_id, max(1000.0, current_P)/1e5, vle_x, vle_m_kgs)
+                    vle_fluid_id, max(1000.0, current_P)/1e5, vle_x, vle_m_kgs,
+                    h_spec=_vle_h_inlet)
             return engine.calculate_two_phase_properties(
                 max(1000.0, current_P)/1e5, current_T_C,
                 _eff_gas_flows, _eff_liq_type, _eff_q_lye,
@@ -1318,7 +1392,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
             if _is_vle:
                 props_seg = engine.calculate_vle_properties(
-                    vle_fluid_id, current_P/1e5, vle_x, vle_m_kgs)
+                    vle_fluid_id, current_P/1e5, vle_x, vle_m_kgs,
+                    h_spec=_vle_h_inlet)
             else:
                 props_seg = engine.calculate_two_phase_properties(
                     current_P/1e5, current_T_C, _eff_gas_flows, _eff_liq_type, _eff_q_lye,
@@ -1674,15 +1749,31 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
     _pipe_recs = [r for r in grid_records if r.get("V_sg (m/s)", 0) > 0 or r.get("V_sl (m/s)", 0) > 0]
 
     st.divider()
-    tab_sch, tab_prof_tab, tab_regime_map = st.tabs(
-        ["Pipeline Schematic", "Pressure Profile", "Flow Regime Map"])
+    _tab_names = ["Pipeline Schematic", "Pressure Profile", "Flow Regime Map"]
+    if _is_vle:
+        _tab_names.append("Phase Distribution")
+    _tabs = st.tabs(_tab_names)
+    tab_sch, tab_prof_tab, tab_regime_map = _tabs[0], _tabs[1], _tabs[2]
+    tab_vle_dist = _tabs[3] if _is_vle else None
+
     with tab_sch:
         st.plotly_chart(fig_sch, use_container_width=True, key=k("fig_sch"))
         st.caption("Line width ∝ DN  ·  Colour = flow regime  ·  Regime name on each segment")
     with tab_prof_tab:
         st.plotly_chart(fig_prof, use_container_width=True, key=k("fig_prof"))
     with tab_regime_map:
-        if _pipe_recs:
+        # Determine single-phase status for regime map (need both phases for meaningful map)
+        _gas_ok_rm  = bool(_eff_gas_flows) and any(v > 0 for v in (_eff_gas_flows or {}).values())
+        _liq_ok_rm  = (bool(_eff_liquid_flows) and any(v > 0 for v in (_eff_liquid_flows or {}).values())) \
+                      or (_eff_q_lye or 0) > 0
+        _sp_rm = not _is_vle and not (_gas_ok_rm and _liq_ok_rm)
+        if _sp_rm:
+            _sp_phase_rm = "gas" if _gas_ok_rm else "liquid"
+            st.info(
+                f"Single-phase {_sp_phase_rm} flow — the flow regime map applies only to "
+                "two-phase (gas + liquid) flow. No regime boundaries to display."
+            )
+        elif _pipe_recs:
             _n_vert = sum(1 for r in _pipe_recs if r.get("Type", "Horizontal") != "Horizontal")
             _map_choice = st.radio(
                 "Reference map:",
@@ -1849,6 +1940,107 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         else:
             st.info("No pipe segments with velocity data to plot.")
 
+    # ── VLE PHASE DISTRIBUTION TAB ────────────────────────────────────────────
+    if _is_vle and tab_vle_dist is not None and stream_records:
+        with tab_vle_dist:
+            _vd_dist   = pressure_profile_x                              # [0, L1, L1+L2, …]
+            _vd_P      = [sr["P (bara)"]          for sr in stream_records]
+            _vd_T      = [sr["T (°C)"]            for sr in stream_records]
+            _vd_x      = [sr["x (−)"]             for sr in stream_records]
+            _vkey_vap  = f"{vle_fluid_id} vapour  kg/h"
+            _vkey_liq  = f"{vle_fluid_id} liquid  kg/h"
+            _vd_vap    = [sr.get(_vkey_vap, 0.0)  for sr in stream_records]
+            _vd_liq    = [sr.get(_vkey_liq, 0.0)  for sr in stream_records]
+            _vd_labels = [sr["Stream"]             for sr in stream_records]
+
+            # ── Chart 1: P and T_sat vs distance ─────────────────────────────
+            _fig_pt = go.Figure()
+            _fig_pt.add_trace(go.Scatter(
+                x=_vd_dist, y=_vd_P, name="P (bara)",
+                mode="lines+markers", line=dict(color="#2563EB", width=2.5),
+                marker=dict(size=7), yaxis="y1",
+                hovertemplate="Distance: %{x:.2f} m<br>P: %{y:.3f} bara<extra></extra>",
+            ))
+            _fig_pt.add_trace(go.Scatter(
+                x=_vd_dist, y=_vd_T, name="T_sat (°C)",
+                mode="lines+markers", line=dict(color="#D97706", width=2.5, dash="dash"),
+                marker=dict(size=7, symbol="diamond"), yaxis="y2",
+                hovertemplate="Distance: %{x:.2f} m<br>T_sat: %{y:.2f} °C<extra></extra>",
+            ))
+            _fig_pt.update_layout(
+                template="plotly_white", height=240,
+                margin=dict(l=60, r=60, t=30, b=40),
+                xaxis=dict(title="Cumulative distance (m)", gridcolor="#F1F5F9"),
+                yaxis=dict(title="Pressure (bara)", color="#2563EB",
+                           gridcolor="#F1F5F9", zeroline=False),
+                yaxis2=dict(title="T_sat (°C)", color="#D97706",
+                            overlaying="y", side="right", zeroline=False),
+                legend=dict(orientation="h", x=0.01, y=1.08, bgcolor="rgba(0,0,0,0)"),
+                hovermode="x unified", font=dict(size=11, color="#374151"),
+            )
+            st.plotly_chart(_fig_pt, use_container_width=True, key=k("fig_vle_pt"))
+
+            # ── Chart 2: vapour/liquid split as stacked area ──────────────────
+            _fig_split = go.Figure()
+            _fig_split.add_trace(go.Scatter(
+                x=_vd_dist, y=_vd_liq, name="Liquid (kg/h)",
+                mode="lines", line=dict(color="#3B82F6", width=0),
+                fill="tozeroy", fillcolor="rgba(59,130,246,0.25)",
+                hovertemplate="Distance: %{x:.2f} m<br>Liquid: %{y:.1f} kg/h<extra></extra>",
+                stackgroup="split",
+            ))
+            _fig_split.add_trace(go.Scatter(
+                x=_vd_dist, y=_vd_vap, name="Vapour (kg/h)",
+                mode="lines", line=dict(color="#F97316", width=0),
+                fill="tonexty", fillcolor="rgba(249,115,22,0.25)",
+                hovertemplate="Distance: %{x:.2f} m<br>Vapour: %{y:.1f} kg/h<extra></extra>",
+                stackgroup="split",
+            ))
+            # Quality x as an overlay line on the right axis
+            _fig_split.add_trace(go.Scatter(
+                x=_vd_dist, y=_vd_x, name="Quality x (−)",
+                mode="lines+markers", line=dict(color="#7C3AED", width=2, dash="dot"),
+                marker=dict(size=6), yaxis="y2",
+                hovertemplate="Distance: %{x:.2f} m<br>x: %{y:.4f}<extra></extra>",
+            ))
+            _fig_split.update_layout(
+                template="plotly_white", height=260,
+                margin=dict(l=60, r=60, t=30, b=50),
+                xaxis=dict(title="Cumulative distance (m)", gridcolor="#F1F5F9"),
+                yaxis=dict(title="Flow (kg/h)", gridcolor="#F1F5F9", zeroline=False),
+                yaxis2=dict(title="Quality x (−)", color="#7C3AED",
+                            overlaying="y", side="right",
+                            range=[-0.02, 1.02], zeroline=False),
+                legend=dict(orientation="h", x=0.01, y=1.10, bgcolor="rgba(0,0,0,0)"),
+                hovermode="x unified", font=dict(size=11, color="#374151"),
+            )
+            st.plotly_chart(_fig_split, use_container_width=True, key=k("fig_vle_split"))
+
+            # ── Table ─────────────────────────────────────────────────────────
+            _vd_table = []
+            for _i, _sr in enumerate(stream_records):
+                _vd_table.append({
+                    "Stream":         _sr["Stream"],
+                    "P (bara)":       _sr["P (bara)"],
+                    "T_sat (°C)":     _sr["T (°C)"],
+                    "x (−)":          _sr["x (−)"],
+                    "Vapour (kg/h)":  _sr.get(_vkey_vap, 0.0),
+                    "Liquid (kg/h)":  _sr.get(_vkey_liq, 0.0),
+                    "α (−)":          _sr.get("α (−)", "—"),
+                })
+            st.dataframe(
+                pd.DataFrame(_vd_table),
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "P (bara)":      st.column_config.NumberColumn(format="%.3f"),
+                    "T_sat (°C)":    st.column_config.NumberColumn(format="%.2f"),
+                    "x (−)":         st.column_config.NumberColumn(format="%.5f"),
+                    "Vapour (kg/h)": st.column_config.NumberColumn(format="%.2f"),
+                    "Liquid (kg/h)": st.column_config.NumberColumn(format="%.2f"),
+                    "α (−)":         st.column_config.NumberColumn(format="%.4f"),
+                },
+            )
+
     # ── HEAT & MASS BALANCE (full width, below charts) ───────────────────────
     if stream_records:
         _hmb_rows_def = [("P  (bara)", "P (bara)"), ("T  (°C)", "T (°C)")]
@@ -1886,6 +2078,122 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                      hide_index=True, use_container_width=True)
 
 
+    # ── METHOD SENSITIVITY ────────────────────────────────────────────────────
+    # Detect single-phase: only one phase present → all correlations identical.
+    _gas_present_ms  = bool(_eff_gas_flows) and any(v > 0 for v in (_eff_gas_flows or {}).values())
+    _liq_present_ms  = (bool(_eff_liquid_flows) and any(v > 0 for v in (_eff_liquid_flows or {}).values())) \
+                       or (_eff_q_lye or 0) > 0
+    _is_single_phase = not _is_vle and not (_gas_present_ms and _liq_present_ms)
+
+    # Hash the inputs so we only recompute when something actually changes.
+    _ms_hash_src = {
+        "P": P_bara, "T": T_C, "liq": _eff_liq_type, "q": _eff_q_lye,
+        "gas": {kk: float(vv) for kk, vv in (_eff_gas_flows or {}).items()},
+        "liq_flows": {kk: float(vv) for kk, vv in (_eff_liquid_flows or {}).items()},
+        "vle_fluid": vle_fluid_id, "vle_x": float(vle_x) if vle_x is not None else None,
+        "vle_m": float(vle_m_kgs) if vle_m_kgs is not None else None,
+        "segs": [(s.get("type", s.get("kind", "")), s.get("dn", ""), s.get("length", 0.0))
+                 for s in st.session_state[k("segments")]],
+    }
+    _ms_hash = hashlib.md5(json.dumps(_ms_hash_src, sort_keys=True).encode()).hexdigest()
+    if st.session_state.get(k("ms_hash")) != _ms_hash:
+        with st.spinner("Running method sensitivity (12 combinations)…"):
+            st.session_state[k("sens_data_case")] = engine.run_sensitivity(
+                P_bara, T_C if T_C is not None else 20.0,
+                _eff_gas_flows or {}, _eff_liq_type, _eff_q_lye,
+                st.session_state[k("segments")],
+                custom_gas=custom_gas, custom_liquid=_eff_custom_liq,
+                liquid_flows_kgh=_eff_liquid_flows if not _is_vle else None,
+                vle_fluid=vle_fluid_id if _is_vle else None,
+                vle_x_mass=vle_x if _is_vle else None,
+                vle_m_total_kgs=vle_m_kgs if _is_vle else None,
+            )
+            st.session_state[k("ms_hash")] = _ms_hash
+    _sens_data = st.session_state.get(k("sens_data_case"), [])
+
+    with st.expander("Method Sensitivity — ΔP across all correlations × void-fraction models",
+                     expanded=False):
+        if _is_single_phase:
+            _sp_phase = "gas" if _gas_present_ms else "liquid"
+            st.info(
+                f"Single-phase {_sp_phase} flow — all two-phase correlations reduce to "
+                "Darcy-Weisbach and return identical results. Method sensitivity is not applicable."
+            )
+        elif not _sens_data:
+            st.info("No sensitivity results available yet.")
+        else:
+            # Build label list and determine currently-selected method label
+            _sel_corr_s = _CORR_SHORT.get(correlation, correlation)
+            _sel_void_s = _VOID_SHORT.get(voidage_method, voidage_method)
+            _sel_lbl_s  = f"{_sel_corr_s} / {_sel_void_s}"
+
+            _s_labels, _s_dp, _s_ok = [], [], []
+            for _sr in _sens_data:
+                _lc = _CORR_SHORT.get(_sr["correlation"], _sr["correlation"])
+                _lv = _VOID_SHORT.get(_sr["voidage"], _sr["voidage"])
+                _s_labels.append(f"{_lc} / {_lv}")
+                _s_dp.append(_sr["total_dp_kpa"] if _sr["ok"] else None)
+                _s_ok.append(_sr["ok"])
+
+            # Bar colors: highlight the selected combo
+            _s_colors = ["#2563EB" if _l == _sel_lbl_s else "#93C5FD" for _l in _s_labels]
+
+            _fig_ms = go.Figure()
+            _fig_ms.add_trace(go.Bar(
+                x=[v for v in _s_dp],
+                y=_s_labels,
+                orientation="h",
+                marker=dict(color=_s_colors, line=dict(color="#1E40AF", width=0.5)),
+                text=[f"{v:.2f}" if v is not None else "—" for v in _s_dp],
+                textposition="outside",
+                hovertemplate="%{y}<br>Total ΔP: %{x:.3f} kPa<extra></extra>",
+            ))
+            # Dashed vline at selected method
+            _sel_dp_s = next(
+                (v for v, l in zip(_s_dp, _s_labels) if l == _sel_lbl_s and v is not None), None)
+            if _sel_dp_s is not None:
+                _fig_ms.add_vline(
+                    x=_sel_dp_s,
+                    line=dict(color="#1D4ED8", width=1.5, dash="dash"),
+                    annotation_text=f"Selected: {_sel_dp_s:.2f} kPa",
+                    annotation_position="top right",
+                    annotation_font=dict(size=9, color="#1D4ED8"),
+                )
+            _valid_dp_s = [v for v in _s_dp if v is not None]
+            _x_lo = min(_valid_dp_s) * 0.85 if _valid_dp_s else 0
+            _x_hi = max(_valid_dp_s) * 1.18 if _valid_dp_s else 1
+            _fig_ms.update_layout(
+                template="plotly_white", height=380,
+                margin=dict(l=10, r=60, t=36, b=50),
+                xaxis=dict(title="Total ΔP  (kPa)", range=[_x_lo, _x_hi],
+                           gridcolor="#F1F5F9"),
+                yaxis=dict(autorange="reversed"),
+                font=dict(size=11, color="#374151"),
+                title=dict(text=(f"Method sensitivity  —  selected: <b>{_sel_lbl_s}</b>"
+                                 f"  ({_sel_dp_s:.2f} kPa)" if _sel_dp_s else "Method sensitivity"),
+                           font=dict(size=12), x=0),
+                showlegend=False,
+            )
+            st.plotly_chart(_fig_ms, use_container_width=True, key=k("fig_method_sens"))
+
+            # Data table
+            _ms_rows = []
+            for _sr, _lbl in zip(_sens_data, _s_labels):
+                _ms_rows.append({
+                    "Method": _lbl,
+                    "ΔP (kPa)": round(_sr["total_dp_kpa"], 3) if _sr["ok"] and _sr["total_dp_kpa"] is not None else None,
+                    "Status": "OK" if _sr["ok"] else f"Error: {_sr.get('error','?')}",
+                    "Selected": "★" if _lbl == _sel_lbl_s else "",
+                })
+            st.dataframe(
+                pd.DataFrame(_ms_rows),
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "ΔP (kPa)": st.column_config.NumberColumn(format="%.3f"),
+                },
+            )
+
     # ── EXPORTS ───────────────────────────────────────────────────────────────
     st.divider()
     ex_tab_w, ex_tab_x = st.tabs(["Export Word (.docx)", "Export Excel (.xlsx)"])
@@ -1893,7 +2201,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         _rpt_hash = hashlib.md5(json.dumps({
             "P": P_bara, "T": T_C,
             "gas_flows": {_kk: float(_vv) for _kk,_vv in gas_flows_kgh.items()},
-            "liq_flows": {_kk: float(_vv) for _kk,_vv in liquid_flows_kgh.items()},
+            "liq_flows": {_kk: float(_vv) for _kk,_vv in (liquid_flows_kgh or {}).items()},
             "segs": [(s.get("type", s.get("kind","")),s.get("dn",""),s.get("pn",""),s.get("length",0.0),
                       tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
                       s.get("lined",False),
@@ -3188,6 +3496,16 @@ _ld = f"Header {_lb}"
 tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_gs = st.tabs(
     [_la, _lb, _lc, _ld, "Compare", "Goal Seek"])
 
+_CORR_SHORT = {
+    "Beggs-Brill": "BB", "Friedel": "Friedel",
+    "Lockhart_Martinelli": "L-M", "Muller_Steinhagen_Heck": "MSH",
+    "Chisholm": "Chisholm", "Kim_Mudawar": "Kim-M",
+}
+_VOID_SHORT = {
+    "Homogeneous": "Homo",
+    "Rouhani-1 (slip)": "Rouhani-1",
+}
+
 with tab_a:
     results_a = run_case("a", accent="#2563EB")
 
@@ -3244,16 +3562,6 @@ def _sens_hash(ra, rb):
     }
     return hashlib.md5(json.dumps(_data, sort_keys=True).encode()).hexdigest()
 
-
-_CORR_SHORT = {
-    "Beggs-Brill": "BB", "Friedel": "Friedel",
-    "Lockhart_Martinelli": "L-M", "Muller_Steinhagen_Heck": "MSH",
-    "Chisholm": "Chisholm", "Kim_Mudawar": "Kim-M",
-}
-_VOID_SHORT = {
-    "Homogeneous": "Homo",
-    "Rouhani-1 (slip)": "Rouhani-1",
-}
 
 with tab_cmp:
     _la = st.session_state.get("label_a") or "A"
