@@ -244,6 +244,10 @@ def generate_report(
     fig_sch=None,
     fig_prof=None,
     case_label="Case",
+    flow_mode=None,            # "liquid_only","gas_only","gas_liquid","vle"
+    custom_liquid=None,        # dict (used for KOH concentration)
+    stream_records=None,       # list of stream-balance dicts (VLE phase distribution)
+    sensitivity_results=None,  # list of dicts from run_sensitivity()
 ):
     doc = Document()
 
@@ -256,24 +260,83 @@ def generate_report(
     sec.top_margin    = Inches(0.9)
     sec.bottom_margin = Inches(0.9)
 
+    # Derive flow mode if not provided
+    if flow_mode is None:
+        _has_gas = bool(gas_flows_kgh)
+        _has_liq = bool(liquid_type)
+        if _has_gas and _has_liq:
+            flow_mode = "gas_liquid"
+        elif _has_gas:
+            flow_mode = "gas_only"
+        elif _has_liq:
+            flow_mode = "liquid_only"
+        else:
+            flow_mode = "vle"
+
+    _GAS_ONLY  = flow_mode == "gas_only"
+    _LIQ_ONLY  = flow_mode == "liquid_only"
+    _IS_VLE    = flow_mode == "vle"
+    _TWO_PHASE = flow_mode in ("gas_liquid", "vle")
+
+    _MODE_LABEL = {
+        "liquid_only": "Single-Phase Liquid",
+        "gas_only":    "Single-Phase Gas (Compressible)",
+        "gas_liquid":  "Gas–Liquid Two-Phase",
+        "vle":         "Saturated VLE / Two-Phase",
+    }
+    _mode_str = _MODE_LABEL.get(flow_mode, "Gas–Liquid Two-Phase")
+
+    # Fluid description string
+    _gas_label = " + ".join((gas_flows_kgh or {}).keys())
+    if _IS_VLE:
+        _vle_fl_name = props.get("vle_fluid") or (liquid_type or "—")
+        _fluid_desc  = f"{_vle_fl_name}  (saturated VLE)"
+    elif _GAS_ONLY:
+        _fluid_desc = _gas_label or "—"
+    elif _LIQ_ONLY:
+        _liq_display = liquid_type or "—"
+        if liquid_type == "KOH solution" and custom_liquid:
+            _koh_c = custom_liquid.get("koh_conc_wt")
+            if _koh_c is not None:
+                _liq_display = f"KOH solution ({_koh_c:.0f} wt%)"
+        _fluid_desc = _liq_display
+    else:
+        _liq_display = liquid_type or "—"
+        if liquid_type == "KOH solution" and custom_liquid:
+            _koh_c = custom_liquid.get("koh_conc_wt")
+            if _koh_c is not None:
+                _liq_display = f"KOH solution ({_koh_c:.0f} wt%)"
+        _fluid_desc = f"{_gas_label} / {_liq_display}"
+
+    _phase_str = "Single-phase" if (_GAS_ONLY or _LIQ_ONLY) else "Two-phase"
+
+    # Section counter
+    _sec = [0]
+    def _h1(title):
+        _sec[0] += 1
+        doc.add_heading(f"{_sec[0]}. {title}", level=1)
+
+    def _body(text):
+        _p = doc.add_paragraph(text)
+        _p.paragraph_format.space_after = Pt(4)
+        if _p.runs:
+            _p.runs[0].font.size = Pt(9)
+        return _p
+
     # ── Title block ──────────────────────────────────────────────────────────
     h = doc.add_heading(f"Branch Line Hydraulic Calculation — {case_label}", level=0)
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     sub = doc.add_paragraph(
-        f"Gas–Liquid Piping  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
+        f"{_mode_str}  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
     )
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if sub.runs:
         sub.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
         sub.runs[0].font.size = Pt(10)
 
-    _gas_label = " + ".join(gas_flows_kgh.keys()) if gas_flows_kgh else liquid_type
-    _fluid_desc = (f"{_gas_label} / {liquid_type}"
-                   if gas_flows_kgh else f"{liquid_type}  (saturated VLE)")
     desc = doc.add_paragraph(
-        f"Two-phase pressure drop  ·  "
-        f"{_fluid_desc}  ·  Steady-state"
+        f"{_phase_str} pressure drop  ·  {_fluid_desc}  ·  Steady-state"
     )
     desc.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if desc.runs:
@@ -283,100 +346,163 @@ def generate_report(
     doc.add_paragraph()
 
     # ── 1. Purpose ───────────────────────────────────────────────────────────
-    doc.add_heading("1. Purpose", level=1)
-    _purpose = doc.add_paragraph(
-        f"This calculation determines the two-phase pressure drop along the {case_label} "
-        f"branch pipeline, which carries {_fluid_desc} from a "
-        f"process unit to a gas–liquid separator. "
-        f"The result — inlet pressure, outlet pressure, and total ΔP — is used to "
-        f"size the pipe and, in combination with the collecting header calculation, "
-        f"to establish the required equipment outlet pressure."
-    )
-    _purpose.paragraph_format.space_after = Pt(4)
-    if _purpose.runs:
-        _purpose.runs[0].font.size = Pt(9)
+    _h1("Purpose")
+    if _LIQ_ONLY:
+        _purpose_text = (
+            f"This calculation determines the single-phase liquid pressure drop along the "
+            f"{case_label} branch pipeline, which carries {_fluid_desc}. "
+            f"The Darcy-Weisbach equation with minor losses (Crane TP-410 equivalent-length "
+            f"method) is used. The result — inlet pressure, outlet pressure, and total ΔP — "
+            f"is used to size the pipe and set the required equipment outlet pressure."
+        )
+    elif _GAS_ONLY:
+        _purpose_text = (
+            f"This calculation determines the single-phase compressible gas pressure drop along "
+            f"the {case_label} branch pipeline, which carries {_fluid_desc}. "
+            f"The Darcy-Weisbach equation is applied with pressure marching — gas density is "
+            f"re-evaluated at each segment inlet to capture compressibility. "
+            f"Minor losses are accounted for using equivalent lengths (Crane TP-410). "
+            f"The result — inlet pressure, outlet pressure, and total ΔP — is used to "
+            f"size the pipe and set the required equipment outlet pressure."
+        )
+    elif _IS_VLE:
+        _purpose_text = (
+            f"This calculation determines the two-phase pressure drop along the {case_label} "
+            f"branch pipeline, which carries {_fluid_desc}. "
+            f"The inlet quality (vapour mass fraction) and total mass flow rate are specified; "
+            f"the fluid maintains thermodynamic equilibrium at each segment, with quality "
+            f"evolving isenthalpically as pressure falls. "
+            f"The result — inlet pressure, outlet pressure, total ΔP, and phase distribution — "
+            f"is used to size the pipe and assess the evolving two-phase character along the route."
+        )
+    else:
+        _purpose_text = (
+            f"This calculation determines the two-phase pressure drop along the {case_label} "
+            f"branch pipeline, which carries {_fluid_desc} from a "
+            f"process unit to a gas–liquid separator. "
+            f"The result — inlet pressure, outlet pressure, and total ΔP — is used to "
+            f"size the pipe and, in combination with the collecting header calculation, "
+            f"to establish the required equipment outlet pressure."
+        )
+    _body(_purpose_text)
     doc.add_paragraph()
 
     # ── 2. Method ────────────────────────────────────────────────────────────
-    doc.add_heading("2. Method", level=1)
-
-    _method_paras = [
-        (
-            "Six two-phase ΔP correlations are available: Beggs & Brill (1973, default), "
-            "Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm, and "
-            "Kim-Mudawar. The selected correlation is shown in the Segment Analysis table. "
-            "The pipeline is divided into user-defined segments with pressure marching — "
-            "gas density is re-evaluated at each segment inlet to capture compressibility. "
-            "Each segment's ΔP is decomposed into frictional, gravitational, and "
-            "accelerational components."
-        ),
-        (
-            "Void fraction uses either the homogeneous model "
-            "(α = (x/ρ_g) / (x/ρ_g + (1−x)/ρ_l)) or the Rouhani-1 slip-flow model. "
-            "Flow regime is classified automatically: Taitel-Dukler + Mandhane-Gregory-Aziz "
-            "for horizontal segments (|θ| ≤ 15°); Wallis/Taitel (1980) annular-onset "
-            "criterion with void-fraction thresholds for vertical segments (|θ| ≥ 75°). "
-            "Gas properties use the ideal-gas law and CoolProp viscosities; water vapour "
-            "is included via Dalton's Law for aqueous liquids."
-        ),
-        (
-            "Minor losses: equivalent-length method, Crane TP-410. "
-            "Erosion: API RP 14E, C = 100 continuous service. "
-            "Packages: fluids · CoolProp · python-docx."
-        ),
-    ]
+    _h1("Method")
+    if _GAS_ONLY or _LIQ_ONLY:
+        _method_paras = [
+            (
+                "Single-phase Darcy-Weisbach: ΔP_fric = f (L/D) ρ V² / 2. "
+                "Friction factor from Churchill (1977), covering laminar, transition, and "
+                "turbulent regimes without separate regime checks. "
+                "For compressible gas, density is re-evaluated at each segment inlet using the "
+                "ideal-gas law; gas viscosity is obtained from CoolProp. "
+                "Minor losses: equivalent-length method, Crane TP-410. "
+                "Erosion check: API RP 14E, C = 100 continuous service. "
+                "Packages: fluids · CoolProp · python-docx."
+            ),
+        ]
+    else:
+        _method_paras = [
+            (
+                "Six two-phase ΔP correlations are available: Beggs & Brill (1973, default), "
+                "Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm, and "
+                "Kim-Mudawar. The selected correlation is shown in the Segment Analysis table. "
+                "The pipeline is divided into user-defined segments with pressure marching — "
+                "gas density is re-evaluated at each segment inlet to capture compressibility. "
+                "Each segment's ΔP is decomposed into frictional, gravitational, and "
+                "accelerational components."
+            ),
+            (
+                "Void fraction uses either the homogeneous model "
+                "(α = (x/ρ_g) / (x/ρ_g + (1−x)/ρ_l)) or the Rouhani-1 slip-flow model. "
+                "Flow regime is classified automatically: Taitel-Dukler + Mandhane-Gregory-Aziz "
+                "for horizontal segments (|θ| ≤ 15°); Wallis/Taitel (1980) annular-onset "
+                "criterion with void-fraction thresholds for vertical segments (|θ| ≥ 75°). "
+                "Gas properties use the ideal-gas law and CoolProp viscosities; water vapour "
+                "is included via Dalton's Law for aqueous liquids."
+            ),
+            (
+                "Minor losses: equivalent-length method, Crane TP-410. "
+                "Erosion: API RP 14E, C = 100 continuous service. "
+                "Packages: fluids · CoolProp · python-docx."
+            ),
+        ]
+        if _IS_VLE:
+            _method_paras.append(
+                "VLE mode: thermodynamic equilibrium is maintained at each segment. "
+                "Inlet enthalpy is computed from the specified quality and inlet pressure "
+                "via CoolProp; at each subsequent segment the quality is re-derived from the "
+                "updated pressure by isenthalpic flashing (constant total enthalpy). "
+                "Phase properties (density, viscosity, surface tension) are evaluated with "
+                "CoolProp at the local saturation state. "
+                "Note: the current implementation assumes a single-component fluid; "
+                "mixtures require an explicit flash calculation not yet implemented."
+            )
     for _txt in _method_paras:
-        _p = doc.add_paragraph(_txt)
-        _p.paragraph_format.space_after = Pt(4)
-        if _p.runs:
-            _p.runs[0].font.size = Pt(9)
-
+        _body(_txt)
     doc.add_paragraph()
 
     # ── 3. Process Conditions ────────────────────────────────────────────────
-    doc.add_heading("3. Process Conditions", level=1)
+    _h1("Process Conditions")
     _T_display = (f"{T_C:.1f} °C" if T_C is not None
                   else f"{props.get('T_sat_C', props.get('T_C', 0.0)):.1f} °C  (T_sat)")
     _cond_rows = [
-        ("Case",               case_label),
-        ("Inlet Pressure",     f"{P_bara:.2f} bara"),
-        ("Temperature",        _T_display),
+        ("Case",           case_label),
+        ("Flow Mode",      _mode_str),
+        ("Inlet Pressure", f"{P_bara:.2f} bara"),
+        ("Temperature",    _T_display),
     ]
-    if gas_flows_kgh:
-        for _sp, _flow in gas_flows_kgh.items():
-            _cond_rows.append((f"{_sp} Mass Flow", f"{_flow:.3f} kg/h"))
+    if _IS_VLE:
+        _vle_x  = props.get("x_gas", 0.0)
+        _m_tot  = props.get("m_total_kgs", 0.0) * 3600.0
         _cond_rows += [
-            ("Liquid Type",        liquid_type),
+            ("Fluid (saturated VLE)", _vle_fl_name),
+            ("Total Mass Flow",       f"{_m_tot:.2f} kg/h"),
+            ("Inlet Quality x",       f"{_vle_x:.3f}"),
+            ("T_sat at P_inlet",      _T_display),
+        ]
+    elif _GAS_ONLY:
+        for _sp, _flow in (gas_flows_kgh or {}).items():
+            _cond_rows.append((f"{_sp} Mass Flow", f"{_flow:.3f} kg/h"))
+    elif _LIQ_ONLY:
+        _cond_rows += [
+            ("Liquid Type",        _fluid_desc),
             ("Liquid Volume Flow", f"{q_lye:.3f} m³/h"),
         ]
     else:
-        # VLE mode
-        _vle_fl = props.get("vle_fluid", liquid_type)
-        _vle_x  = props.get("x_gas", 0.0)
-        _m_tot  = props["m_total_kgs"] * 3600.0
+        # gas_liquid
+        for _sp, _flow in (gas_flows_kgh or {}).items():
+            _cond_rows.append((f"{_sp} Mass Flow", f"{_flow:.3f} kg/h"))
         _cond_rows += [
-            ("Fluid (VLE)",            _vle_fl),
-            ("Total Mass Flow",        f"{_m_tot:.2f} kg/h"),
-            ("Inlet Quality x",        f"{_vle_x:.3f}"),
-            ("Saturated T at P_inlet", _T_display),
+            ("Liquid Type",        _fluid_desc.split(" / ", 1)[-1] if " / " in _fluid_desc else _fluid_desc),
+            ("Liquid Volume Flow", f"{q_lye:.3f} m³/h"),
         ]
     _cond_rows.append(("Number of Segments", str(len(segments))))
     _kv_table(doc, _cond_rows)
     doc.add_paragraph()
 
     # ── 4. Phase Thermodynamics ──────────────────────────────────────────────
-    doc.add_heading("4. Phase Thermodynamics", level=1)
-    _thermo_rows = [
-        ("Gas Density ρ_g",               f"{props['rho_g']:.4f} kg/m³"),
-        ("Gas Mixture MW",                f"{props['MW_mix_gmol']:.3f} g/mol"),
-        ("Liquid Type",                   props.get("liquid_type", liquid_type)),
-        ("Liquid Density ρ_l",            f"{props['rho_l']:.2f} kg/m³"),
-        ("Liquid Dynamic Viscosity μ_l",  f"{props['mu_l']*1e3:.4f} mPa·s"),
-        ("Gas Dynamic Viscosity μ_g",     f"{props['mu_g']*1e6:.2f} µPa·s"),
-        ("Surface Tension σ",             f"{props['sigma']*1e3:.3f} mN/m"),
-        ("Mass Quality x",                f"{props['x_gas']*100:.4f} %"),
-        ("Void Fraction α (homogeneous)", f"{props['alpha']*100:.2f} %"),
-    ]
+    _h1("Phase Thermodynamics  (inlet)")
+    _thermo_rows = []
+    if not _LIQ_ONLY:
+        _thermo_rows += [
+            ("Gas / Vapour Density ρ_g",    f"{props.get('rho_g', 0.0):.4f} kg/m³"),
+            ("Gas Mixture MW",              f"{props.get('MW_mix_gmol', 0.0):.3f} g/mol"),
+            ("Gas Dynamic Viscosity μ_g",   f"{props.get('mu_g', 0.0)*1e6:.2f} µPa·s"),
+        ]
+    _thermo_rows.append(("Liquid Type", props.get("liquid_type", liquid_type or "—")))
+    if not _GAS_ONLY:
+        _thermo_rows += [
+            ("Liquid Density ρ_l",          f"{props.get('rho_l', 0.0):.2f} kg/m³"),
+            ("Liquid Dynamic Viscosity μ_l", f"{props.get('mu_l', 0.0)*1e3:.4f} mPa·s"),
+            ("Surface Tension σ",           f"{props.get('sigma', 0.0)*1e3:.3f} mN/m"),
+        ]
+    if _TWO_PHASE:
+        _thermo_rows += [
+            ("Mass Quality x",              f"{props.get('x_gas', 0.0)*100:.4f} %"),
+            ("Void Fraction α",             f"{props.get('alpha', 0.0)*100:.2f} %"),
+        ]
     if props.get("P_sat_H2O_pa", 0) > 0:
         _thermo_rows += [
             ("H₂O Saturation Pressure", f"{props['P_sat_H2O_pa']/1e5:.4f} bara"),
@@ -386,30 +512,36 @@ def generate_report(
     doc.add_paragraph()
 
     # ── 5. Segment Analysis ──────────────────────────────────────────────────
-    doc.add_heading("5. Segment Analysis", level=1)
-    _p5 = doc.add_paragraph(
-        "The segment table shows the hydraulic result for each individual pipe section, "
-        "marching from inlet to outlet. Three columns are of primary interest. "
-        "Regime shows the predicted two-phase flow pattern — Bubbly, Slug, Annular, or Mist — "
-        "which governs the dominant loss mechanism and drives vibration and pulsation loads. "
-        "Slug flow on near-horizontal lines produces cyclic pressure surges at bends and "
-        "supports; Annular and Mist flow indicate a gas-dominated, high-velocity service "
-        "associated with higher erosion risk; Bubbly flow is a liquid-dominated regime "
-        "with relatively low pulsation. A change in regime from one segment to the next "
-        "signals a shift in flow character that the designer should be aware of. "
-        "ΔP (kPa) shows how much of the total pressure budget is consumed by each segment — "
-        "any segment that contributes disproportionately is the first candidate for bore "
-        "enlargement or fitting reduction. "
-        "V_m/V_e is the ratio of mixture velocity to the API RP 14E erosional velocity "
-        "(C = 100 for continuous service); values above 1.0 flag an erosion concern "
-        "and warrant a material selection or increased wall-thickness review."
-    )
-    _p5.paragraph_format.space_after = Pt(4)
-    if _p5.runs:
-        _p5.runs[0].font.size = Pt(9)
+    _h1("Segment Analysis")
+    if _GAS_ONLY or _LIQ_ONLY:
+        _p5_text = (
+            "The segment table shows the hydraulic result for each individual pipe section, "
+            "marching from inlet to outlet. "
+            "ΔP (kPa) shows the pressure drop consumed by each segment — any segment that "
+            "contributes disproportionately is the first candidate for bore enlargement or "
+            "fitting reduction. "
+            "V_m/V_e is the ratio of flow velocity to the API RP 14E erosional velocity "
+            "(C = 100 for continuous service); values above 1.0 flag an erosion concern."
+        )
+    else:
+        _p5_text = (
+            "The segment table shows the hydraulic result for each individual pipe section, "
+            "marching from inlet to outlet. Three columns are of primary interest. "
+            "Regime shows the predicted two-phase flow pattern — Bubbly, Slug, Annular, or Mist — "
+            "which governs the dominant loss mechanism and drives vibration and pulsation loads. "
+            "Slug flow on near-horizontal lines produces cyclic pressure surges at bends and "
+            "supports; Annular and Mist flow indicate a gas-dominated, high-velocity service "
+            "associated with higher erosion risk. A change in regime from one segment to the next "
+            "signals a shift in flow character that the designer should be aware of. "
+            "ΔP (kPa) shows how much of the total pressure budget is consumed by each segment — "
+            "any segment that contributes disproportionately is the first candidate for bore "
+            "enlargement or fitting reduction. "
+            "V_m/V_e is the ratio of mixture velocity to the API RP 14E erosional velocity "
+            "(C = 100 for continuous service); values above 1.0 flag an erosion concern."
+        )
+    _body(_p5_text)
     doc.add_paragraph()
 
-    # Subset of columns that fits A4 portrait (6.47" available between margins)
     _COLS   = ["Seg", "Pipe", "ID (mm)", "Type", "L (m)", "L_eq (m)", "Fittings", "Regime",
                "V_m (m/s)", "V_m/V_e", "ΔP (kPa)", "P_out (bara)"]
     _WIDTHS = [0.25,  0.50,   0.42,     0.80,   0.38,   0.42,      0.70,      0.85,
@@ -421,26 +553,64 @@ def generate_report(
         _style_header(tbl3.rows[0], font_size=8)
         for j, col in enumerate(_COLS):
             tbl3.rows[0].cells[j].text = col
-
         for i, rec in enumerate(grid_records, start=1):
             row = tbl3.rows[i]
             if i % 2 == 0:
                 for cell in row.cells:
                     _shd(cell, _ALT_BG)
             for j, col in enumerate(_COLS):
-                # Map report column name back to grid_records key
-                key = col.replace("ΔP", "ΔP")  # passthrough unicode
                 cell = row.cells[j]
-                cell.text = str(rec.get(col, rec.get(key, "")))
+                cell.text = str(rec.get(col, ""))
                 _cell_font(cell, size_pt=8)
-
         _set_col_widths(tbl3, _WIDTHS)
 
     doc.add_paragraph()
 
-    # ── 6. System Totals ─────────────────────────────────────────────────────
-    doc.add_heading("6. System Totals", level=1)
-    _p6 = doc.add_paragraph(
+    # ── 6. VLE Phase Distribution (VLE mode only) ────────────────────────────
+    if _IS_VLE and stream_records:
+        _h1("VLE Phase Distribution")
+        _body(
+            "The phase distribution table traces the vapour quality, phase flow rates, and "
+            "saturation temperature at each stream boundary as pressure falls along the pipeline. "
+            "Quality x increases as pressure drops and the fluid partially vaporises; the "
+            "vapour fraction α increases correspondingly. "
+            "A rapid rise in x or α in a short segment indicates a high-vaporisation zone "
+            "that may require attention to flow regime and erosion velocity."
+        )
+        doc.add_paragraph()
+        _vfl = props.get("vle_fluid") or ""
+        _vap_key = f"{_vfl} vapour  kg/h"
+        _liq_key = f"{_vfl} liquid  kg/h"
+        _VD_COLS = ["Stream", "P (bara)", "T_sat (°C)", "x (−)", "Vapour (kg/h)", "Liquid (kg/h)", "α (−)"]
+        _VD_W    = [1.10,     0.60,       0.65,         0.50,    0.75,            0.75,            0.52]
+        tbl_vd = doc.add_table(rows=len(stream_records) + 1, cols=len(_VD_COLS))
+        tbl_vd.style = "Table Grid"
+        _style_header(tbl_vd.rows[0], font_size=8)
+        for j, col in enumerate(_VD_COLS):
+            tbl_vd.rows[0].cells[j].text = col
+        for i, sr in enumerate(stream_records, start=1):
+            row = tbl_vd.rows[i]
+            if i % 2 == 0:
+                for cell in row.cells:
+                    _shd(cell, _ALT_BG)
+            _vals = [
+                sr.get("Stream", ""),
+                f"{sr.get('P (bara)', 0.0):.3f}",
+                f"{sr.get('T (°C)', 0.0):.2f}",
+                f"{sr.get('x (−)', 0.0):.4f}",
+                f"{sr.get(_vap_key, 0.0):.2f}",
+                f"{sr.get(_liq_key, 0.0):.2f}",
+                f"{sr.get('α (−)', 0.0):.4f}",
+            ]
+            for j, v in enumerate(_vals):
+                row.cells[j].text = v
+                _cell_font(row.cells[j], size_pt=8)
+        _set_col_widths(tbl_vd, _VD_W)
+        doc.add_paragraph()
+
+    # ── 7. System Totals ─────────────────────────────────────────────────────
+    _h1("System Totals")
+    _body(
         "The system totals consolidate all segment results into the key hydraulic deliverable. "
         "Total ΔP is the pressure budget consumed by the branch pipeline; it must be "
         "subtracted from the process unit outlet pressure to obtain the separator operating "
@@ -452,28 +622,62 @@ def generate_report(
         "confirms that all minor losses — valves, elbows, reducers, tees — have been "
         "captured in the friction model."
     )
-    _p6.paragraph_format.space_after = Pt(4)
-    if _p6.runs:
-        _p6.runs[0].font.size = Pt(9)
     doc.add_paragraph()
     _kv_table(doc, [
-        ("Case",                                       case_label),
-        ("Inlet Pressure",                             f"{P_bara:.4f} bara"),
-        ("Outlet Pressure",                            f"{outlet_pressure_bara:.4f} bara"),
-        ("Total Pressure Drop ΔP",                    f"{total_dp_kpa:.4f} kPa"),
-        ("Total Pressure Drop ΔP",                    f"{total_dp_kpa / 100:.6f} bar"),
-        ("Pipe Length (physical segments)",            f"{pipe_length_m:.2f} m"),
-        ("Effective Length (incl. fittings)",          f"{cumulative_distance:.2f} m"),
+        ("Case",                                 case_label),
+        ("Inlet Pressure",                       f"{P_bara:.4f} bara"),
+        ("Outlet Pressure",                      f"{outlet_pressure_bara:.4f} bara"),
+        ("Total Pressure Drop ΔP",               f"{total_dp_kpa:.4f} kPa"),
+        ("Total Pressure Drop ΔP",               f"{total_dp_kpa / 100:.6f} bar"),
+        ("Pipe Length (physical segments)",      f"{pipe_length_m:.2f} m"),
+        ("Effective Length (incl. fittings)",    f"{cumulative_distance:.2f} m"),
     ])
 
-    # ── 7. Visualisations ────────────────────────────────────────────────────
+    # ── 8. Method Sensitivity Analysis (if available) ────────────────────────
+    if sensitivity_results:
+        _ok = [r for r in sensitivity_results if r.get("ok")]
+        if _ok:
+            doc.add_page_break()
+            _h1("Method Sensitivity Analysis")
+            _body(
+                "All 12 method combinations (6 ΔP correlations × 2 void-fraction models) "
+                "were evaluated to quantify uncertainty in total ΔP due to correlation choice. "
+                "The spread between the minimum and maximum values defines the uncertainty band "
+                "for this service. Combinations that failed to converge are excluded."
+            )
+            doc.add_paragraph()
+            _CORR_S = {"Beggs-Brill": "BB", "Friedel": "Friedel",
+                       "Lockhart_Martinelli": "L-M", "Muller_Steinhagen_Heck": "MSH",
+                       "Chisholm": "Chisholm", "Kim_Mudawar": "Kim-M"}
+            _VOID_S = {"Homogeneous": "Homo", "Rouhani-1 (slip)": "Rouhani-1"}
+            _all_dp = [r["total_dp_kpa"] for r in _ok]
+            _kv_table(doc, [
+                ("Selected method ΔP (kPa)", f"{total_dp_kpa:.3f}"),
+                ("Minimum ΔP (kPa)",         f"{min(_all_dp):.3f}"),
+                ("Maximum ΔP (kPa)",         f"{max(_all_dp):.3f}"),
+                ("Spread (kPa)",             f"{max(_all_dp) - min(_all_dp):.3f}"),
+                ("Spread (%)",               f"{(max(_all_dp)-min(_all_dp))/max(total_dp_kpa,1e-9)*100:.1f} %"),
+            ])
+            doc.add_paragraph()
+            # Per-method detail table
+            _sm_rows = []
+            for r in sensitivity_results:
+                _c = _CORR_S.get(r.get("correlation",""), r.get("correlation",""))
+                _v = _VOID_S.get(r.get("voidage",""), r.get("voidage",""))
+                _dp_str = (f"{r['total_dp_kpa']:.3f}" if r.get("ok")
+                           else f"FAIL: {r.get('error','')}")
+                _sm_rows.append((f"{_c} / {_v}", _dp_str))
+            _kv_table(doc, _sm_rows, col_widths=(3.5, 2.97))
+            doc.add_paragraph()
+
+    # ── 9. Visualisations ────────────────────────────────────────────────────
     if fig_sch is not None or fig_prof is not None:
         doc.add_page_break()
-        doc.add_heading("7. Visualisations", level=1)
+        _h1("Visualisations")
 
         if fig_sch is not None:
             doc.add_heading("Pipeline Schematic", level=2)
-            _psch = doc.add_paragraph(
+            _body(
                 "The schematic plots each pipe segment as a coloured bar, where the colour "
                 "indicates the predicted flow regime. Reading left to right follows the "
                 "flow direction from process unit outlet to separator inlet. "
@@ -482,9 +686,6 @@ def generate_report(
                 "The segment label shows the pipe specification (DN/PN) and the V_m/V_e ratio; "
                 "segments where V_m/V_e > 1.0 are highlighted as potential erosion risk locations."
             )
-            _psch.paragraph_format.space_after = Pt(4)
-            if _psch.runs:
-                _psch.runs[0].font.size = Pt(9)
             img = _fig_to_png(fig_sch, width=900, height=520, scale=2)
             if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
@@ -494,20 +695,15 @@ def generate_report(
 
         if fig_prof is not None:
             doc.add_heading("Pressure Profile", level=2)
-            _pprof = doc.add_paragraph(
+            _body(
                 "The pressure profile shows absolute pressure (bara) as a function of "
                 "cumulative pipe distance from the process unit outlet. "
-                "The overall pressure drop from the left edge to the right edge of the chart "
-                "equals the total ΔP reported in Section 6 above. "
                 "Coloured markers or bands on the profile indicate the predicted flow regime "
                 "in each segment, linking the pressure trend to the local flow character. "
                 "A steep slope in any one segment identifies the location with the highest "
                 "resistance per unit length — typically a segment with many fittings, "
                 "a smaller bore, or a significant elevation change."
             )
-            _pprof.paragraph_format.space_after = Pt(4)
-            if _pprof.runs:
-                _pprof.runs[0].font.size = Pt(9)
             img = _fig_to_png(fig_prof, width=900, height=400, scale=2)
             if img:
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
@@ -516,15 +712,24 @@ def generate_report(
 
     # ── Disclaimer ───────────────────────────────────────────────────────────
     doc.add_paragraph()
-    _gas_str = " / ".join(gas_flows_kgh.keys())
-    note = doc.add_paragraph(
-        f"Engineering Note: The two-phase correlations used here were developed primarily "
-        f"for oil/gas systems. Their application to this service ({_gas_str} / "
-        f"{liquid_type}) carries an estimated uncertainty of ±20–30 %. Use the sensitivity "
-        f"analysis (Compare tab) to bracket the ΔP range across all available methods. "
-        f"Treat as a first-pass engineering estimate; validate against commissioning data "
-        f"before use in safety-critical design."
-    )
+    _gas_str = " / ".join((gas_flows_kgh or {}).keys())
+    if _TWO_PHASE:
+        _note_text = (
+            f"Engineering Note: The two-phase correlations used here were developed primarily "
+            f"for oil/gas systems. Their application to this service ({_fluid_desc}) carries "
+            f"an estimated uncertainty of ±20–30 %. Use the sensitivity analysis (Method "
+            f"Sensitivity section or Compare tab) to bracket the ΔP range across all available "
+            f"methods. Treat as a first-pass engineering estimate; validate against commissioning "
+            f"data before use in safety-critical design."
+        )
+    else:
+        _note_text = (
+            f"Engineering Note: Single-phase Darcy-Weisbach calculations for this service "
+            f"({_fluid_desc}) are well-established, with typical accuracy of ±10–15 % "
+            f"depending on surface roughness assumptions and minor-loss data. "
+            f"Treat as a first-pass engineering estimate; validate against commissioning data."
+        )
+    note = doc.add_paragraph(_note_text)
     if note.runs:
         note.runs[0].font.size      = Pt(8)
         note.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
@@ -609,7 +814,7 @@ def generate_comparison_report(
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     sub = doc.add_paragraph(
-        f"Gas–Liquid Piping  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
+        f"Hydraulic Comparison  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
     )
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     if sub.runs:
@@ -621,8 +826,8 @@ def generate_comparison_report(
     # ── 1. Purpose ───────────────────────────────────────────────────────────
     doc.add_heading("1. Purpose", level=1)
     _p = doc.add_paragraph(
-        f"This report compares the two-phase pressure drop along two branch pipelines: "
-        f"{label_a} and {label_b}. Both carry gas–liquid flow from an upstream process unit "
+        f"This report compares the pressure drop along two branch pipelines: "
+        f"{label_a} and {label_b}. Both carry flow from an upstream process unit "
         f"to a separator. The comparison supports pipe sizing — selecting the smallest "
         f"bore that keeps ΔP within budget and velocity below the erosion threshold — "
         f"and identifies which line governs the required equipment outlet pressure. "
@@ -660,10 +865,10 @@ def generate_comparison_report(
     # ── 2. Process Conditions ────────────────────────────────────────────────
     doc.add_heading("2. Process Conditions", level=1)
 
-    # Collect all unique species across both cases
+    # Collect all unique gas species across both cases (safe for VLE/liquid-only)
     _all_species = list(dict.fromkeys(
-        list(results_a["gas_flows_kgh"].keys()) +
-        list(results_b["gas_flows_kgh"].keys())
+        list((results_a.get("gas_flows_kgh") or {}).keys()) +
+        list((results_b.get("gas_flows_kgh") or {}).keys())
     ))
     def _tc_str(res):
         tc = res.get("T_C")
@@ -672,7 +877,24 @@ def generate_comparison_report(
         tsat = res.get("props", {}).get("T_sat_C", res.get("props", {}).get("T_C", 0.0))
         return f"{tsat:.1f}  (T_sat)"
 
+    def _fluid_label(res):
+        fm = res.get("flow_mode", "gas_liquid")
+        if fm == "vle":
+            fl = res.get("props", {}).get("vle_fluid") or res.get("vle_fluid") or "—"
+            x  = res.get("props", {}).get("x_gas", 0.0)
+            return f"{fl} (VLE, x={x:.3f})"
+        liq = res.get("liquid_type") or "—"
+        gas_keys = list((res.get("gas_flows_kgh") or {}).keys())
+        if fm == "liquid_only" or not gas_keys:
+            return liq
+        if fm == "gas_only":
+            return " + ".join(gas_keys)
+        return f"{' + '.join(gas_keys)} / {liq}"
+
     _cond_rows = [
+        ("Flow mode",
+         (results_a.get("flow_mode") or "gas_liquid").replace("_", " ").title(),
+         (results_b.get("flow_mode") or "gas_liquid").replace("_", " ").title()),
         ("Inlet Pressure (bara)",
          f"{results_a['P_bara']:.2f}",
          f"{results_b['P_bara']:.2f}"),
@@ -683,16 +905,20 @@ def generate_comparison_report(
     for _sp in _all_species:
         _cond_rows.append((
             f"{_sp} mass flow (kg/h)",
-            f"{results_a['gas_flows_kgh'].get(_sp, 0.0):.3f}",
-            f"{results_b['gas_flows_kgh'].get(_sp, 0.0):.3f}",
+            f"{(results_a.get('gas_flows_kgh') or {}).get(_sp, 0.0):.3f}",
+            f"{(results_b.get('gas_flows_kgh') or {}).get(_sp, 0.0):.3f}",
         ))
+    # VLE total mass flow
+    for _res, _col in [(results_a, 1), (results_b, 2)]:
+        if _res.get("flow_mode") == "vle":
+            pass  # handled in fluid label row below
     _cond_rows += [
-        ("Fluid / Liquid type",
-         results_a["liquid_type"],
-         results_b["liquid_type"]),
+        ("Fluid / service",
+         _fluid_label(results_a),
+         _fluid_label(results_b)),
         ("Liquid volume flow (m³/h)",
-         f"{results_a['q_lye']:.3f}",
-         f"{results_b['q_lye']:.3f}"),
+         f"{results_a.get('q_lye', 0.0):.3f}",
+         f"{results_b.get('q_lye', 0.0):.3f}"),
     ]
     _kv3_table(doc, _cond_rows, label_a=label_a, label_b=label_b)
     doc.add_paragraph()
@@ -1074,16 +1300,15 @@ def generate_comparison_report(
 
     # ── Engineering note ──────────────────────────────────────────────────────
     doc.add_paragraph()
-    _sp_a = " / ".join(results_a["gas_flows_kgh"].keys())
-    _sp_b = " / ".join(results_b["gas_flows_kgh"].keys())
+    _sp_a = " / ".join((results_a.get("gas_flows_kgh") or {}).keys()) or (results_a.get("liquid_type") or "—")
+    _sp_b = " / ".join((results_b.get("gas_flows_kgh") or {}).keys()) or (results_b.get("liquid_type") or "—")
     _sp_str = _sp_a if _sp_a == _sp_b else f"{_sp_a}  |  {_sp_b}"
     note = doc.add_paragraph(
-        f"Engineering Note: The two-phase correlations used here were developed primarily "
-        f"for oil/gas systems. Their application to this service ({_sp_str}) carries "
-        f"an estimated uncertainty of ±20–30 %. Use the sensitivity analysis (if present) "
-        f"to bracket the ΔP range across all available methods. Treat as a first-pass "
-        f"engineering estimate; validate against commissioning data before use in "
-        f"safety-critical design."
+        f"Engineering Note: The correlations used here carry an estimated uncertainty of "
+        f"±20–30 % for two-phase flow and ±10–15 % for single-phase flow. "
+        f"Their application to this service ({_sp_str}) should be validated against "
+        f"commissioning data before use in safety-critical design. "
+        f"Use the sensitivity analysis (if present) to bracket the ΔP range."
     )
     if note.runs:
         note.runs[0].font.size      = Pt(8)
@@ -1318,8 +1543,10 @@ def generate_combined_report(
     # 4. PROCESS CONDITIONS
     # ════════════════════════════════════════════════════════════════════════
     _h1("Process Conditions")
-    _all_sp = list(dict.fromkeys(sp for c in cases for sp in c["gas_flows_kgh"]))
+    _all_sp = list(dict.fromkeys(sp for c in cases for sp in (c.get("gas_flows_kgh") or {})))
     _cond = [
+        ("Flow mode",)               + tuple(
+            (c.get("flow_mode") or "gas_liquid").replace("_", " ").title() for c in cases),
         ("Inlet pressure (bara)",)   + tuple(f"{c['P_bara']:.2f}"  for c in cases),
         ("Temperature (°C)",)        + tuple(
             f"{c['T_C']:.1f}" if c.get("T_C") is not None
@@ -1329,10 +1556,12 @@ def generate_combined_report(
     for _sp in _all_sp:
         _cond.append(
             (f"{_sp} mass flow (kg/h)",) +
-            tuple(f"{c['gas_flows_kgh'].get(_sp, 0.0):.3f}" for c in cases))
+            tuple(f"{(c.get('gas_flows_kgh') or {}).get(_sp, 0.0):.3f}" for c in cases))
     _cond += [
-        ("Liquid type",)             + tuple(c["liquid_type"]              for c in cases),
-        ("Liquid vol. flow (m³/h)",) + tuple(f"{c['q_lye']:.3f}"          for c in cases),
+        ("Fluid / Liquid type",)     + tuple(
+            c.get("liquid_type") or c.get("props", {}).get("vle_fluid") or "—"
+            for c in cases),
+        ("Liquid vol. flow (m³/h)",) + tuple(f"{c.get('q_lye', 0.0):.3f}" for c in cases),
         ("ΔP correlation",)          + tuple(c.get("correlation", "—")     for c in cases),
         ("Void fraction model",)     + tuple(c.get("voidage_method", "—")  for c in cases),
         ("Segments / taps",)         + tuple(
@@ -1650,15 +1879,15 @@ def generate_combined_report(
         doc.add_paragraph()
 
     # ── Engineering note (end of main body) ──────────────────────────────────
-    _all_gas = sorted({sp for c in cases for sp in c["gas_flows_kgh"]})
-    _all_liq = sorted({c["liquid_type"] for c in cases})
+    _all_gas = sorted({sp for c in cases for sp in (c.get("gas_flows_kgh") or {})})
+    _all_liq = sorted({c.get("liquid_type") or c.get("props",{}).get("vle_fluid") or "—" for c in cases})
+    _srv = " / ".join(_all_gas + _all_liq) if _all_gas else " / ".join(_all_liq)
     note = doc.add_paragraph(
-        f"Engineering Note: The two-phase correlations used here were developed primarily "
-        f"for oil/gas systems. Their application to this service "
-        f"({' / '.join(_all_gas)} / {' / '.join(_all_liq)}) carries an estimated "
-        f"uncertainty of ±20–30 %. Use the sensitivity analysis (if present) to bracket "
-        f"the ΔP range. Treat as a first-pass estimate; validate against commissioning "
-        f"data before use in safety-critical design."
+        f"Engineering Note: The correlations used here carry an estimated uncertainty of "
+        f"±20–30 % for two-phase flow and ±10–15 % for single-phase flow. "
+        f"Their application to this service ({_srv}) should be validated against "
+        f"commissioning data before use in safety-critical design. "
+        f"Use the sensitivity analysis (if present) to bracket the ΔP range."
     )
     if note.runs:
         note.runs[0].font.size      = Pt(8)

@@ -175,51 +175,71 @@ with st.sidebar:
         velocity analysis for single-phase and two-phase flows.
 
         **Flow modes**
-        - **Single-phase liquid** — incompressible Darcy-Weisbach with CoolProp
-          physical properties (ρ, μ, σ).
+        - **Single-phase liquid** — incompressible Darcy-Weisbach; CoolProp physical
+          properties (ρ, μ, σ). KOH solution available as a built-in empirical model
+          (concentration 20–40 wt%, no CoolProp required).
         - **Single-phase gas** — isothermal compressible Darcy-Weisbach; ideal-gas
-          density is recalculated at each segment inlet from the marched pressure.
-          Choking / Fanno-flow is not modelled.
+          density re-evaluated at each segment from the marched pressure.
+          Choking / Fanno-flow not modelled.
         - **Gas + liquid (two-phase)** — six industry correlations (Beggs-Brill,
           Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm,
-          Kim-Mudawar) × two void-fraction models, with full pressure marching.
-        - **Saturated / VLE** — single-component pure fluid at saturation; CoolProp
-          derives all phase properties from the saturation curve at each segment.
+          Kim-Mudawar) × two void-fraction models (Homogeneous, Rouhani-1), with
+          full pressure marching and ΔP decomposed into frictional, gravitational,
+          and accelerational components.
+        - **Saturated / VLE** — single-component pure fluid on its own saturation
+          curve. Inlet quality and mass flow are specified; quality evolves
+          isenthalpically (constant total enthalpy) as pressure falls. CoolProp
+          provides all phase properties at each segment. Phase distribution is
+          reported at each stream boundary.
 
         **Workflow:** tabs **A / B** for individual lines, **Header A / B** for
         collecting manifolds, **Compare** for side-by-side overlay and method
         uncertainty sweep (12 correlation × void-fraction combinations).
+        Per-case method sensitivity is shown in each case tab.
         Export Word or Excel from any case tab.
 
-        **Pipe library** — DN20–DN250, PN20/25/40, 5 materials, optional fluoropolymer
-        liner (PTFE, FEP, PFA, PVDF). 17 fitting types (Crane TP-410).
+        **Pipe library** — DN20–DN250, PN20/25/40, 5 materials, optional
+        fluoropolymer liner (PTFE, FEP, PFA, PVDF). 17 fitting types (Crane TP-410).
+        Inline components: valves (Kv or ΔP mode), heat exchangers, and custom orifices.
 
         **Accuracy** — two-phase correlations: ±20–30 % typical. Single-phase
-        Darcy-Weisbach: ±5 % for turbulent flow. Validate against commissioning data
-        before design decisions.
+        Darcy-Weisbach: ±5–10 % for turbulent flow with well-characterised roughness.
+        VLE saturation properties from CoolProp: ±1–5 %. Validate all results against
+        commissioning data before safety-critical design decisions.
         """)
     with st.expander("Model details", expanded=False):
         st.markdown("""
         **Assumptions**
-        1. Ideal-gas law for gas density (ρ = PM/RT); CoolProp viscosity
-        2. Liquid treated as incompressible at the inlet T and P
-        3. Bore = f(DN, PN) only — ANSI B36.10/19, material-independent
-        4. Lined segments: effective ID = metal bore − 2 × liner thickness
-        5. Pressure marching: all properties re-evaluated at each segment inlet
-        6. Steady-state only — no transient, surge, or waterhammer effects
-        7. Two-phase void fraction: homogeneous α = (x/ρg)/(x/ρg+(1−x)/ρl), or Rouhani-1 slip model
-        8. Single-phase gas: isothermal compressible only — no Fanno-flow choking check
+        1. Gas density: ideal-gas law (ρ = PM/RT); viscosity from CoolProp
+        2. Liquid: incompressible at local T and P; properties from CoolProp
+        3. KOH solution: empirical fits — ρ (ICT/Perry's), μ (Vogel equation),
+           σ (water baseline + KOH correction); valid 10–90 °C, 0–40 wt%
+        4. VLE mode: isenthalpic flash — inlet total enthalpy fixed at (P_in, x_in);
+           quality re-derived at each segment from CoolProp saturation tables
+        5. Bore = f(DN, PN) only — ANSI B36.10/19, material-independent wall thickness
+        6. Lined pipe: effective ID = metal bore − 2 × liner thickness
+        7. Pressure marching: all properties re-evaluated at each segment inlet pressure
+        8. Steady-state only — no transient, surge, or waterhammer
+        9. Two-phase void fraction: homogeneous α = (x/ρg) / (x/ρg + (1−x)/ρl),
+           or Rouhani-1 drift-flux model
+        10. Single-phase gas: isothermal compressible — no Fanno-flow or choking check
 
-        **Flow regimes (two-phase only)**
-        Horizontal: Stratified / Intermittent / Annular-Dispersed (Taitel-Dukler 1976, Mandhane 1974)
-        Vertical up: Bubble / Slug / Churn / Annular (Wallis criterion + void-fraction thresholds)
-        Vertical down: Falling Film / Annular
+        **Flow regime classification (two-phase)**
+        - Horizontal (|θ| ≤ 15°): Taitel-Dukler (1976) + Mandhane-Gregory-Aziz (1974)
+          → Stratified / Intermittent (Slug) / Annular-Dispersed / Bubbly
+        - Vertical upflow (|θ| ≥ 75°): Wallis annular-onset criterion + void-fraction
+          thresholds → Bubbly / Slug / Churn / Annular
+        - Vertical downflow: Falling Film / Annular
 
-        **Liquid species** — CoolProp backed (IAPWS-IF97 for Water; DIPPR / REFPROP for
-        organics and refrigerants). Mixture: ρ and σ mass-weighted, μ log-mean.
+        **Liquid species**
+        - CoolProp: Water (IAPWS-IF97), organics, refrigerants (DIPPR / REFPROP)
+        - Mixtures: ρ and σ mass-weighted, μ log-mean
+        - KOH solution: built-in empirical model, concentration 20–40 wt%
 
-        **References** — Beggs & Brill (1973) SPE-4007-PA · CoolProp · fluids library ·
-        Crane TP-410 (2013) · API RP 14E (2007)
+        **References** — Beggs & Brill (1973) SPE-4007-PA · Friedel (1979) ·
+        Lockhart & Martinelli (1949) · Müller-Steinhagen & Heck (1986) ·
+        Chisholm (1973) · Kim & Mudawar (2012) · CoolProp (Bell et al. 2014) ·
+        fluids library · Crane TP-410 (2013) · API RP 14E (2007)
         """)
     with st.expander("Validation", expanded=False):
         st.markdown("Run a built-in reference case and compare the calculated ΔP against the expected value.")
@@ -678,7 +698,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 _lm3.metric("σ", f"{_koh_sig*1e3:.2f} mN/m")
                 _cliq = {"rho_kgm3": _koh_rho,
                          "mu_mpas":  _koh_mu * 1e3,
-                         "sigma_mnm": _koh_sig * 1e3}
+                         "sigma_mnm": _koh_sig * 1e3,
+                         "koh_conc_wt": _koh_conc}
                 _q    = _lflows["KOH solution"] / _koh_rho if _koh_rho > 0 else 0.0
                 _liq_type = "Custom"
 
@@ -2224,7 +2245,12 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 outlet_pressure_bara=outlet_pressure_bara,
                 pipe_length_m=pipe_length_m,
                 cumulative_distance=cumulative_distance,
-                case_label=st.session_state.get(f"label_{cid}", f"Case {cid.upper()}"))
+                case_label=st.session_state.get(f"label_{cid}", f"Case {cid.upper()}"),
+                flow_mode=flow_mode,
+                custom_liquid=_eff_custom_liq,
+                stream_records=stream_records if stream_records else None,
+                sensitivity_results=_sens_data if not _is_single_phase else None,
+            )
         _wg1, _wg2 = st.columns(2)
         with _wg1:
             if st.button("Generate (tables only)", type="primary",

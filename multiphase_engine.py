@@ -558,18 +558,6 @@ def _coolprop_liquid_by_id(fluid_id, T_K, P_pa, sigma_fallback=0.020):
     return rho, mu, sigma
 
 
-def _coolprop_liquid_properties(liquid_type, T_C, P_bara):
-    """Density (kg/m³), dynamic viscosity (Pa·s), surface tension (N/m) via CoolProp.
-    Kept for back-compat; now delegates to _coolprop_liquid_by_id."""
-    fluid_id = LIQUID_COOLPROP_ID.get(liquid_type, liquid_type)
-    sigma_fb = LIQUID_SIGMA_FALLBACK.get(liquid_type, 0.020)
-    return _coolprop_liquid_by_id(fluid_id, T_C + 273.15, P_bara * 1e5, sigma_fb)
-
-
-def _water_properties(T_C, P_bara):
-    """Kept for back-compatibility; delegates to the generic helper."""
-    return _coolprop_liquid_properties("Water", T_C, P_bara)
-
 
 def _species_gas_props(sp, T_K, P_pa, custom_gas=None):
     """Return (MW_kg_mol, coolprop_id) for *sp* in the gas phase.
