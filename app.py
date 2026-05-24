@@ -1724,40 +1724,40 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             # ── Build figure ──────────────────────────────────────────────────
             fig_regime = go.Figure()
 
-            # Background heatmap (computed regime zones)
+            # Background heatmap — axes are linear with log10(velocity) values
+            # (go.Heatmap doesn't render reliably on log-scale axes, so we keep
+            # the axis type="linear" and pass log10 of the grid coordinates.)
+            _log_vsl = np.log10(_vsl_arr)
+            _log_vsg = np.log10(_vsg_arr)
             fig_regime.add_trace(go.Heatmap(
-                x=_vsl_arr, y=_vsg_arr, z=_z,
+                x=list(_log_vsl), y=list(_log_vsg), z=_z,
                 text=_full_grid,
                 colorscale=_cs,
                 zmin=0, zmax=_n_reg,
                 showscale=False,
                 opacity=0.30,
                 hovertemplate=(
-                    "V_sl = %{x:.4f} m/s<br>"
-                    "V_sg = %{y:.4f} m/s<br>"
                     "Regime: %{text}<extra></extra>"
                 ),
             ))
 
             # Zone labels at each regime's log-space centroid
             _zone_acc = {}   # regime → [Σlog_vsl, Σlog_vsg, count]
-            _log_vsl = np.log10(_vsl_arr)
-            _log_vsg = np.log10(_vsg_arr)
             for _gi, _row in enumerate(_td_grid):
                 for _gj, _reg in enumerate(_row):
                     if not _reg:
                         continue
                     if _reg not in _zone_acc:
                         _zone_acc[_reg] = [0.0, 0.0, 0]
-                    _zone_acc[_reg][0] += _log_vsl[_gj]
-                    _zone_acc[_reg][1] += _log_vsg[_gi]
+                    _zone_acc[_reg][0] += float(_log_vsl[_gj])
+                    _zone_acc[_reg][1] += float(_log_vsg[_gi])
                     _zone_acc[_reg][2] += 1
 
             for _zreg, (_svsl, _svsg, _cnt) in _zone_acc.items():
                 if _cnt == 0:
                     continue
                 fig_regime.add_annotation(
-                    x=10 ** (_svsl / _cnt), y=10 ** (_svsg / _cnt),
+                    x=_svsl / _cnt, y=_svsg / _cnt,   # already log10 values
                     xref="x", yref="y",
                     text=f"<b>{_zreg}</b>",
                     showarrow=False,
@@ -1766,40 +1766,71 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     borderpad=2,
                 )
 
-            # Operating point markers
-            _seen_reg_map = set()
+            # ── Operating points — cluster identical (V_sl, V_sg) positions ──────
+            # Segments with the same pipe DN have the same superficial velocities
+            # and would otherwise stack invisibly.  Group them into one marker.
+            _op_clusters: dict = {}
             for _r in _pipe_recs:
-                _vsg = max(_r["V_sg (m/s)"], 1e-4)
-                _vsl = max(_r["V_sl (m/s)"], 1e-4)
-                _reg = _r["Regime"]
+                _vsg_r = max(_r["V_sg (m/s)"], 1e-4)
+                _vsl_r = max(_r["V_sl (m/s)"], 1e-4)
+                # Cluster key: round log10 to 2 dp (≈4.5% tolerance)
+                _ck = (round(np.log10(_vsl_r), 2), round(np.log10(_vsg_r), 2))
+                _op_clusters.setdefault(_ck, []).append(_r)
+
+            _seen_reg_map = set()
+            for _cgroup in _op_clusters.values():
+                _vsl_c = float(np.mean([max(r["V_sl (m/s)"], 1e-4) for r in _cgroup]))
+                _vsg_c = float(np.mean([max(r["V_sg (m/s)"], 1e-4) for r in _cgroup]))
+                _reg_list = [r["Regime"] for r in _cgroup]
+                _reg = max(set(_reg_list), key=_reg_list.count)
                 _col = _regime_color(_reg, _REGIME_LINE_KW, "#64748B")
-                _sym = "circle" if _r.get("Type", "Horizontal") == "Horizontal" else "diamond"
+                _types = {r.get("Type", "Horizontal") for r in _cgroup}
+                _sym = ("circle"       if _types == {"Horizontal"} else
+                        "diamond"      if "Horizontal" not in _types else
+                        "diamond-wide")        # mixed: wide diamond
+                _n_c = len(_cgroup)
+                _lbl = ", ".join(r["Seg"] for r in _cgroup)
+                _fsz = max(6, 9 - (_n_c - 1) * 2)   # shrink font for big clusters
+                _msz = 16 + (_n_c - 1) * 4           # grow marker for big clusters
                 _show_leg = _reg not in _seen_reg_map; _seen_reg_map.add(_reg)
+                _hover_lines = "<br>".join(
+                    f"<b>{r['Seg']}</b> {r['Pipe']}  {r.get('Type','—')}"
+                    f"  |  {r['Regime']}"
+                    f"  |  ΔP {r['ΔP (kPa)']:.3f} kPa"
+                    for r in _cgroup
+                )
                 fig_regime.add_trace(go.Scatter(
-                    x=[_vsl], y=[_vsg], mode="markers+text",
-                    marker=dict(size=16, color=_col, symbol=_sym,
+                    x=[float(np.log10(_vsl_c))], y=[float(np.log10(_vsg_c))],
+                    mode="markers+text",
+                    marker=dict(size=_msz, color=_col, symbol=_sym,
                                 line=dict(color="white", width=1.5)),
-                    text=[_r["Seg"]], textposition="middle center",
-                    textfont=dict(size=9, color="white"),
+                    text=[_lbl], textposition="middle center",
+                    textfont=dict(size=_fsz, color="white"),
                     name=_reg, legendgroup=_reg, showlegend=_show_leg,
                     hovertemplate=(
-                        f"<b>{_r['Seg']}  {_r['Pipe']}</b><br>"
-                        f"Orientation: {_r.get('Type', '—')}<br>"
-                        f"Regime: {_reg}<br>"
-                        f"V_sl = {_vsl:.4f} m/s<br>"
-                        f"V_sg = {_vsg:.4f} m/s<br>"
-                        f"ΔP = {_r['ΔP (kPa)']:.3f} kPa"
+                        f"{_hover_lines}<br>"
+                        f"V_sl = {_vsl_c:.4f} m/s<br>"
+                        f"V_sg = {_vsg_c:.4f} m/s"
                         "<extra></extra>"
                     ),
                 ))
 
+            # Log tick helpers (axis is linear with log10 values)
+            _xtv = [-3, -2, -1, 0, 1]
+            _xtx = ["0.001", "0.01", "0.1", "1", "10"]
+            _ytv = [-3, -2, -1, 0, 1, 2]
+            _ytx = ["0.001", "0.01", "0.1", "1", "10", "100"]
             fig_regime.update_layout(
                 template="plotly_white", height=470,
                 margin=dict(l=70, r=20, t=40, b=70),
-                xaxis=dict(title="V_sl  superficial liquid velocity (m/s)", type="log",
-                           range=[-3, 1], gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-                yaxis=dict(title="V_sg  superficial gas velocity (m/s)", type="log",
-                           range=[-3, 2], gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+                xaxis=dict(title="V_sl  superficial liquid velocity (m/s)",
+                           type="linear", range=[-3, 1],
+                           tickvals=_xtv, ticktext=_xtx,
+                           gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+                yaxis=dict(title="V_sg  superficial gas velocity (m/s)",
+                           type="linear", range=[-3, 2],
+                           tickvals=_ytv, ticktext=_ytx,
+                           gridcolor="#F1F5F9", linecolor="#E2E8F0"),
                 legend=dict(title="Computed regime", bgcolor="rgba(255,255,255,0.9)",
                             bordercolor="#E2E8F0", borderwidth=1, font=dict(size=11)),
                 font=dict(size=12, color="#374151"),
@@ -3149,8 +3180,8 @@ if "stack_apply_a_pending" in st.session_state:
 if "stack_apply_b_pending" in st.session_state:
     st.session_state["b_P_bara"] = max(0.1, st.session_state.pop("stack_apply_b_pending"))
 
-_la = st.session_state["label_a"]
-_lb = st.session_state["label_b"]
+_la = st.session_state.get("label_a") or "A"
+_lb = st.session_state.get("label_b") or "B"
 _lc = f"Header {_la}"
 _ld = f"Header {_lb}"
 
@@ -3225,8 +3256,8 @@ _VOID_SHORT = {
 }
 
 with tab_cmp:
-    _la = st.session_state.get("label_a", "Case A")
-    _lb = st.session_state.get("label_b", "Case B")
+    _la = st.session_state.get("label_a") or "A"
+    _lb = st.session_state.get("label_b") or "B"
     st.subheader(f"{_la}  vs.  {_lb}")
 
     ra, rb = results_a, results_b
@@ -3762,8 +3793,8 @@ with tab_cmp:
 # GOAL SEEK TAB
 # ============================================================================
 with tab_gs:
-    _la = st.session_state.get("label_a", "Case A")
-    _lb = st.session_state.get("label_b", "Case B")
+    _la = st.session_state.get("label_a") or "A"
+    _lb = st.session_state.get("label_b") or "B"
     _lc = f"{_la} Header"
     _ld = f"{_lb} Header"
 
