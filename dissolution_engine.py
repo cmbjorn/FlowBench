@@ -276,6 +276,13 @@ def flash_dissolved_gas(
     pressure_only = _std_vol_per_L(dC_pressure, mw)
     temp_only     = _std_vol_per_L(dC_temp, mw)
 
+    # Actual gas volume fraction at outlet conditions (what the downstream pump sees)
+    T2_K   = T2_C + 273.15
+    P2_Pa  = P2_bar * 1e5
+    n_released_mol_per_m3 = max(dC_combined, 0.0) * 1000.0      # mol/m³_liquid
+    V_gas_actual_m3_per_m3 = n_released_mol_per_m3 * R_u * T2_K / P2_Pa
+    vol_pct_outlet = V_gas_actual_m3_per_m3 / (1.0 + V_gas_actual_m3_per_m3) * 100.0
+
     return {
         "gas":          gas,
         "T1_C":         T1_C,
@@ -316,4 +323,8 @@ def flash_dissolved_gas(
         "pressure_effect":  pressure_only,
         "temp_effect":      temp_only,
         "combined_effect":  combined,
+
+        # Actual gas volume fraction at outlet conditions (m³_gas / m³_total mixture)
+        "V_gas_actual_m3_per_m3": V_gas_actual_m3_per_m3,
+        "vol_pct_outlet":         vol_pct_outlet,
     }

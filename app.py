@@ -1287,9 +1287,53 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             })
             stream_records.append(_rec)
 
+        # ── Calculate button & segment-loop recompute guard ──────────────────
+        _loop_hash_src = {
+            "P": P_bara, "T": T_C,
+            "eff_gas": {_gk: float(_gv) for _gk, _gv in (_eff_gas_flows or {}).items()},
+            "eff_liq": _eff_liq_type, "eff_q": float(_eff_q_lye or 0),
+            "eff_cl": json.dumps(_eff_custom_liq, sort_keys=True) if _eff_custom_liq else None,
+            "eff_lf": {_gk: float(_gv) for _gk, _gv in (_eff_liquid_flows or {}).items()} if _eff_liquid_flows else None,
+            "corr": correlation, "void": voidage_method,
+            "is_vle": _is_vle,
+            "vle_f": vle_fluid_id if _is_vle else None,
+            "vle_x": float(vle_x) if vle_x is not None else None,
+            "vle_m": float(vle_m_kgs) if vle_m_kgs is not None else None,
+            "cgas": json.dumps(custom_gas, sort_keys=True) if custom_gas else None,
+            "ucp": use_coolprop,
+            "segs": [(s.get("kind","pipe"), s.get("dn",""), s.get("pn",""),
+                      s.get("material",""), float(s.get("length",0)),
+                      s.get("type","Horizontal"), bool(s.get("lined",False)),
+                      s.get("liner_material","FEP"), float(s.get("liner_thickness_mm",1)),
+                      str(sorted((s.get("fittings_list") or []))),
+                      s.get("valve_mode","kv"), float(s.get("dp_kpa",50)),
+                      float(s.get("Kv_m3h",10)), s.get("characteristic","linear"),
+                      float(s.get("opening_pct",100)), float(s.get("hx_dp_kpa",0)))
+                     for s in st.session_state[k("segments")]],
+        }
+        _loop_hash  = hashlib.md5(
+            json.dumps(_loop_hash_src, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        _lc         = st.session_state.get(k("loop_cache"), {})
+        _loop_stale = _lc.get("hash") != _loop_hash
+        _cb1, _cb2  = st.columns([4, 1])
+        _calc_btn   = _cb1.button(
+            "▶  Calculate", key=k("calc_btn"), type="primary", width='stretch',
+            help="Run the segment-by-segment pressure drop calculation.")
+        if not _lc:
+            _cb2.info("No results")
+        elif _loop_stale:
+            _cb2.warning("Stale")
+        else:
+            _cb2.success("Current")
+        _run_calc = _calc_btn or not _lc
+        # ─────────────────────────────────────────────────────────────────────
+
         _snap_stream("S0 — Inlet", props)
 
         for i, seg in enumerate(st.session_state[k("segments")]):
+            if not _run_calc:
+                break   # skip computation; cache loaded after loop
             _seg_kind = seg.get("kind", "pipe")
 
             # ── VALVE ──────────────────────────────────────────────────────────
@@ -1497,6 +1541,42 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             pressure_profile_x.append(cumulative_distance)
             pressure_profile_y.append(max(0.1, current_P/1e5))
             regime_bands.append(regime)
+
+        # ── Cache save / restore ─────────────────────────────────────────────
+        if _run_calc:
+            st.session_state[k("loop_cache")] = {
+                "hash":                _loop_hash,
+                "current_P":           current_P,
+                "current_T_C":         current_T_C,
+                "vle_x":               vle_x,
+                "grid_records":        grid_records,
+                "stream_records":      stream_records,
+                "valve_sizing":        valve_sizing,
+                "cumulative_distance": cumulative_distance,
+                "cumulative_positions": cumulative_positions,
+                "pressure_profile_x":  pressure_profile_x,
+                "pressure_profile_y":  pressure_profile_y,
+                "regime_bands":        regime_bands,
+                "total_dp_fric_kpa":   total_dp_fric_kpa,
+                "total_dp_grav_kpa":   total_dp_grav_kpa,
+                "total_dp_accel_kpa":  total_dp_accel_kpa,
+            }
+        elif _lc:
+            current_P            = _lc["current_P"]
+            current_T_C          = _lc["current_T_C"]
+            vle_x                = _lc["vle_x"]
+            grid_records         = _lc["grid_records"]
+            stream_records       = _lc["stream_records"]
+            valve_sizing         = _lc["valve_sizing"]
+            cumulative_distance  = _lc["cumulative_distance"]
+            cumulative_positions = _lc["cumulative_positions"]
+            pressure_profile_x   = _lc["pressure_profile_x"]
+            pressure_profile_y   = _lc["pressure_profile_y"]
+            regime_bands         = _lc["regime_bands"]
+            total_dp_fric_kpa    = _lc["total_dp_fric_kpa"]
+            total_dp_grav_kpa    = _lc["total_dp_grav_kpa"]
+            total_dp_accel_kpa   = _lc["total_dp_accel_kpa"]
+        # ─────────────────────────────────────────────────────────────────────
 
         # Erosion — only banner on actionable conditions; OK is shown inline in table
         _max_ratio = max((r["V_m/V_e"] for r in grid_records), default=0.0)
@@ -5870,12 +5950,6 @@ Anti-cavitation trims can operate at σ down to ~0.5 FL².
             else:
                 _dg_koh_wt = 0.0
 
-            _dg_y_gas = st.number_input(
-                "Gas mole fraction in vapour (y)", 0.01, 1.0, 1.0, 0.01,
-                help="1.0 = pure gas atmosphere. Use <1.0 for mixed gas (e.g. 0.5 for 50 vol% H₂ in N₂).",
-                key="dg_y_gas",
-            )
-
         with _dg_c2:
             st.markdown("**Upstream conditions (saturated)**")
             _dg_T1 = st.number_input("T₁ (°C)", -10.0, 200.0, 80.0, 1.0, key="dg_T1")
@@ -5896,14 +5970,15 @@ Anti-cavitation trims can operate at σ down to ~0.5 FL².
                 T2_C=_dg_T2,
                 P2_bar=_dg_P2,
                 wt_pct_koh=_dg_koh_wt,
-                y_gas=_dg_y_gas,
+                y_gas=1.0,
             )
 
             _dg_released = _dg_res["dC_combined_mol_L"] > 0
+            _dg_vol_pct  = _dg_res["vol_pct_outlet"]
 
             # ── KPIs ─────────────────────────────────────────────────────────
             st.markdown("**Flash result — combined (ΔP + ΔT)**")
-            _dg_ka, _dg_kb, _dg_kc, _dg_kd = st.columns(4)
+            _dg_ka, _dg_kb, _dg_kc, _dg_kd, _dg_ke = st.columns(5)
             _dg_ka.metric(
                 "Net Δ concentration",
                 f"{_dg_res['dC_combined_mol_L']*1e3:+.3f} mmol/L",
@@ -5921,6 +5996,18 @@ Anti-cavitation trims can operate at σ down to ~0.5 FL².
             _dg_kd.metric(
                 "Mass released",
                 f"{_dg_res['released_g_per_L']*1e3:.3f} mg/L" if _dg_released else "0",
+            )
+            _dg_pump_note = (
+                "⚠ Pump risk (>4%)" if _dg_vol_pct > 4.0
+                else ("△ Monitor (2–4%)" if _dg_vol_pct > 2.0 else "✓ OK (<2%)")
+            ) if _dg_released else "—"
+            _dg_ke.metric(
+                "Vol% gas at outlet",
+                f"{_dg_vol_pct:.2f} %" if _dg_released else "0 %",
+                delta=_dg_pump_note,
+                delta_color="inverse" if _dg_vol_pct > 4.0 else ("off" if _dg_vol_pct > 2.0 else "normal"),
+                help="Actual gas volume fraction in the liquid+gas mixture at T₂, P₂ (ideal gas law). "
+                     "Centrifugal pumps typically tolerate <2 vol%; above 4 vol% performance and stability degrade.",
             )
 
             if not _dg_released:
@@ -5958,8 +6045,8 @@ Anti-cavitation trims can operate at σ down to ~0.5 FL².
                 "State": ["Upstream (T₁, P₁)", "Downstream (T₂, P₂)"],
                 "T (°C)": [f"{_dg_T1:.1f}", f"{_dg_T2:.1f}"],
                 "P gas (bar)": [
-                    f"{_dg_P1 * _dg_y_gas:.3f}",
-                    f"{_dg_P2 * _dg_y_gas:.3f}",
+                    f"{_dg_P1:.3f}",
+                    f"{_dg_P2:.3f}",
                 ],
                 "K_H water (mol/L/bar)": [
                     f"{_dg_res['K_H1_water']:.4e}",
