@@ -1,4 +1,5 @@
 # app.py
+import math
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,6 +7,10 @@ import plotly.graph_objects as go
 import multiphase_engine as engine
 import validation_cases as val_cases
 import report_generator
+import fanno_engine as fanno
+import ro_engine as ro
+import psv_engine as psv
+import cv_engine as cv
 import hashlib
 import json
 from fluids.two_phase import (Taitel_Dukler_regime as _TD_regime,
@@ -3519,1080 +3524,2313 @@ _lb = st.session_state.get("label_b") or "B"
 _lc = f"Header {_la}"
 _ld = f"Header {_lb}"
 
-tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_gs = st.tabs(
-    [_la, _lb, _lc, _ld, "Compare", "Goal Seek"])
+_group = st.segmented_control(
+    "Workspace", ["Pipeline Cases", "Engineering Tools"],
+    default="Pipeline Cases", label_visibility="collapsed",
+    key="main_group",
+)
 
-_CORR_SHORT = {
-    "Beggs-Brill": "BB", "Friedel": "Friedel",
-    "Lockhart_Martinelli": "L-M", "Muller_Steinhagen_Heck": "MSH",
-    "Chisholm": "Chisholm", "Kim_Mudawar": "Kim-M",
-}
-_VOID_SHORT = {
-    "Homogeneous": "Homo",
-    "Rouhani-1 (slip)": "Rouhani-1",
-}
+if _group != "Engineering Tools":
+    tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_gs = st.tabs(
+        [_la, _lb, _lc, _ld, "Compare", "Goal Seek"])
 
-with tab_a:
-    results_a = run_case("a", accent="#2563EB")
-
-with tab_b:
-    results_b = run_case("b", accent="#D97706")
-
-with tab_c:
-    st.info(
-        f"**{_lc}**  "
-        f"A uniform pipe with n {_la} taps on each side of a central T-junction. "
-        f"Each tap feeds one copy of {_la}'s branch flow. "
-        "Worst-arm ΔP = farthest tap → T → separator.",
-        icon="ℹ️",
-    )
-    results_c = run_header_case("c", accent="#059669", results_a=results_a)
-
-with tab_d:
-    st.info(
-        f"**{_ld}**  "
-        f"A uniform pipe with n {_lb} taps on each side of a central T-junction. "
-        f"Each tap feeds one copy of {_lb}'s branch flow. "
-        "Worst-arm ΔP = farthest tap → T → separator.",
-        icon="ℹ️",
-    )
-    results_d = run_header_case("d", accent="#7C3AED", results_a=results_b)
-
-# ============================================================================
-# COMPARE TAB
-# ============================================================================
-
-def _sens_hash(ra, rb):
-    """Stable hash of all inputs that determine sensitivity results."""
-    _data = {
-        "a": {
-            "P": ra["P_bara"], "T": ra["T_C"],
-            "gas": {_k: float(_v) for _k, _v in ra["gas_flows_kgh"].items()},
-            "liq": ra["liquid_type"], "lye": ra["q_lye"],
-            "segs": [(s.get("type", s.get("kind","")), s.get("dn",""), s.get("pn",""), float(s.get("length",0.0)),
-                      tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
-                      bool(s.get("lined", False)), s.get("liner_material", "FEP"),
-                      float(s.get("liner_thickness_mm", 1.0)))
-                     for s in ra["segments"]],
-        },
-        "b": {
-            "P": rb["P_bara"], "T": rb["T_C"],
-            "gas": {_k: float(_v) for _k, _v in rb["gas_flows_kgh"].items()},
-            "liq": rb["liquid_type"], "lye": rb["q_lye"],
-            "segs": [(s.get("type", s.get("kind","")), s.get("dn",""), s.get("pn",""), float(s.get("length",0.0)),
-                      tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
-                      bool(s.get("lined", False)), s.get("liner_material", "FEP"),
-                      float(s.get("liner_thickness_mm", 1.0)))
-                     for s in rb["segments"]],
-        },
+    _CORR_SHORT = {
+        "Beggs-Brill": "BB", "Friedel": "Friedel",
+        "Lockhart_Martinelli": "L-M", "Muller_Steinhagen_Heck": "MSH",
+        "Chisholm": "Chisholm", "Kim_Mudawar": "Kim-M",
     }
-    return hashlib.md5(json.dumps(_data, sort_keys=True).encode()).hexdigest()
+    _VOID_SHORT = {
+        "Homogeneous": "Homo",
+        "Rouhani-1 (slip)": "Rouhani-1",
+    }
+
+    with tab_a:
+        results_a = run_case("a", accent="#2563EB")
+
+    with tab_b:
+        results_b = run_case("b", accent="#D97706")
+
+    with tab_c:
+        st.info(
+            f"**{_lc}**  "
+            f"A uniform pipe with n {_la} taps on each side of a central T-junction. "
+            f"Each tap feeds one copy of {_la}'s branch flow. "
+            "Worst-arm ΔP = farthest tap → T → separator.",
+            icon="ℹ️",
+        )
+        results_c = run_header_case("c", accent="#059669", results_a=results_a)
+
+    with tab_d:
+        st.info(
+            f"**{_ld}**  "
+            f"A uniform pipe with n {_lb} taps on each side of a central T-junction. "
+            f"Each tap feeds one copy of {_lb}'s branch flow. "
+            "Worst-arm ΔP = farthest tap → T → separator.",
+            icon="ℹ️",
+        )
+        results_d = run_header_case("d", accent="#7C3AED", results_a=results_b)
+
+    # ============================================================================
+    # COMPARE TAB
+    # ============================================================================
+
+    def _sens_hash(ra, rb):
+        """Stable hash of all inputs that determine sensitivity results."""
+        _data = {
+            "a": {
+                "P": ra["P_bara"], "T": ra["T_C"],
+                "gas": {_k: float(_v) for _k, _v in ra["gas_flows_kgh"].items()},
+                "liq": ra["liquid_type"], "lye": ra["q_lye"],
+                "segs": [(s.get("type", s.get("kind","")), s.get("dn",""), s.get("pn",""), float(s.get("length",0.0)),
+                          tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
+                          bool(s.get("lined", False)), s.get("liner_material", "FEP"),
+                          float(s.get("liner_thickness_mm", 1.0)))
+                         for s in ra["segments"]],
+            },
+            "b": {
+                "P": rb["P_bara"], "T": rb["T_C"],
+                "gas": {_k: float(_v) for _k, _v in rb["gas_flows_kgh"].items()},
+                "liq": rb["liquid_type"], "lye": rb["q_lye"],
+                "segs": [(s.get("type", s.get("kind","")), s.get("dn",""), s.get("pn",""), float(s.get("length",0.0)),
+                          tuple(sorted((f["type"],f["qty"]) for f in s.get("fittings_list",[]))),
+                          bool(s.get("lined", False)), s.get("liner_material", "FEP"),
+                          float(s.get("liner_thickness_mm", 1.0)))
+                         for s in rb["segments"]],
+            },
+        }
+        return hashlib.md5(json.dumps(_data, sort_keys=True).encode()).hexdigest()
 
 
-with tab_cmp:
-    _la = st.session_state.get("label_a") or "A"
-    _lb = st.session_state.get("label_b") or "B"
-    st.subheader(f"{_la}  vs.  {_lb}")
+    with tab_cmp:
+        _la = st.session_state.get("label_a") or "A"
+        _lb = st.session_state.get("label_b") or "B"
+        st.subheader(f"{_la}  vs.  {_lb}")
 
-    ra, rb = results_a, results_b
+        ra, rb = results_a, results_b
 
-    # ── Side-by-side headline metrics ─────────────────────────────────────────
-    with st.container(border=True):
-        _cl, _cm, _cr = st.columns([2, 2, 2])
+        # ── Side-by-side headline metrics ─────────────────────────────────────────
+        with st.container(border=True):
+            _cl, _cm, _cr = st.columns([2, 2, 2])
 
-        _cl.markdown("**Metric**")
-        _cm.markdown(f"**{_la}**")
-        _cr.markdown(f"**{_lb}**")
+            _cl.markdown("**Metric**")
+            _cm.markdown(f"**{_la}**")
+            _cr.markdown(f"**{_lb}**")
+            st.divider()
+
+            def _cmp_row(label, va, vb, fmt="{}", better="lower", unit=""):
+                """Render one comparison row with delta badge."""
+                _cl, _cm, _cr = st.columns([2, 2, 2])
+                try:
+                    _delta = vb - va
+                    _pct   = (_delta / abs(va) * 100) if abs(va) > 1e-9 else 0.0
+                    _sign  = "+" if _delta > 0 else ""
+                    _delta_str = f"{_sign}{fmt.format(_delta)} {unit}  ({_sign}{_pct:.1f}%)"
+                    if better == "lower":
+                        _color = "normal" if _delta > 1e-9 else ("inverse" if _delta < -1e-9 else "off")
+                    elif better == "higher":
+                        _color = "inverse" if _delta > 1e-9 else ("normal" if _delta < -1e-9 else "off")
+                    else:  # neutral — show delta magnitude without colour judgement
+                        _color = "off"
+                except Exception:
+                    _delta_str = "—"
+                    _color = "off"
+                _cl.markdown(label)
+                _cm.metric(_la, f"{fmt.format(va)} {unit}", label_visibility="collapsed")
+                _cr.metric(_lb, f"{fmt.format(vb)} {unit}", delta=_delta_str,
+                           delta_color=_color, label_visibility="collapsed")
+
+            _cmp_row("Inlet pressure",        ra["P_bara"],               rb["P_bara"],               fmt="{:.2f}", unit="bara", better="neutral")
+            _cmp_row("Outlet pressure",       ra["outlet_pressure_bara"], rb["outlet_pressure_bara"], fmt="{:.4f}", unit="bara", better="higher")
+            _cmp_row("Total ΔP",              ra["total_dp_kpa"],         rb["total_dp_kpa"],         fmt="{:.3f}", unit="kPa",  better="lower")
+            _cmp_row("  ↳ Frictional",        ra["total_dp_fric_kpa"],    rb["total_dp_fric_kpa"],    fmt="{:.3f}", unit="kPa",  better="lower")
+            _cmp_row("  ↳ Gravitational",     ra["total_dp_grav_kpa"],    rb["total_dp_grav_kpa"],    fmt="{:.3f}", unit="kPa",  better="neutral")
+            _cmp_row("Pipe length",           ra["pipe_length_m"],        rb["pipe_length_m"],        fmt="{:.1f}", unit="m",    better="lower")
+            _cmp_row("Effective length",      ra["cumulative_distance"],  rb["cumulative_distance"],  fmt="{:.1f}", unit="m",    better="lower")
+            _max_a = max((r["V_m/V_e"] for r in ra["grid_records"]), default=0.0)
+            _max_b = max((r["V_m/V_e"] for r in rb["grid_records"]), default=0.0)
+            _cmp_row("Worst erosion ratio V_m/V_e",  _max_a, _max_b,
+                     fmt="{:.3f}", unit="— (limit 1.0)", better="lower")
+
+        # ── Overlaid pressure profiles ─────────────────────────────────────────────
+        st.markdown("#### Pressure Profiles")
+        fig_cmp = go.Figure()
+        fig_cmp.add_trace(go.Scatter(
+            x=ra["pressure_profile_x"], y=ra["pressure_profile_y"],
+            mode="lines+markers", name=_la,
+            line=dict(color="#2563EB", width=2.5), marker=dict(size=7, color="#2563EB"),
+            hovertemplate=f"{_la}  |  Distance: %{{x:.2f}} m<br>Pressure: %{{y:.4f}} bara<extra></extra>"))
+        fig_cmp.add_trace(go.Scatter(
+            x=rb["pressure_profile_x"], y=rb["pressure_profile_y"],
+            mode="lines+markers", name=_lb,
+            line=dict(color="#D97706", width=2.5, dash="dash"), marker=dict(size=7, color="#D97706"),
+            hovertemplate=f"{_lb}  |  Distance: %{{x:.2f}} m<br>Pressure: %{{y:.4f}} bara<extra></extra>"))
+        fig_cmp.update_layout(
+            xaxis_title="Pipeline Distance (m)", yaxis_title="Pressure (bara)",
+            template="plotly_white", height=360, margin=dict(l=60,r=20,t=30,b=50),
+            hovermode="x unified", paper_bgcolor="white", plot_bgcolor="white",
+            xaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+            yaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+            legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0", borderwidth=1),
+            font=dict(size=12, color="#374151"))
+        st.plotly_chart(fig_cmp, use_container_width=True, key="fig_cmp")
+
+        # ── Per-segment ΔP comparison ──────────────────────────────────────────────
+        st.markdown("#### Pressure Drop by Segment")
+        _segs_a = [f"A-{r['Seg']} {r['Pipe']}" for r in ra["grid_records"]]
+        _segs_b = [f"B-{r['Seg']} {r['Pipe']}" for r in rb["grid_records"]]
+        _dp_a   = [r["ΔP (kPa)"] for r in ra["grid_records"]]
+        _dp_b   = [r["ΔP (kPa)"] for r in rb["grid_records"]]
+        fig_bar = go.Figure()
+        fig_bar.add_trace(go.Bar(name=_la, x=_segs_a, y=_dp_a,
+                                 marker_color="#2563EB", opacity=0.85))
+        fig_bar.add_trace(go.Bar(name=_lb, x=_segs_b, y=_dp_b,
+                                 marker_color="#D97706", opacity=0.85))
+        fig_bar.update_layout(
+            barmode="group", yaxis_title="ΔP (kPa)", xaxis_title="Segment",
+            template="plotly_white", height=320, margin=dict(l=60,r=20,t=20,b=60),
+            paper_bgcolor="white", plot_bgcolor="white",
+            xaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+            yaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+            legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0", borderwidth=1),
+            font=dict(size=12, color="#374151"))
+        st.plotly_chart(fig_bar, use_container_width=True, key="fig_bar")
+
+        # ── Method Sensitivity Analysis ────────────────────────────────────────────
+        st.markdown("#### Method Sensitivity Analysis")
+
+        _sh = _sens_hash(ra, rb)
+        if st.session_state.get("sens_hash") != _sh:
+            st.session_state.pop("sens_a", None)
+            st.session_state.pop("sens_b", None)
+            st.session_state.pop("sens_hash", None)
+
+        _sc1, _sc2 = st.columns([1, 3])
+        with _sc1:
+            _run_sens = st.button("Run Sensitivity Analysis", type="primary",
+                                  use_container_width=True, key="run_sens")
+        with _sc2:
+            if "sens_a" in st.session_state and "sens_b" in st.session_state:
+                st.success("Results shown below — click again to refresh after input changes.")
+            else:
+                st.caption(
+                    "Runs all 12 combinations (6 correlations × 2 void-fraction models). "
+                    f"Quantifies the full ΔP range for {_la} and {_lb} due to method uncertainty.")
+
+        if _run_sens:
+            with st.spinner("Running 24 calculations (12 per case)…"):
+                st.session_state["sens_a"] = engine.run_sensitivity(
+                    ra["P_bara"], ra.get("T_C"), ra["gas_flows_kgh"], ra["liquid_type"], ra["q_lye"],
+                    ra["segments"],
+                    custom_gas=ra.get("custom_gas"), custom_liquid=ra.get("custom_liquid"),
+                    vle_fluid=ra.get("vle_fluid"), vle_x_mass=ra.get("vle_x_mass"),
+                    vle_m_total_kgs=ra.get("vle_m_total_kgs"))
+                st.session_state["sens_b"] = engine.run_sensitivity(
+                    rb["P_bara"], rb.get("T_C"), rb["gas_flows_kgh"], rb["liquid_type"], rb["q_lye"],
+                    rb["segments"],
+                    custom_gas=rb.get("custom_gas"), custom_liquid=rb.get("custom_liquid"),
+                    vle_fluid=rb.get("vle_fluid"), vle_x_mass=rb.get("vle_x_mass"),
+                    vle_m_total_kgs=rb.get("vle_m_total_kgs"))
+                st.session_state["sens_hash"] = _sh
+            st.rerun()
+
+        fig_sens = None
+        if "sens_a" in st.session_state and "sens_b" in st.session_state:
+            _sa = st.session_state["sens_a"]
+            _sb = st.session_state["sens_b"]
+
+            _ylabels, _dp_a_vals, _dp_b_vals, _ok_a, _ok_b = [], [], [], [], []
+            for _r_a, _r_b in zip(_sa, _sb):
+                _c = _CORR_SHORT.get(_r_a["correlation"], _r_a["correlation"])
+                _v = _VOID_SHORT.get(_r_a["voidage"], _r_a["voidage"])
+                _ylabels.append(f"{_c} / {_v}")
+                _dp_a_vals.append(_r_a["total_dp_kpa"] if _r_a["ok"] else None)
+                _dp_b_vals.append(_r_b["total_dp_kpa"] if _r_b["ok"] else None)
+                _ok_a.append(_r_a["ok"])
+                _ok_b.append(_r_b["ok"])
+
+            _va = [v for v in _dp_a_vals if v is not None]
+            _vb = [v for v in _dp_b_vals if v is not None]
+
+            fig_sens = go.Figure()
+
+            # Shaded range bands
+            if len(_va) >= 2:
+                fig_sens.add_vrect(x0=min(_va), x1=max(_va),
+                                   fillcolor="rgba(37,99,235,0.07)", line_width=0,
+                                   annotation_text=f"{_la} range", annotation_position="top left",
+                                   annotation_font=dict(size=9, color="#2563EB"))
+            if len(_vb) >= 2:
+                fig_sens.add_vrect(x0=min(_vb), x1=max(_vb),
+                                   fillcolor="rgba(217,119,6,0.07)", line_width=0,
+                                   annotation_text=f"{_lb} range", annotation_position="bottom right",
+                                   annotation_font=dict(size=9, color="#D97706"))
+
+            # Connecting lines — one trace with None separators
+            _conn_x, _conn_y = [], []
+            for _ci in range(len(_ylabels)):
+                if _ok_a[_ci] and _ok_b[_ci]:
+                    _conn_x.extend([_dp_a_vals[_ci], _dp_b_vals[_ci], None])
+                    _conn_y.extend([_ylabels[_ci],   _ylabels[_ci],   None])
+            if _conn_x:
+                fig_sens.add_trace(go.Scatter(
+                    x=_conn_x, y=_conn_y, mode="lines",
+                    line=dict(color="#CBD5E1", width=1.2),
+                    showlegend=False, hoverinfo="skip"))
+
+            # Case B dots (amber diamonds, drawn first so A circles sit on top)
+            _xb_p = [_dp_b_vals[_ci] for _ci in range(len(_ylabels)) if _ok_b[_ci]]
+            _yb_p = [_ylabels[_ci]   for _ci in range(len(_ylabels)) if _ok_b[_ci]]
+            fig_sens.add_trace(go.Scatter(
+                x=_xb_p, y=_yb_p, mode="markers", name=_lb,
+                marker=dict(color="#D97706", size=11, symbol="diamond",
+                            line=dict(color="#92400E", width=1.5)),
+                hovertemplate=f"{_lb}  |  %{{y}}<br>Total ΔP: %{{x:.3f}} kPa<extra></extra>"))
+
+            # dots (blue circles)
+            _xa_p = [_dp_a_vals[_ci] for _ci in range(len(_ylabels)) if _ok_a[_ci]]
+            _ya_p = [_ylabels[_ci]   for _ci in range(len(_ylabels)) if _ok_a[_ci]]
+            fig_sens.add_trace(go.Scatter(
+                x=_xa_p, y=_ya_p, mode="markers", name=_la,
+                marker=dict(color="#2563EB", size=11, symbol="circle",
+                            line=dict(color="#1E40AF", width=1.5)),
+                hovertemplate=f"{_la}  |  %{{y}}<br>Total ΔP: %{{x:.3f}} kPa<extra></extra>"))
+
+            # Dashed reference lines for the currently-selected method in each case
+            _sel_lbl_a = (f"{_CORR_SHORT.get(ra['correlation'], ra['correlation'])} / "
+                          f"{_VOID_SHORT.get(ra['voidage_method'], ra['voidage_method'])}")
+            _sel_lbl_b = (f"{_CORR_SHORT.get(rb['correlation'], rb['correlation'])} / "
+                          f"{_VOID_SHORT.get(rb['voidage_method'], rb['voidage_method'])}")
+            _sel_a_dp = next(
+                (r["total_dp_kpa"] for r in _sa if r["ok"]
+                 and f"{_CORR_SHORT.get(r['correlation'], r['correlation'])} / "
+                     f"{_VOID_SHORT.get(r['voidage'], r['voidage'])}" == _sel_lbl_a), None)
+            _sel_b_dp = next(
+                (r["total_dp_kpa"] for r in _sb if r["ok"]
+                 and f"{_CORR_SHORT.get(r['correlation'], r['correlation'])} / "
+                     f"{_VOID_SHORT.get(r['voidage'], r['voidage'])}" == _sel_lbl_b), None)
+            if _sel_a_dp is not None:
+                fig_sens.add_vline(x=_sel_a_dp,
+                                   line=dict(color="#2563EB", width=1.5, dash="dash"),
+                                   annotation_text=f"{_la} selected: {_sel_a_dp:.2f} kPa",
+                                   annotation_position="top right",
+                                   annotation_font=dict(size=9, color="#2563EB"))
+            if _sel_b_dp is not None:
+                fig_sens.add_vline(x=_sel_b_dp,
+                                   line=dict(color="#D97706", width=1.5, dash="dot"),
+                                   annotation_text=f"{_lb} selected: {_sel_b_dp:.2f} kPa",
+                                   annotation_position="bottom right",
+                                   annotation_font=dict(size=9, color="#D97706"))
+
+            fig_sens.update_layout(
+                title=dict(text=f"Total ΔP — all 12 method combinations  (● {_la}  ◆ {_lb})",
+                           font=dict(size=12), x=0),
+                xaxis_title="Total ΔP (kPa)", yaxis_title=None,
+                template="plotly_white", height=460,
+                margin=dict(l=155, r=40, t=55, b=50),
+                hovermode="closest", paper_bgcolor="white", plot_bgcolor="white",
+                xaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+                yaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0",
+                           categoryorder="array",
+                           categoryarray=list(reversed(_ylabels))),
+                legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0",
+                            borderwidth=1, orientation="h", y=1.10, x=0),
+                font=dict(size=11, color="#374151"))
+            st.plotly_chart(fig_sens, use_container_width=True, key="fig_sens")
+
+            _n_failed = sum(1 for ok in _ok_a + _ok_b if not ok)
+            if _n_failed > 0:
+                st.caption(f"{_n_failed} combination(s) failed to converge and are excluded from the chart.")
+
+            # Summary table
+            if _va and _vb:
+                _a_min, _a_max = min(_va), max(_va)
+                _b_min, _b_max = min(_vb), max(_vb)
+                _overlap = _a_min <= _b_max and _b_min <= _a_max
+                st.dataframe(pd.DataFrame([
+                    {"": _la,
+                     "Min (kPa)":      f"{_a_min:.3f}",
+                     "Selected (kPa)": f"{ra['total_dp_kpa']:.3f}",
+                     "Max (kPa)":      f"{_a_max:.3f}",
+                     "Spread (kPa)":   f"{_a_max - _a_min:.3f}"},
+                    {"": _lb,
+                     "Min (kPa)":      f"{_b_min:.3f}",
+                     "Selected (kPa)": f"{rb['total_dp_kpa']:.3f}",
+                     "Max (kPa)":      f"{_b_max:.3f}",
+                     "Spread (kPa)":   f"{_b_max - _b_min:.3f}"},
+                ]), hide_index=True, use_container_width=True)
+                if _overlap:
+                    st.warning(
+                        f"Ranges **overlap** — the relative ordering of {_la} vs {_lb} depends on "
+                        "which correlation is chosen.")
+                else:
+                    st.success(
+                        "Ranges **do not overlap** — one case is unambiguously lower-ΔP "
+                        "across all methods.")
+
+            # ── Flow Regime Consistency ────────────────────────────────────────────
+            st.markdown("**Flow Regime Consistency across Methods**")
+            st.caption(
+                "Regime is independent of ΔP correlation — Vsg, Vsl, and angle are fixed. "
+                "Only the void fraction model (α) can shift vertical-segment thresholds "
+                "(bubble/slug/churn). Each column header shows the first correlation that "
+                "produced that regime; all other correlations with the same void model agree.")
+
+            def _regime_table(sens_results, segments_list, label):
+                """Build regime DataFrame for one case across all converged combinations."""
+                ok_results = [r for r in sens_results if r["ok"] and r["segment_regimes"]]
+                if not ok_results or not segments_list:
+                    return None
+
+                n_segs = len(segments_list)
+                # For each segment, collect the set of unique regimes across all combinations
+                rows = []
+                for i, seg in enumerate(segments_list):
+                    seg_id   = f"#{i+1}"
+                    orient   = seg.get("type", seg.get("kind", "—")).replace(
+                                   "Vertical Upflow", "V Up").replace(
+                                   "Vertical Downflow", "V Down").replace("Horizontal", "Horiz")
+                    dn_str   = f"{seg['dn']}/{seg['pn']}"
+                    # Group regimes by void fraction model (correlation doesn't change regime)
+                    by_void = {}
+                    for r in ok_results:
+                        v = _VOID_SHORT.get(r["voidage"], r["voidage"])
+                        regime_str = r["segment_regimes"][i] if i < len(r["segment_regimes"]) else "—"
+                        by_void.setdefault(v, set()).add(regime_str)
+                    # Build row: one column per void model, showing unique regimes found
+                    row = {"Seg": seg_id, "Pipe": dn_str, "Orient": orient}
+                    for v_short, regime_set in by_void.items():
+                        row[v_short] = " / ".join(sorted(regime_set)) if regime_set else "—"
+                    # Consensus across ALL combinations
+                    all_regimes = set()
+                    for r in ok_results:
+                        if i < len(r["segment_regimes"]):
+                            all_regimes.add(r["segment_regimes"][i])
+                    row["Unanimous"] = "✓" if len(all_regimes) == 1 else f"✗  ({len(all_regimes)} distinct)"
+                    rows.append(row)
+                return pd.DataFrame(rows)
+
+            _rt_a = _regime_table(_sa, ra["segments"], _la)
+            _rt_b = _regime_table(_sb, rb["segments"], _lb)
+
+            _rca, _rcb = st.columns(2)
+            with _rca:
+                st.markdown(f"**{_la}**")
+                if _rt_a is not None:
+                    st.dataframe(_rt_a, hide_index=True, use_container_width=True)
+                else:
+                    st.caption("No regime data available.")
+            with _rcb:
+                st.markdown(f"**{_lb}**")
+                if _rt_b is not None:
+                    st.dataframe(_rt_b, hide_index=True, use_container_width=True)
+                else:
+                    st.caption("No regime data available.")
+
+        # ── Reports ───────────────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("#### Reports")
+        _sens_avail = ("sens_a" in st.session_state and "sens_b" in st.session_state
+                       and fig_sens is not None)
+
+        def _build_sens_data():
+            if _sens_avail:
+                return {"sa": st.session_state["sens_a"],
+                        "sb": st.session_state["sens_b"],
+                        "fig": fig_sens}
+            return None
+
+        def _build_stack_dp_data():
+            _sh = st.session_state.get("stack_gsr_h2")
+            _so = st.session_state.get("stack_gsr_o2")
+            if _sh and _so:
+                return {
+                    "label_a": _la,
+                    "label_b": _lb,
+                    "gsr_h2":  _sh,
+                    "gsr_o2":  _so,
+                    "P_sep_h2": st.session_state.get("stack_sep_h2"),
+                    "P_sep_o2": st.session_state.get("stack_sep_o2"),
+                }
+            return None
+
+        def _build_dn_study_data():
+            _dn_p = st.session_state.get("dn_study_dn_primary")
+            _dn_a = st.session_state.get("dn_study_dn_alt")
+            _gh_a = st.session_state.get("dn_study_gsr_h2_alt")
+            _go_a = st.session_state.get("dn_study_gsr_o2_alt")
+            _gh_p = st.session_state.get("stack_gsr_h2")
+            _go_p = st.session_state.get("stack_gsr_o2")
+            if not all([_dn_p, _dn_a, _gh_a, _go_a, _gh_p, _go_p]):
+                return None
+            _dp_p_mb = (_gh_p["P_line_in"] - _go_p["P_line_in"]) * 1000.0
+            _dp_a_mb = (_gh_a["P_line_in"] - _go_a["P_line_in"]) * 1000.0
+            _seg0    = ra["segments"][0] if ra.get("segments") else {}
+            _pn0     = _seg0.get("pn", "PN20")
+            _lined0  = _seg0.get("lined", False)
+            _lthk0_m = _seg0.get("liner_thickness_mm", 1.0) / 1000.0
+            _D_p_b   = engine.PIPE_DATABASE.get(_dn_p, {}).get(
+                            _pn0, list(engine.PIPE_DATABASE.get(_dn_p, {None: 0}).values())[0])
+            _D_a_b   = engine.PIPE_DATABASE.get(_dn_a, {}).get(
+                            _pn0, list(engine.PIPE_DATABASE.get(_dn_a, {None: 0}).values())[0])
+            _D_p_e   = _D_p_b - 2*_lthk0_m if _lined0 else _D_p_b
+            _D_a_e   = _D_a_b - 2*_lthk0_m if _lined0 else _D_a_b
+            _scale   = (_D_p_e / _D_a_e)**2 if _D_a_e > 0 else 1.0
+            _rec_a0  = ra["grid_records"][0]  if ra.get("grid_records")  else {}
+            _rec_b0  = rb["grid_records"][0]  if rb.get("grid_records")  else {}
+            return {
+                "dn_primary": _dn_p, "dn_alt": _dn_a,
+                "label_a": _la, "label_b": _lb,
+                "gsr_h2_primary": _gh_p, "gsr_o2_primary": _go_p,
+                "gsr_h2_alt":     _gh_a, "gsr_o2_alt":     _go_a,
+                "dp_gen_primary_mbar": _dp_p_mb,
+                "dp_gen_alt_mbar":     _dp_a_mb,
+                "vel_data": {
+                    "vm_a_primary": float(_rec_a0.get("V_m (m/s)", 0)),
+                    "vm_b_primary": float(_rec_b0.get("V_m (m/s)", 0)),
+                    "vm_a_alt":     float(_rec_a0.get("V_m (m/s)", 0)) * _scale,
+                    "vm_b_alt":     float(_rec_b0.get("V_m (m/s)", 0)) * _scale,
+                    "ve_a":         float(_rec_a0.get("V_e (m/s)", 0)),
+                    "ve_b":         float(_rec_b0.get("V_e (m/s)", 0)),
+                    "D_p_mm":       _D_p_e * 1000,
+                    "D_a_mm":       _D_a_e * 1000,
+                    "vel_scale":    _scale,
+                },
+                "p_sep_h2": st.session_state.get("stack_sep_h2", 0),
+                "p_sep_o2": st.session_state.get("stack_sep_o2", 0),
+            }
+
+        # ── Comparison report ─────────────────────────────────────────────────────
+        _cmp_btn_col, _cmp_dl_col = st.columns(2)
+        with _cmp_btn_col:
+            if st.button("Generate Comparison (tables only)", type="primary",
+                         use_container_width=True, key="gen_cmp_rpt"):
+                with st.spinner("Building comparison report…"):
+                    try:
+                        _sd = _build_sens_data()
+                        _cbuf = report_generator.generate_comparison_report(
+                            results_a=ra, results_b=rb,
+                            label_a=_la, label_b=_lb,
+                            fig_cmp=None, fig_bar=None,
+                            sensitivity_data={**_sd, "fig": None} if _sd else None,
+                            stack_dp=_build_stack_dp_data())
+                        st.session_state["cmp_rpt_bytes"] = _cbuf.getvalue()
+                        st.success("Ready.")
+                    except Exception as _e:
+                        st.error(f"Failed: {_e}")
+            if st.button("Generate Comparison with charts", use_container_width=True,
+                         key="gen_cmp_rpt_ch"):
+                with st.spinner("Building comparison report with charts…"):
+                    try:
+                        _cbuf = report_generator.generate_comparison_report(
+                            results_a=ra, results_b=rb,
+                            label_a=_la, label_b=_lb,
+                            fig_cmp=fig_cmp, fig_bar=fig_bar,
+                            sensitivity_data=_build_sens_data(),
+                            stack_dp=_build_stack_dp_data())
+                        st.session_state["cmp_rpt_bytes_ch"] = _cbuf.getvalue()
+                        st.success("Ready.")
+                    except Exception as _e:
+                        st.error(f"Failed: {_e}")
+        with _cmp_dl_col:
+            if st.session_state.get("cmp_rpt_bytes"):
+                st.download_button(
+                    "Download Comparison tables  (.docx)",
+                    data=st.session_state["cmp_rpt_bytes"],
+                    file_name="report_comparison.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True, key="dl_cmp_rpt")
+            if st.session_state.get("cmp_rpt_bytes_ch"):
+                st.download_button(
+                    "Download Comparison with charts  (.docx)",
+                    data=st.session_state["cmp_rpt_bytes_ch"],
+                    file_name="report_comparison_charts.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True, key="dl_cmp_rpt_ch")
+
+        # ── Combined report ───────────────────────────────────────────────────────
+        _cmb_btn_col, _cmb_dl_col = st.columns(2)
+        with _cmb_btn_col:
+            if st.button("Generate Combined (tables only)", type="primary",
+                         use_container_width=True, key="gen_combined_rpt"):
+                with st.spinner("Building combined report…"):
+                    try:
+                        _sd = _build_sens_data()
+                        _combined_buf = report_generator.generate_combined_report(
+                            cases=[ra, rb, results_c, results_d],
+                            case_labels=[_la, _lb, _lc, _ld],
+                            fig_cmp=None, fig_bar=None,
+                            sensitivity_data={**_sd, "fig": None} if _sd else None,
+                            stack_dp=_build_stack_dp_data(),
+                            dn_study_data=_build_dn_study_data())
+                        st.session_state["combined_rpt_bytes"] = _combined_buf.getvalue()
+                        st.success("Ready.")
+                    except Exception as _e:
+                        st.error(f"Failed: {_e}")
+            if st.button("Generate Combined with charts", use_container_width=True,
+                         key="gen_combined_rpt_ch"):
+                with st.spinner("Building combined report with charts…"):
+                    try:
+                        _combined_buf = report_generator.generate_combined_report(
+                            cases=[ra, rb, results_c, results_d],
+                            case_labels=[_la, _lb, _lc, _ld],
+                            fig_cmp=fig_cmp, fig_bar=fig_bar,
+                            sensitivity_data=_build_sens_data(),
+                            stack_dp=_build_stack_dp_data(),
+                            dn_study_data=_build_dn_study_data())
+                        st.session_state["combined_rpt_bytes_ch"] = _combined_buf.getvalue()
+                        st.success("Ready.")
+                    except Exception as _e:
+                        st.error(f"Failed: {_e}")
+        with _cmb_dl_col:
+            if st.session_state.get("combined_rpt_bytes"):
+                st.download_button(
+                    "Download Combined tables  (.docx)",
+                    data=st.session_state["combined_rpt_bytes"],
+                    file_name="report_combined.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True, key="dl_combined_rpt")
+            if st.session_state.get("combined_rpt_bytes_ch"):
+                st.download_button(
+                    "Download Combined with charts  (.docx)",
+                    data=st.session_state["combined_rpt_bytes_ch"],
+                    file_name="report_combined_charts.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True, key="dl_combined_rpt_ch")
+
+        st.caption("ℹ Individual case reports (A, B) are available in their respective tabs.")
+        if not _sens_avail:
+            st.caption("ℹ Run the Sensitivity Analysis above first to include it in the reports.")
+        if not st.session_state.get("stack_gsr_h2"):
+            st.caption("ℹ Run the Goal Seek calculation first to include it in the reports.")
+        if not st.session_state.get("dn_study_dn_primary"):
+            st.caption("ℹ Run the DN Study first to include it in the Combined report.")
+
         st.divider()
 
-        def _cmp_row(label, va, vb, fmt="{}", better="lower", unit=""):
-            """Render one comparison row with delta badge."""
-            _cl, _cm, _cr = st.columns([2, 2, 2])
-            try:
-                _delta = vb - va
-                _pct   = (_delta / abs(va) * 100) if abs(va) > 1e-9 else 0.0
-                _sign  = "+" if _delta > 0 else ""
-                _delta_str = f"{_sign}{fmt.format(_delta)} {unit}  ({_sign}{_pct:.1f}%)"
-                if better == "lower":
-                    _color = "normal" if _delta > 1e-9 else ("inverse" if _delta < -1e-9 else "off")
-                elif better == "higher":
-                    _color = "inverse" if _delta > 1e-9 else ("normal" if _delta < -1e-9 else "off")
-                else:  # neutral — show delta magnitude without colour judgement
-                    _color = "off"
-            except Exception:
-                _delta_str = "—"
-                _color = "off"
-            _cl.markdown(label)
-            _cm.metric(_la, f"{fmt.format(va)} {unit}", label_visibility="collapsed")
-            _cr.metric(_lb, f"{fmt.format(vb)} {unit}", delta=_delta_str,
-                       delta_color=_color, label_visibility="collapsed")
+        # ── Full segment tables side by side ──────────────────────────────────────
+        st.markdown("#### Segment Detail")
+        _col_cfg = {
+            "ID (mm)":          st.column_config.NumberColumn(format="%.1f"),
+            "P_in (bara)":      st.column_config.NumberColumn(format="%.4f"),
+            "P_out (bara)":     st.column_config.NumberColumn(format="%.4f"),
+            "α (void)":         st.column_config.NumberColumn(format="%.4f"),
+            "ΔP_fric (kPa)":    st.column_config.NumberColumn(format="%.3f"),
+            "ΔP_grav (kPa)":    st.column_config.NumberColumn(format="%.3f"),
+            "ΔP (kPa)":         st.column_config.NumberColumn(format="%.3f"),
+            "V_m (m/s)":        st.column_config.NumberColumn(format="%.3f"),
+            "V_m/V_e":          st.column_config.NumberColumn(format="%.3f"),
+        }
+        _cmp_cols = ["Seg","Pipe","ID (mm)","Type","L (m)","Regime",
+                     "α (void)","V_m (m/s)","V_m/V_e",
+                     "ΔP_fric (kPa)","ΔP_grav (kPa)","ΔP (kPa)",
+                     "P_in (bara)","P_out (bara)"]
+        _ta, _tb = st.columns(2)
+        with _ta:
+            st.markdown(f"**{_la}**")
+            st.dataframe(pd.DataFrame(ra["grid_records"])[_cmp_cols],
+                         column_config=_col_cfg, hide_index=True, use_container_width=True)
+        with _tb:
+            st.markdown(f"**{_lb}**")
+            st.dataframe(pd.DataFrame(rb["grid_records"])[_cmp_cols],
+                         column_config=_col_cfg, hide_index=True, use_container_width=True)
 
-        _cmp_row("Inlet pressure",        ra["P_bara"],               rb["P_bara"],               fmt="{:.2f}", unit="bara", better="neutral")
-        _cmp_row("Outlet pressure",       ra["outlet_pressure_bara"], rb["outlet_pressure_bara"], fmt="{:.4f}", unit="bara", better="higher")
-        _cmp_row("Total ΔP",              ra["total_dp_kpa"],         rb["total_dp_kpa"],         fmt="{:.3f}", unit="kPa",  better="lower")
-        _cmp_row("  ↳ Frictional",        ra["total_dp_fric_kpa"],    rb["total_dp_fric_kpa"],    fmt="{:.3f}", unit="kPa",  better="lower")
-        _cmp_row("  ↳ Gravitational",     ra["total_dp_grav_kpa"],    rb["total_dp_grav_kpa"],    fmt="{:.3f}", unit="kPa",  better="neutral")
-        _cmp_row("Pipe length",           ra["pipe_length_m"],        rb["pipe_length_m"],        fmt="{:.1f}", unit="m",    better="lower")
-        _cmp_row("Effective length",      ra["cumulative_distance"],  rb["cumulative_distance"],  fmt="{:.1f}", unit="m",    better="lower")
-        _max_a = max((r["V_m/V_e"] for r in ra["grid_records"]), default=0.0)
-        _max_b = max((r["V_m/V_e"] for r in rb["grid_records"]), default=0.0)
-        _cmp_row("Worst erosion ratio V_m/V_e",  _max_a, _max_b,
-                 fmt="{:.3f}", unit="— (limit 1.0)", better="lower")
 
-    # ── Overlaid pressure profiles ─────────────────────────────────────────────
-    st.markdown("#### Pressure Profiles")
-    fig_cmp = go.Figure()
-    fig_cmp.add_trace(go.Scatter(
-        x=ra["pressure_profile_x"], y=ra["pressure_profile_y"],
-        mode="lines+markers", name=_la,
-        line=dict(color="#2563EB", width=2.5), marker=dict(size=7, color="#2563EB"),
-        hovertemplate=f"{_la}  |  Distance: %{{x:.2f}} m<br>Pressure: %{{y:.4f}} bara<extra></extra>"))
-    fig_cmp.add_trace(go.Scatter(
-        x=rb["pressure_profile_x"], y=rb["pressure_profile_y"],
-        mode="lines+markers", name=_lb,
-        line=dict(color="#D97706", width=2.5, dash="dash"), marker=dict(size=7, color="#D97706"),
-        hovertemplate=f"{_lb}  |  Distance: %{{x:.2f}} m<br>Pressure: %{{y:.4f}} bara<extra></extra>"))
-    fig_cmp.update_layout(
-        xaxis_title="Pipeline Distance (m)", yaxis_title="Pressure (bara)",
-        template="plotly_white", height=360, margin=dict(l=60,r=20,t=30,b=50),
-        hovermode="x unified", paper_bgcolor="white", plot_bgcolor="white",
-        xaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-        yaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-        legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0", borderwidth=1),
-        font=dict(size=12, color="#374151"))
-    st.plotly_chart(fig_cmp, use_container_width=True, key="fig_cmp")
+    # ============================================================================
+    # GOAL SEEK TAB
+    # ============================================================================
+    with tab_gs:
+        _la = st.session_state.get("label_a") or "A"
+        _lb = st.session_state.get("label_b") or "B"
+        _lc = f"{_la} Header"
+        _ld = f"{_lb} Header"
 
-    # ── Per-segment ΔP comparison ──────────────────────────────────────────────
-    st.markdown("#### Pressure Drop by Segment")
-    _segs_a = [f"A-{r['Seg']} {r['Pipe']}" for r in ra["grid_records"]]
-    _segs_b = [f"B-{r['Seg']} {r['Pipe']}" for r in rb["grid_records"]]
-    _dp_a   = [r["ΔP (kPa)"] for r in ra["grid_records"]]
-    _dp_b   = [r["ΔP (kPa)"] for r in rb["grid_records"]]
-    fig_bar = go.Figure()
-    fig_bar.add_trace(go.Bar(name=_la, x=_segs_a, y=_dp_a,
-                             marker_color="#2563EB", opacity=0.85))
-    fig_bar.add_trace(go.Bar(name=_lb, x=_segs_b, y=_dp_b,
-                             marker_color="#D97706", opacity=0.85))
-    fig_bar.update_layout(
-        barmode="group", yaxis_title="ΔP (kPa)", xaxis_title="Segment",
-        template="plotly_white", height=320, margin=dict(l=60,r=20,t=20,b=60),
-        paper_bgcolor="white", plot_bgcolor="white",
-        xaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-        yaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-        legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0", borderwidth=1),
-        font=dict(size=12, color="#374151"))
-    st.plotly_chart(fig_bar, use_container_width=True, key="fig_bar")
+        st.subheader("Goal Seek")
 
-    # ── Method Sensitivity Analysis ────────────────────────────────────────────
-    st.markdown("#### Method Sensitivity Analysis")
+        _gs_direction = st.radio(
+            "Mode",
+            [
+                "Fix separator pressure — back-calculate inlet",
+                "Fix source pressure — forward-calculate separator",
+            ],
+            horizontal=True,
+            key="gs_direction",
+            label_visibility="collapsed",
+        )
+        _sink_mode = _gs_direction.startswith("Fix separator")
 
-    _sh = _sens_hash(ra, rb)
-    if st.session_state.get("sens_hash") != _sh:
-        st.session_state.pop("sens_a", None)
-        st.session_state.pop("sens_b", None)
-        st.session_state.pop("sens_hash", None)
+        # ── Sink-fixed mode (back-calculation) ───────────────────────────────────
+        if _sink_mode:
+            st.caption(
+                f"Goal-seek both the {_la} system ({_la} → {_lc}) and {_lb} system ({_lb} → {_ld}) "
+                "to find the required line inlet pressures for given separator pressures. "
+                f"**Generator ΔP** = P_inlet_{_la} − P_inlet_{_lb}."
+            )
 
-    _sc1, _sc2 = st.columns([1, 3])
-    with _sc1:
-        _run_sens = st.button("Run Sensitivity Analysis", type="primary",
-                              use_container_width=True, key="run_sens")
-    with _sc2:
-        if "sens_a" in st.session_state and "sens_b" in st.session_state:
-            st.success("Results shown below — click again to refresh after input changes.")
+            with st.container(border=True):
+                st.markdown("##### Separator Target Pressures")
+                _sk_col1, _sk_col2 = st.columns(2)
+                with _sk_col1:
+                    _p_sep_h2 = st.number_input(
+                        f"{_la} separator pressure (bara)",
+                        min_value=0.1, max_value=200.0,
+                        value=float(round(results_c.get("P_separator_bara",
+                                                        results_a["outlet_pressure_bara"]), 3)),
+                        step=0.1, format="%.3f",
+                        key="stack_p_sep_h2",
+                        help=f"Target pressure at the {_la} gas-liquid separator.",
+                    )
+                with _sk_col2:
+                    _p_sep_o2 = st.number_input(
+                        f"{_lb} separator pressure (bara)",
+                        min_value=0.1, max_value=200.0,
+                        value=float(round(results_d.get("P_separator_bara",
+                                                        results_b["outlet_pressure_bara"]), 3)),
+                        step=0.1, format="%.3f",
+                        key="stack_p_sep_o2",
+                        help=f"Target pressure at the {_lb} gas-liquid separator.",
+                    )
+                _sk_run = st.button("Calculate", type="primary",
+                                    use_container_width=True, key="stack_run")
+
+            if _sk_run:
+                with st.spinner(f"Solving {_la} and {_lb} systems…"):
+                    _gsr_h2 = _goal_seek_stack(results_a, results_c, _p_sep_h2)
+                    _gsr_o2 = _goal_seek_stack(results_b, results_d, _p_sep_o2)
+                st.session_state["stack_gsr_h2"] = _gsr_h2
+                st.session_state["stack_gsr_o2"] = _gsr_o2
+                st.session_state["stack_sep_h2"] = _p_sep_h2
+                st.session_state["stack_sep_o2"] = _p_sep_o2
+                st.session_state["gs_mode_used"] = "sink"
+
+        # ── Source-fixed mode (forward march) ────────────────────────────────────
         else:
             st.caption(
-                "Runs all 12 combinations (6 correlations × 2 void-fraction models). "
-                f"Quantifies the full ΔP range for {_la} and {_lb} due to method uncertainty.")
-
-    if _run_sens:
-        with st.spinner("Running 24 calculations (12 per case)…"):
-            st.session_state["sens_a"] = engine.run_sensitivity(
-                ra["P_bara"], ra.get("T_C"), ra["gas_flows_kgh"], ra["liquid_type"], ra["q_lye"],
-                ra["segments"],
-                custom_gas=ra.get("custom_gas"), custom_liquid=ra.get("custom_liquid"),
-                vle_fluid=ra.get("vle_fluid"), vle_x_mass=ra.get("vle_x_mass"),
-                vle_m_total_kgs=ra.get("vle_m_total_kgs"))
-            st.session_state["sens_b"] = engine.run_sensitivity(
-                rb["P_bara"], rb.get("T_C"), rb["gas_flows_kgh"], rb["liquid_type"], rb["q_lye"],
-                rb["segments"],
-                custom_gas=rb.get("custom_gas"), custom_liquid=rb.get("custom_liquid"),
-                vle_fluid=rb.get("vle_fluid"), vle_x_mass=rb.get("vle_x_mass"),
-                vle_m_total_kgs=rb.get("vle_m_total_kgs"))
-            st.session_state["sens_hash"] = _sh
-        st.rerun()
-
-    fig_sens = None
-    if "sens_a" in st.session_state and "sens_b" in st.session_state:
-        _sa = st.session_state["sens_a"]
-        _sb = st.session_state["sens_b"]
-
-        _ylabels, _dp_a_vals, _dp_b_vals, _ok_a, _ok_b = [], [], [], [], []
-        for _r_a, _r_b in zip(_sa, _sb):
-            _c = _CORR_SHORT.get(_r_a["correlation"], _r_a["correlation"])
-            _v = _VOID_SHORT.get(_r_a["voidage"], _r_a["voidage"])
-            _ylabels.append(f"{_c} / {_v}")
-            _dp_a_vals.append(_r_a["total_dp_kpa"] if _r_a["ok"] else None)
-            _dp_b_vals.append(_r_b["total_dp_kpa"] if _r_b["ok"] else None)
-            _ok_a.append(_r_a["ok"])
-            _ok_b.append(_r_b["ok"])
-
-        _va = [v for v in _dp_a_vals if v is not None]
-        _vb = [v for v in _dp_b_vals if v is not None]
-
-        fig_sens = go.Figure()
-
-        # Shaded range bands
-        if len(_va) >= 2:
-            fig_sens.add_vrect(x0=min(_va), x1=max(_va),
-                               fillcolor="rgba(37,99,235,0.07)", line_width=0,
-                               annotation_text=f"{_la} range", annotation_position="top left",
-                               annotation_font=dict(size=9, color="#2563EB"))
-        if len(_vb) >= 2:
-            fig_sens.add_vrect(x0=min(_vb), x1=max(_vb),
-                               fillcolor="rgba(217,119,6,0.07)", line_width=0,
-                               annotation_text=f"{_lb} range", annotation_position="bottom right",
-                               annotation_font=dict(size=9, color="#D97706"))
-
-        # Connecting lines — one trace with None separators
-        _conn_x, _conn_y = [], []
-        for _ci in range(len(_ylabels)):
-            if _ok_a[_ci] and _ok_b[_ci]:
-                _conn_x.extend([_dp_a_vals[_ci], _dp_b_vals[_ci], None])
-                _conn_y.extend([_ylabels[_ci],   _ylabels[_ci],   None])
-        if _conn_x:
-            fig_sens.add_trace(go.Scatter(
-                x=_conn_x, y=_conn_y, mode="lines",
-                line=dict(color="#CBD5E1", width=1.2),
-                showlegend=False, hoverinfo="skip"))
-
-        # Case B dots (amber diamonds, drawn first so A circles sit on top)
-        _xb_p = [_dp_b_vals[_ci] for _ci in range(len(_ylabels)) if _ok_b[_ci]]
-        _yb_p = [_ylabels[_ci]   for _ci in range(len(_ylabels)) if _ok_b[_ci]]
-        fig_sens.add_trace(go.Scatter(
-            x=_xb_p, y=_yb_p, mode="markers", name=_lb,
-            marker=dict(color="#D97706", size=11, symbol="diamond",
-                        line=dict(color="#92400E", width=1.5)),
-            hovertemplate=f"{_lb}  |  %{{y}}<br>Total ΔP: %{{x:.3f}} kPa<extra></extra>"))
-
-        # dots (blue circles)
-        _xa_p = [_dp_a_vals[_ci] for _ci in range(len(_ylabels)) if _ok_a[_ci]]
-        _ya_p = [_ylabels[_ci]   for _ci in range(len(_ylabels)) if _ok_a[_ci]]
-        fig_sens.add_trace(go.Scatter(
-            x=_xa_p, y=_ya_p, mode="markers", name=_la,
-            marker=dict(color="#2563EB", size=11, symbol="circle",
-                        line=dict(color="#1E40AF", width=1.5)),
-            hovertemplate=f"{_la}  |  %{{y}}<br>Total ΔP: %{{x:.3f}} kPa<extra></extra>"))
-
-        # Dashed reference lines for the currently-selected method in each case
-        _sel_lbl_a = (f"{_CORR_SHORT.get(ra['correlation'], ra['correlation'])} / "
-                      f"{_VOID_SHORT.get(ra['voidage_method'], ra['voidage_method'])}")
-        _sel_lbl_b = (f"{_CORR_SHORT.get(rb['correlation'], rb['correlation'])} / "
-                      f"{_VOID_SHORT.get(rb['voidage_method'], rb['voidage_method'])}")
-        _sel_a_dp = next(
-            (r["total_dp_kpa"] for r in _sa if r["ok"]
-             and f"{_CORR_SHORT.get(r['correlation'], r['correlation'])} / "
-                 f"{_VOID_SHORT.get(r['voidage'], r['voidage'])}" == _sel_lbl_a), None)
-        _sel_b_dp = next(
-            (r["total_dp_kpa"] for r in _sb if r["ok"]
-             and f"{_CORR_SHORT.get(r['correlation'], r['correlation'])} / "
-                 f"{_VOID_SHORT.get(r['voidage'], r['voidage'])}" == _sel_lbl_b), None)
-        if _sel_a_dp is not None:
-            fig_sens.add_vline(x=_sel_a_dp,
-                               line=dict(color="#2563EB", width=1.5, dash="dash"),
-                               annotation_text=f"{_la} selected: {_sel_a_dp:.2f} kPa",
-                               annotation_position="top right",
-                               annotation_font=dict(size=9, color="#2563EB"))
-        if _sel_b_dp is not None:
-            fig_sens.add_vline(x=_sel_b_dp,
-                               line=dict(color="#D97706", width=1.5, dash="dot"),
-                               annotation_text=f"{_lb} selected: {_sel_b_dp:.2f} kPa",
-                               annotation_position="bottom right",
-                               annotation_font=dict(size=9, color="#D97706"))
-
-        fig_sens.update_layout(
-            title=dict(text=f"Total ΔP — all 12 method combinations  (● {_la}  ◆ {_lb})",
-                       font=dict(size=12), x=0),
-            xaxis_title="Total ΔP (kPa)", yaxis_title=None,
-            template="plotly_white", height=460,
-            margin=dict(l=155, r=40, t=55, b=50),
-            hovermode="closest", paper_bgcolor="white", plot_bgcolor="white",
-            xaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-            yaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0",
-                       categoryorder="array",
-                       categoryarray=list(reversed(_ylabels))),
-            legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0",
-                        borderwidth=1, orientation="h", y=1.10, x=0),
-            font=dict(size=11, color="#374151"))
-        st.plotly_chart(fig_sens, use_container_width=True, key="fig_sens")
-
-        _n_failed = sum(1 for ok in _ok_a + _ok_b if not ok)
-        if _n_failed > 0:
-            st.caption(f"{_n_failed} combination(s) failed to converge and are excluded from the chart.")
-
-        # Summary table
-        if _va and _vb:
-            _a_min, _a_max = min(_va), max(_va)
-            _b_min, _b_max = min(_vb), max(_vb)
-            _overlap = _a_min <= _b_max and _b_min <= _a_max
-            st.dataframe(pd.DataFrame([
-                {"": _la,
-                 "Min (kPa)":      f"{_a_min:.3f}",
-                 "Selected (kPa)": f"{ra['total_dp_kpa']:.3f}",
-                 "Max (kPa)":      f"{_a_max:.3f}",
-                 "Spread (kPa)":   f"{_a_max - _a_min:.3f}"},
-                {"": _lb,
-                 "Min (kPa)":      f"{_b_min:.3f}",
-                 "Selected (kPa)": f"{rb['total_dp_kpa']:.3f}",
-                 "Max (kPa)":      f"{_b_max:.3f}",
-                 "Spread (kPa)":   f"{_b_max - _b_min:.3f}"},
-            ]), hide_index=True, use_container_width=True)
-            if _overlap:
-                st.warning(
-                    f"Ranges **overlap** — the relative ordering of {_la} vs {_lb} depends on "
-                    "which correlation is chosen.")
-            else:
-                st.success(
-                    "Ranges **do not overlap** — one case is unambiguously lower-ΔP "
-                    "across all methods.")
-
-        # ── Flow Regime Consistency ────────────────────────────────────────────
-        st.markdown("**Flow Regime Consistency across Methods**")
-        st.caption(
-            "Regime is independent of ΔP correlation — Vsg, Vsl, and angle are fixed. "
-            "Only the void fraction model (α) can shift vertical-segment thresholds "
-            "(bubble/slug/churn). Each column header shows the first correlation that "
-            "produced that regime; all other correlations with the same void model agree.")
-
-        def _regime_table(sens_results, segments_list, label):
-            """Build regime DataFrame for one case across all converged combinations."""
-            ok_results = [r for r in sens_results if r["ok"] and r["segment_regimes"]]
-            if not ok_results or not segments_list:
-                return None
-
-            n_segs = len(segments_list)
-            # For each segment, collect the set of unique regimes across all combinations
-            rows = []
-            for i, seg in enumerate(segments_list):
-                seg_id   = f"#{i+1}"
-                orient   = seg.get("type", seg.get("kind", "—")).replace(
-                               "Vertical Upflow", "V Up").replace(
-                               "Vertical Downflow", "V Down").replace("Horizontal", "Horiz")
-                dn_str   = f"{seg['dn']}/{seg['pn']}"
-                # Group regimes by void fraction model (correlation doesn't change regime)
-                by_void = {}
-                for r in ok_results:
-                    v = _VOID_SHORT.get(r["voidage"], r["voidage"])
-                    regime_str = r["segment_regimes"][i] if i < len(r["segment_regimes"]) else "—"
-                    by_void.setdefault(v, set()).add(regime_str)
-                # Build row: one column per void model, showing unique regimes found
-                row = {"Seg": seg_id, "Pipe": dn_str, "Orient": orient}
-                for v_short, regime_set in by_void.items():
-                    row[v_short] = " / ".join(sorted(regime_set)) if regime_set else "—"
-                # Consensus across ALL combinations
-                all_regimes = set()
-                for r in ok_results:
-                    if i < len(r["segment_regimes"]):
-                        all_regimes.add(r["segment_regimes"][i])
-                row["Unanimous"] = "✓" if len(all_regimes) == 1 else f"✗  ({len(all_regimes)} distinct)"
-                rows.append(row)
-            return pd.DataFrame(rows)
-
-        _rt_a = _regime_table(_sa, ra["segments"], _la)
-        _rt_b = _regime_table(_sb, rb["segments"], _lb)
-
-        _rca, _rcb = st.columns(2)
-        with _rca:
-            st.markdown(f"**{_la}**")
-            if _rt_a is not None:
-                st.dataframe(_rt_a, hide_index=True, use_container_width=True)
-            else:
-                st.caption("No regime data available.")
-        with _rcb:
-            st.markdown(f"**{_lb}**")
-            if _rt_b is not None:
-                st.dataframe(_rt_b, hide_index=True, use_container_width=True)
-            else:
-                st.caption("No regime data available.")
-
-    # ── Reports ───────────────────────────────────────────────────────────────
-    st.divider()
-    st.markdown("#### Reports")
-    _sens_avail = ("sens_a" in st.session_state and "sens_b" in st.session_state
-                   and fig_sens is not None)
-
-    def _build_sens_data():
-        if _sens_avail:
-            return {"sa": st.session_state["sens_a"],
-                    "sb": st.session_state["sens_b"],
-                    "fig": fig_sens}
-        return None
-
-    def _build_stack_dp_data():
-        _sh = st.session_state.get("stack_gsr_h2")
-        _so = st.session_state.get("stack_gsr_o2")
-        if _sh and _so:
-            return {
-                "label_a": _la,
-                "label_b": _lb,
-                "gsr_h2":  _sh,
-                "gsr_o2":  _so,
-                "P_sep_h2": st.session_state.get("stack_sep_h2"),
-                "P_sep_o2": st.session_state.get("stack_sep_o2"),
-            }
-        return None
-
-    def _build_dn_study_data():
-        _dn_p = st.session_state.get("dn_study_dn_primary")
-        _dn_a = st.session_state.get("dn_study_dn_alt")
-        _gh_a = st.session_state.get("dn_study_gsr_h2_alt")
-        _go_a = st.session_state.get("dn_study_gsr_o2_alt")
-        _gh_p = st.session_state.get("stack_gsr_h2")
-        _go_p = st.session_state.get("stack_gsr_o2")
-        if not all([_dn_p, _dn_a, _gh_a, _go_a, _gh_p, _go_p]):
-            return None
-        _dp_p_mb = (_gh_p["P_line_in"] - _go_p["P_line_in"]) * 1000.0
-        _dp_a_mb = (_gh_a["P_line_in"] - _go_a["P_line_in"]) * 1000.0
-        _seg0    = ra["segments"][0] if ra.get("segments") else {}
-        _pn0     = _seg0.get("pn", "PN20")
-        _lined0  = _seg0.get("lined", False)
-        _lthk0_m = _seg0.get("liner_thickness_mm", 1.0) / 1000.0
-        _D_p_b   = engine.PIPE_DATABASE.get(_dn_p, {}).get(
-                        _pn0, list(engine.PIPE_DATABASE.get(_dn_p, {None: 0}).values())[0])
-        _D_a_b   = engine.PIPE_DATABASE.get(_dn_a, {}).get(
-                        _pn0, list(engine.PIPE_DATABASE.get(_dn_a, {None: 0}).values())[0])
-        _D_p_e   = _D_p_b - 2*_lthk0_m if _lined0 else _D_p_b
-        _D_a_e   = _D_a_b - 2*_lthk0_m if _lined0 else _D_a_b
-        _scale   = (_D_p_e / _D_a_e)**2 if _D_a_e > 0 else 1.0
-        _rec_a0  = ra["grid_records"][0]  if ra.get("grid_records")  else {}
-        _rec_b0  = rb["grid_records"][0]  if rb.get("grid_records")  else {}
-        return {
-            "dn_primary": _dn_p, "dn_alt": _dn_a,
-            "label_a": _la, "label_b": _lb,
-            "gsr_h2_primary": _gh_p, "gsr_o2_primary": _go_p,
-            "gsr_h2_alt":     _gh_a, "gsr_o2_alt":     _go_a,
-            "dp_gen_primary_mbar": _dp_p_mb,
-            "dp_gen_alt_mbar":     _dp_a_mb,
-            "vel_data": {
-                "vm_a_primary": float(_rec_a0.get("V_m (m/s)", 0)),
-                "vm_b_primary": float(_rec_b0.get("V_m (m/s)", 0)),
-                "vm_a_alt":     float(_rec_a0.get("V_m (m/s)", 0)) * _scale,
-                "vm_b_alt":     float(_rec_b0.get("V_m (m/s)", 0)) * _scale,
-                "ve_a":         float(_rec_a0.get("V_e (m/s)", 0)),
-                "ve_b":         float(_rec_b0.get("V_e (m/s)", 0)),
-                "D_p_mm":       _D_p_e * 1000,
-                "D_a_mm":       _D_a_e * 1000,
-                "vel_scale":    _scale,
-            },
-            "p_sep_h2": st.session_state.get("stack_sep_h2", 0),
-            "p_sep_o2": st.session_state.get("stack_sep_o2", 0),
-        }
-
-    # ── Comparison report ─────────────────────────────────────────────────────
-    _cmp_btn_col, _cmp_dl_col = st.columns(2)
-    with _cmp_btn_col:
-        if st.button("Generate Comparison (tables only)", type="primary",
-                     use_container_width=True, key="gen_cmp_rpt"):
-            with st.spinner("Building comparison report…"):
-                try:
-                    _sd = _build_sens_data()
-                    _cbuf = report_generator.generate_comparison_report(
-                        results_a=ra, results_b=rb,
-                        label_a=_la, label_b=_lb,
-                        fig_cmp=None, fig_bar=None,
-                        sensitivity_data={**_sd, "fig": None} if _sd else None,
-                        stack_dp=_build_stack_dp_data())
-                    st.session_state["cmp_rpt_bytes"] = _cbuf.getvalue()
-                    st.success("Ready.")
-                except Exception as _e:
-                    st.error(f"Failed: {_e}")
-        if st.button("Generate Comparison with charts", use_container_width=True,
-                     key="gen_cmp_rpt_ch"):
-            with st.spinner("Building comparison report with charts…"):
-                try:
-                    _cbuf = report_generator.generate_comparison_report(
-                        results_a=ra, results_b=rb,
-                        label_a=_la, label_b=_lb,
-                        fig_cmp=fig_cmp, fig_bar=fig_bar,
-                        sensitivity_data=_build_sens_data(),
-                        stack_dp=_build_stack_dp_data())
-                    st.session_state["cmp_rpt_bytes_ch"] = _cbuf.getvalue()
-                    st.success("Ready.")
-                except Exception as _e:
-                    st.error(f"Failed: {_e}")
-    with _cmp_dl_col:
-        if st.session_state.get("cmp_rpt_bytes"):
-            st.download_button(
-                "Download Comparison tables  (.docx)",
-                data=st.session_state["cmp_rpt_bytes"],
-                file_name="report_comparison.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True, key="dl_cmp_rpt")
-        if st.session_state.get("cmp_rpt_bytes_ch"):
-            st.download_button(
-                "Download Comparison with charts  (.docx)",
-                data=st.session_state["cmp_rpt_bytes_ch"],
-                file_name="report_comparison_charts.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True, key="dl_cmp_rpt_ch")
-
-    # ── Combined report ───────────────────────────────────────────────────────
-    _cmb_btn_col, _cmb_dl_col = st.columns(2)
-    with _cmb_btn_col:
-        if st.button("Generate Combined (tables only)", type="primary",
-                     use_container_width=True, key="gen_combined_rpt"):
-            with st.spinner("Building combined report…"):
-                try:
-                    _sd = _build_sens_data()
-                    _combined_buf = report_generator.generate_combined_report(
-                        cases=[ra, rb, results_c, results_d],
-                        case_labels=[_la, _lb, _lc, _ld],
-                        fig_cmp=None, fig_bar=None,
-                        sensitivity_data={**_sd, "fig": None} if _sd else None,
-                        stack_dp=_build_stack_dp_data(),
-                        dn_study_data=_build_dn_study_data())
-                    st.session_state["combined_rpt_bytes"] = _combined_buf.getvalue()
-                    st.success("Ready.")
-                except Exception as _e:
-                    st.error(f"Failed: {_e}")
-        if st.button("Generate Combined with charts", use_container_width=True,
-                     key="gen_combined_rpt_ch"):
-            with st.spinner("Building combined report with charts…"):
-                try:
-                    _combined_buf = report_generator.generate_combined_report(
-                        cases=[ra, rb, results_c, results_d],
-                        case_labels=[_la, _lb, _lc, _ld],
-                        fig_cmp=fig_cmp, fig_bar=fig_bar,
-                        sensitivity_data=_build_sens_data(),
-                        stack_dp=_build_stack_dp_data(),
-                        dn_study_data=_build_dn_study_data())
-                    st.session_state["combined_rpt_bytes_ch"] = _combined_buf.getvalue()
-                    st.success("Ready.")
-                except Exception as _e:
-                    st.error(f"Failed: {_e}")
-    with _cmb_dl_col:
-        if st.session_state.get("combined_rpt_bytes"):
-            st.download_button(
-                "Download Combined tables  (.docx)",
-                data=st.session_state["combined_rpt_bytes"],
-                file_name="report_combined.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True, key="dl_combined_rpt")
-        if st.session_state.get("combined_rpt_bytes_ch"):
-            st.download_button(
-                "Download Combined with charts  (.docx)",
-                data=st.session_state["combined_rpt_bytes_ch"],
-                file_name="report_combined_charts.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True, key="dl_combined_rpt_ch")
-
-    st.caption("ℹ Individual case reports (A, B) are available in their respective tabs.")
-    if not _sens_avail:
-        st.caption("ℹ Run the Sensitivity Analysis above first to include it in the reports.")
-    if not st.session_state.get("stack_gsr_h2"):
-        st.caption("ℹ Run the Goal Seek calculation first to include it in the reports.")
-    if not st.session_state.get("dn_study_dn_primary"):
-        st.caption("ℹ Run the DN Study first to include it in the Combined report.")
-
-    st.divider()
-
-    # ── Full segment tables side by side ──────────────────────────────────────
-    st.markdown("#### Segment Detail")
-    _col_cfg = {
-        "ID (mm)":          st.column_config.NumberColumn(format="%.1f"),
-        "P_in (bara)":      st.column_config.NumberColumn(format="%.4f"),
-        "P_out (bara)":     st.column_config.NumberColumn(format="%.4f"),
-        "α (void)":         st.column_config.NumberColumn(format="%.4f"),
-        "ΔP_fric (kPa)":    st.column_config.NumberColumn(format="%.3f"),
-        "ΔP_grav (kPa)":    st.column_config.NumberColumn(format="%.3f"),
-        "ΔP (kPa)":         st.column_config.NumberColumn(format="%.3f"),
-        "V_m (m/s)":        st.column_config.NumberColumn(format="%.3f"),
-        "V_m/V_e":          st.column_config.NumberColumn(format="%.3f"),
-    }
-    _cmp_cols = ["Seg","Pipe","ID (mm)","Type","L (m)","Regime",
-                 "α (void)","V_m (m/s)","V_m/V_e",
-                 "ΔP_fric (kPa)","ΔP_grav (kPa)","ΔP (kPa)",
-                 "P_in (bara)","P_out (bara)"]
-    _ta, _tb = st.columns(2)
-    with _ta:
-        st.markdown(f"**{_la}**")
-        st.dataframe(pd.DataFrame(ra["grid_records"])[_cmp_cols],
-                     column_config=_col_cfg, hide_index=True, use_container_width=True)
-    with _tb:
-        st.markdown(f"**{_lb}**")
-        st.dataframe(pd.DataFrame(rb["grid_records"])[_cmp_cols],
-                     column_config=_col_cfg, hide_index=True, use_container_width=True)
-
-
-# ============================================================================
-# GOAL SEEK TAB
-# ============================================================================
-with tab_gs:
-    _la = st.session_state.get("label_a") or "A"
-    _lb = st.session_state.get("label_b") or "B"
-    _lc = f"{_la} Header"
-    _ld = f"{_lb} Header"
-
-    st.subheader("Goal Seek")
-
-    _gs_direction = st.radio(
-        "Mode",
-        [
-            "Fix separator pressure — back-calculate inlet",
-            "Fix source pressure — forward-calculate separator",
-        ],
-        horizontal=True,
-        key="gs_direction",
-        label_visibility="collapsed",
-    )
-    _sink_mode = _gs_direction.startswith("Fix separator")
-
-    # ── Sink-fixed mode (back-calculation) ───────────────────────────────────
-    if _sink_mode:
-        st.caption(
-            f"Goal-seek both the {_la} system ({_la} → {_lc}) and {_lb} system ({_lb} → {_ld}) "
-            "to find the required line inlet pressures for given separator pressures. "
-            f"**Generator ΔP** = P_inlet_{_la} − P_inlet_{_lb}."
-        )
-
-        with st.container(border=True):
-            st.markdown("##### Separator Target Pressures")
-            _sk_col1, _sk_col2 = st.columns(2)
-            with _sk_col1:
-                _p_sep_h2 = st.number_input(
-                    f"{_la} separator pressure (bara)",
-                    min_value=0.1, max_value=200.0,
-                    value=float(round(results_c.get("P_separator_bara",
-                                                    results_a["outlet_pressure_bara"]), 3)),
-                    step=0.1, format="%.3f",
-                    key="stack_p_sep_h2",
-                    help=f"Target pressure at the {_la} gas-liquid separator.",
-                )
-            with _sk_col2:
-                _p_sep_o2 = st.number_input(
-                    f"{_lb} separator pressure (bara)",
-                    min_value=0.1, max_value=200.0,
-                    value=float(round(results_d.get("P_separator_bara",
-                                                    results_b["outlet_pressure_bara"]), 3)),
-                    step=0.1, format="%.3f",
-                    key="stack_p_sep_o2",
-                    help=f"Target pressure at the {_lb} gas-liquid separator.",
-                )
-            _sk_run = st.button("Calculate", type="primary",
-                                use_container_width=True, key="stack_run")
-
-        if _sk_run:
-            with st.spinner(f"Solving {_la} and {_lb} systems…"):
-                _gsr_h2 = _goal_seek_stack(results_a, results_c, _p_sep_h2)
-                _gsr_o2 = _goal_seek_stack(results_b, results_d, _p_sep_o2)
-            st.session_state["stack_gsr_h2"] = _gsr_h2
-            st.session_state["stack_gsr_o2"] = _gsr_o2
-            st.session_state["stack_sep_h2"] = _p_sep_h2
-            st.session_state["stack_sep_o2"] = _p_sep_o2
-            st.session_state["gs_mode_used"] = "sink"
-
-    # ── Source-fixed mode (forward march) ────────────────────────────────────
-    else:
-        st.caption(
-            f"Fix the {_la} and {_lb} source (inlet) pressures and march forward through "
-            f"the branch pipeline and header to find the resulting separator pressures. "
-            f"**Generator ΔP** = P_source_{_la} − P_source_{_lb} (set by you)."
-        )
-
-        with st.container(border=True):
-            st.markdown("##### Source (Inlet) Pressures")
-            _fwd_col1, _fwd_col2 = st.columns(2)
-            with _fwd_col1:
-                _p_src_h2 = st.number_input(
-                    f"{_la} source pressure (bara)",
-                    min_value=0.1, max_value=200.0,
-                    value=float(round(results_a.get("inlet_pressure_bara",
-                                                    results_a["outlet_pressure_bara"]), 3)),
-                    step=0.1, format="%.3f",
-                    key="gs_p_src_h2",
-                    help=f"Fixed inlet pressure for the {_la} branch.",
-                )
-            with _fwd_col2:
-                _p_src_o2 = st.number_input(
-                    f"{_lb} source pressure (bara)",
-                    min_value=0.1, max_value=200.0,
-                    value=float(round(results_b.get("inlet_pressure_bara",
-                                                    results_b["outlet_pressure_bara"]), 3)),
-                    step=0.1, format="%.3f",
-                    key="gs_p_src_o2",
-                    help=f"Fixed inlet pressure for the {_lb} branch.",
-                )
-            _fwd_run = st.button("Calculate", type="primary",
-                                 use_container_width=True, key="gs_fwd_run")
-
-        if _fwd_run:
-            with st.spinner(f"Marching {_la} and {_lb} systems forward…"):
-                _gsr_h2 = _forward_stack(results_a, results_c, _p_src_h2)
-                _gsr_o2 = _forward_stack(results_b, results_d, _p_src_o2)
-            st.session_state["stack_gsr_h2"] = _gsr_h2
-            st.session_state["stack_gsr_o2"] = _gsr_o2
-            st.session_state["stack_sep_h2"] = _gsr_h2["P_sep"]
-            st.session_state["stack_sep_o2"] = _gsr_o2["P_sep"]
-            st.session_state["gs_mode_used"] = "source"
-
-    # ── Shared results display ────────────────────────────────────────────────
-    _gsr_h2 = st.session_state.get("stack_gsr_h2")
-    _gsr_o2 = st.session_state.get("stack_gsr_o2")
-
-    if _gsr_h2 and _gsr_o2:
-        _shown_sep_h2 = st.session_state.get("stack_sep_h2", 0.0)
-        _shown_sep_o2 = st.session_state.get("stack_sep_o2", 0.0)
-
-        _conv_h2 = _gsr_h2["converged"]
-        _conv_o2 = _gsr_o2["converged"]
-        if _conv_h2 and _conv_o2:
-            _iter_note = (
-                f"{_la} converged in {_gsr_h2['iterations']} iter.  "
-                f"{_lb} converged in {_gsr_o2['iterations']} iter."
-                if _sink_mode else
-                f"Forward march complete — {_la} and {_lb} solved in one pass."
-            )
-            st.success(_iter_note)
-        else:
-            if not _conv_h2:
-                st.warning(f"{_la} did not fully converge ({_gsr_h2['iterations']} iter, "
-                           f"residual {abs(_gsr_h2['P_sep'] - _shown_sep_h2)*1000:.1f} mbar)")
-            if not _conv_o2:
-                st.warning(f"{_lb} did not fully converge ({_gsr_o2['iterations']} iter, "
-                           f"residual {abs(_gsr_o2['P_sep'] - _shown_sep_o2)*1000:.1f} mbar)")
-
-        st.divider()
-
-        _p_in_a = _gsr_h2["P_line_in"]
-        _p_in_b = _gsr_o2["P_line_in"]
-        _dp_stack = _p_in_a - _p_in_b
-
-        with st.container(border=True):
-            st.markdown(f"##### Generator ΔP  (P_inlet_{_la} − P_inlet_{_lb})")
-            _sk1, _sk2, _sk3 = st.columns(3)
-            _sk1.metric(
-                f"{_la} inlet pressure",
-                f"{_p_in_a:.4f} bara",
-                delta=f"{_la} ΔP = {_gsr_h2['dp_line']:.3f} kPa",
-                delta_color="off",
-            )
-            _sk2.metric(
-                f"{_lb} inlet pressure",
-                f"{_p_in_b:.4f} bara",
-                delta=f"{_lb} ΔP = {_gsr_o2['dp_line']:.3f} kPa",
-                delta_color="off",
-            )
-            _dp_stack_kpa  = _dp_stack * 100.0
-            _dp_stack_mbar = _dp_stack_kpa * 10.0
-            _sk3.metric(
-                f"Generator ΔP  ({_la} − {_lb})",
-                f"{_dp_stack:.4f} bara",
-                delta=f"{_dp_stack_kpa:.2f} kPa  ·  {_dp_stack_mbar:.1f} mbar",
-                delta_color="off",
+                f"Fix the {_la} and {_lb} source (inlet) pressures and march forward through "
+                f"the branch pipeline and header to find the resulting separator pressures. "
+                f"**Generator ΔP** = P_source_{_la} − P_source_{_lb} (set by you)."
             )
 
-        st.markdown("##### System Pressure Breakdown")
-        with st.container(border=True):
-            _bk1, _bk2 = st.columns(2)
-            with _bk1:
-                st.markdown(f"**{_la} system  ({_la} → {_lc} → Separator)**")
-                st.metric(f"{_la} inlet",
-                          f"{_gsr_h2['P_line_in']:.4f} bara")
-                st.metric(f"{_la} outlet / {_lc} inlet",
-                          f"{_gsr_h2['P_line_out']:.4f} bara",
-                          delta=f"{_la} ΔP = {_gsr_h2['dp_line']:.3f} kPa",
-                          delta_color="off")
-                st.metric(f"{_la} Separator",
-                          f"{_gsr_h2['P_sep']:.4f} bara",
-                          delta=f"{_lc}+T ΔP = {_gsr_h2['dp_hdr']:.3f} kPa",
-                          delta_color="off")
-            with _bk2:
-                st.markdown(f"**{_lb} system  ({_lb} → {_ld} → Separator)**")
-                st.metric(f"{_lb} inlet",
-                          f"{_gsr_o2['P_line_in']:.4f} bara")
-                st.metric(f"{_lb} outlet / {_ld} inlet",
-                          f"{_gsr_o2['P_line_out']:.4f} bara",
-                          delta=f"{_lb} ΔP = {_gsr_o2['dp_line']:.3f} kPa",
-                          delta_color="off")
-                st.metric(f"{_lb} Separator",
-                          f"{_gsr_o2['P_sep']:.4f} bara",
-                          delta=f"{_ld}+T ΔP = {_gsr_o2['dp_hdr']:.3f} kPa",
-                          delta_color="off")
-
-        st.divider()
-        st.markdown("##### Apply Results to Cases")
-        st.caption(
-            "Write the required inlet pressures back into Case A and Case B "
-            "so the branch calculations reflect the goal-seek solution."
-        )
-        _ap1, _ap2 = st.columns(2)
-        if _ap1.button(
-            f"Apply {_p_in_a:.4f} bara → {_la}",
-            use_container_width=True, key="stack_apply_a",
-        ):
-            st.session_state["stack_apply_a_pending"] = float(_p_in_a)
-            st.rerun()
-        if _ap2.button(
-            f"Apply {_p_in_b:.4f} bara → {_lb}",
-            use_container_width=True, key="stack_apply_b",
-        ):
-            st.session_state["stack_apply_b_pending"] = float(_p_in_b)
-            st.rerun()
-
-    # ============================================================================
-    # DN STUDY (merged into Goal Seek tab)
-    # ============================================================================
-    st.divider()
-    st.subheader("DN Study — Branch Line Size Comparison")
-    st.caption(
-        "Re-runs the full system (branches A and B + goal-seek) with a different branch DN. "
-        "Header sizes are unchanged. All other inputs (flows, pressure, correlation) are identical."
-    )
-
-    _prereq_ok = (
-        results_a is not None and results_b is not None
-        and results_c is not None and results_d is not None
-    )
-    _gsr_ok = st.session_state.get("gs_mode_used") is not None
-
-    if not _prereq_ok:
-        st.warning("Run all four cases (A, B, C, D) before using DN Study.")
-    elif not _gsr_ok:
-        st.warning("Run the Goal Seek calculation above before using DN Study.")
-    else:
-        _dn_primary = results_a["segments"][0]["dn"] if results_a.get("segments") else "DN50"
-        _dn_all_opts = list(engine.PIPE_DATABASE.keys())
-        _dn_alt_opts = [dn for dn in _dn_all_opts if dn != _dn_primary]
-        _dn_default_idx = _dn_alt_opts.index("DN40") if "DN40" in _dn_alt_opts else 0
-
-        _inp_col, _res_col = st.columns([1, 2])
-
-        with _inp_col:
             with st.container(border=True):
-                st.markdown("**Study Settings**")
-                dn_alt = st.selectbox(
-                    "Alternative branch DN", _dn_alt_opts,
-                    index=_dn_default_idx, key="dn_study_alt_sel"
-                )
-                _p_sep_h2_dn = st.session_state.get("stack_sep_h2", 16.5)
-                _p_sep_o2_dn = st.session_state.get("stack_sep_o2", 16.5)
-                st.caption(
-                    f"Separator targets (from Goal Seek above):  "
-                    f"{_la} {_p_sep_h2_dn:.2f} bara  ·  {_lb} {_p_sep_o2_dn:.2f} bara"
-                )
-                _run_dn_study = st.button(
-                    "Run DN Study", type="primary",
-                    use_container_width=True, key="dn_study_run"
-                )
-
-        if _run_dn_study:
-            with st.spinner(f"Computing {_dn_primary} vs {dn_alt}…"):
-                _ra_alt = _apply_dn_override(results_a, dn_alt)
-                _rb_alt = _apply_dn_override(results_b, dn_alt)
-                _gsr_h2_alt = _goal_seek_stack(_ra_alt, results_c, _p_sep_h2_dn)
-                _gsr_o2_alt = _goal_seek_stack(_rb_alt, results_d, _p_sep_o2_dn)
-                _reg_a_alt  = _calc_regimes_at_p(_ra_alt, _gsr_h2_alt["P_line_in"])
-                _reg_b_alt  = _calc_regimes_at_p(_rb_alt, _gsr_o2_alt["P_line_in"])
-            st.session_state["dn_study_dn_primary"] = _dn_primary
-            st.session_state["dn_study_dn_alt"]     = dn_alt
-            st.session_state["dn_study_gsr_h2_alt"] = _gsr_h2_alt
-            st.session_state["dn_study_gsr_o2_alt"] = _gsr_o2_alt
-            st.session_state["dn_study_regimes_a"]  = _reg_a_alt
-            st.session_state["dn_study_regimes_b"]  = _reg_b_alt
-            st.rerun()
-
-        _gsr_h2_p = st.session_state.get("stack_gsr_h2")
-        _gsr_o2_p = st.session_state.get("stack_gsr_o2")
-        _gsr_h2_a = st.session_state.get("dn_study_gsr_h2_alt")
-        _gsr_o2_a = st.session_state.get("dn_study_gsr_o2_alt")
-        _dn_p_lbl = st.session_state.get("dn_study_dn_primary", _dn_primary)
-        _dn_a_lbl = st.session_state.get("dn_study_dn_alt", "")
-
-        if _gsr_h2_a and _gsr_o2_a and _dn_a_lbl:
-            with _res_col:
-                # ── Generator ΔP ──────────────────────────────────────────────
-                _dp_gen_p_mbar = (_gsr_h2_p["P_line_in"] - _gsr_o2_p["P_line_in"]) * 1000.0
-                _dp_gen_a_mbar = (_gsr_h2_a["P_line_in"] - _gsr_o2_a["P_line_in"]) * 1000.0
-                _dp_gen_delta  = _dp_gen_a_mbar - _dp_gen_p_mbar
-
-                with st.container(border=True):
-                    st.markdown("**Generator ΔP**")
-                    _gc1, _gc2, _gc3 = st.columns(3)
-                    _gc1.metric(f"{_dn_p_lbl} (primary)", f"{_dp_gen_p_mbar:.1f} mbar")
-                    _gc2.metric(
-                        f"{_dn_a_lbl} (alternative)",
-                        f"{_dp_gen_a_mbar:.1f} mbar",
-                        delta=f"{_dp_gen_delta:+.1f} mbar",
-                        delta_color="off",
+                st.markdown("##### Source (Inlet) Pressures")
+                _fwd_col1, _fwd_col2 = st.columns(2)
+                with _fwd_col1:
+                    _p_src_h2 = st.number_input(
+                        f"{_la} source pressure (bara)",
+                        min_value=0.1, max_value=200.0,
+                        value=float(round(results_a.get("inlet_pressure_bara",
+                                                        results_a["outlet_pressure_bara"]), 3)),
+                        step=0.1, format="%.3f",
+                        key="gs_p_src_h2",
+                        help=f"Fixed inlet pressure for the {_la} branch.",
                     )
-                    _winner = _dn_p_lbl if abs(_dp_gen_p_mbar) <= abs(_dp_gen_a_mbar) else _dn_a_lbl
-                    _gc3.metric("Lower |ΔP|", _winner)
+                with _fwd_col2:
+                    _p_src_o2 = st.number_input(
+                        f"{_lb} source pressure (bara)",
+                        min_value=0.1, max_value=200.0,
+                        value=float(round(results_b.get("inlet_pressure_bara",
+                                                        results_b["outlet_pressure_bara"]), 3)),
+                        step=0.1, format="%.3f",
+                        key="gs_p_src_o2",
+                        help=f"Fixed inlet pressure for the {_lb} branch.",
+                    )
+                _fwd_run = st.button("Calculate", type="primary",
+                                     use_container_width=True, key="gs_fwd_run")
 
-                # ── ΔP comparison table ───────────────────────────────────────
-                _dp_rows = []
-                for _case_lbl, _dp_p_kpa, _dp_a_kpa in [
-                    (f"{_la} branch", _gsr_h2_p["dp_line"], _gsr_h2_a["dp_line"]),
-                    (f"{_lb} branch", _gsr_o2_p["dp_line"], _gsr_o2_a["dp_line"]),
-                    (f"{_la} header", _gsr_h2_p["dp_hdr"],  _gsr_h2_a["dp_hdr"]),
-                    (f"{_lb} header", _gsr_o2_p["dp_hdr"],  _gsr_o2_a["dp_hdr"]),
-                ]:
-                    _pct = ((_dp_a_kpa - _dp_p_kpa) / _dp_p_kpa * 100
-                            if _dp_p_kpa and abs(_dp_p_kpa) > 1e-9 else 0.0)
-                    _dp_rows.append({
-                        "Case":                      _case_lbl,
-                        f"{_dn_p_lbl} ΔP (kPa)":    round(_dp_p_kpa, 3),
-                        f"{_dn_a_lbl} ΔP (kPa)":    round(_dp_a_kpa, 3),
-                        "Change (%)":                f"{_pct:+.1f}",
-                    })
-                st.dataframe(
-                    pd.DataFrame(_dp_rows),
-                    hide_index=True, use_container_width=True,
-                    column_config={
-                        f"{_dn_p_lbl} ΔP (kPa)": st.column_config.NumberColumn(format="%.3f"),
-                        f"{_dn_a_lbl} ΔP (kPa)": st.column_config.NumberColumn(format="%.3f"),
-                    }
+            if _fwd_run:
+                with st.spinner(f"Marching {_la} and {_lb} systems forward…"):
+                    _gsr_h2 = _forward_stack(results_a, results_c, _p_src_h2)
+                    _gsr_o2 = _forward_stack(results_b, results_d, _p_src_o2)
+                st.session_state["stack_gsr_h2"] = _gsr_h2
+                st.session_state["stack_gsr_o2"] = _gsr_o2
+                st.session_state["stack_sep_h2"] = _gsr_h2["P_sep"]
+                st.session_state["stack_sep_o2"] = _gsr_o2["P_sep"]
+                st.session_state["gs_mode_used"] = "source"
+
+        # ── Shared results display ────────────────────────────────────────────────
+        _gsr_h2 = st.session_state.get("stack_gsr_h2")
+        _gsr_o2 = st.session_state.get("stack_gsr_o2")
+
+        if _gsr_h2 and _gsr_o2:
+            _shown_sep_h2 = st.session_state.get("stack_sep_h2", 0.0)
+            _shown_sep_o2 = st.session_state.get("stack_sep_o2", 0.0)
+
+            _conv_h2 = _gsr_h2["converged"]
+            _conv_o2 = _gsr_o2["converged"]
+            if _conv_h2 and _conv_o2:
+                _iter_note = (
+                    f"{_la} converged in {_gsr_h2['iterations']} iter.  "
+                    f"{_lb} converged in {_gsr_o2['iterations']} iter."
+                    if _sink_mode else
+                    f"Forward march complete — {_la} and {_lb} solved in one pass."
+                )
+                st.success(_iter_note)
+            else:
+                if not _conv_h2:
+                    st.warning(f"{_la} did not fully converge ({_gsr_h2['iterations']} iter, "
+                               f"residual {abs(_gsr_h2['P_sep'] - _shown_sep_h2)*1000:.1f} mbar)")
+                if not _conv_o2:
+                    st.warning(f"{_lb} did not fully converge ({_gsr_o2['iterations']} iter, "
+                               f"residual {abs(_gsr_o2['P_sep'] - _shown_sep_o2)*1000:.1f} mbar)")
+
+            st.divider()
+
+            _p_in_a = _gsr_h2["P_line_in"]
+            _p_in_b = _gsr_o2["P_line_in"]
+            _dp_stack = _p_in_a - _p_in_b
+
+            with st.container(border=True):
+                st.markdown(f"##### Generator ΔP  (P_inlet_{_la} − P_inlet_{_lb})")
+                _sk1, _sk2, _sk3 = st.columns(3)
+                _sk1.metric(
+                    f"{_la} inlet pressure",
+                    f"{_p_in_a:.4f} bara",
+                    delta=f"{_la} ΔP = {_gsr_h2['dp_line']:.3f} kPa",
+                    delta_color="off",
+                )
+                _sk2.metric(
+                    f"{_lb} inlet pressure",
+                    f"{_p_in_b:.4f} bara",
+                    delta=f"{_lb} ΔP = {_gsr_o2['dp_line']:.3f} kPa",
+                    delta_color="off",
+                )
+                _dp_stack_kpa  = _dp_stack * 100.0
+                _dp_stack_mbar = _dp_stack_kpa * 10.0
+                _sk3.metric(
+                    f"Generator ΔP  ({_la} − {_lb})",
+                    f"{_dp_stack:.4f} bara",
+                    delta=f"{_dp_stack_kpa:.2f} kPa  ·  {_dp_stack_mbar:.1f} mbar",
+                    delta_color="off",
                 )
 
-                # ── Velocity estimate (first segment, ID-ratio scaling) ────────
-                _seg0     = results_a["segments"][0]
-                _pn0      = _seg0["pn"]
-                _lined0   = _seg0.get("lined", False)
-                _lthk0_m  = _seg0.get("liner_thickness_mm", 1.0) / 1000.0
-                _D_p_bore = engine.PIPE_DATABASE[_dn_p_lbl].get(
-                    _pn0, list(engine.PIPE_DATABASE[_dn_p_lbl].values())[0])
-                _D_a_bore = engine.PIPE_DATABASE[_dn_a_lbl].get(
-                    _pn0, list(engine.PIPE_DATABASE[_dn_a_lbl].values())[0])
-                _D_p_eff  = _D_p_bore - 2 * _lthk0_m if _lined0 else _D_p_bore
-                _D_a_eff  = _D_a_bore - 2 * _lthk0_m if _lined0 else _D_a_bore
-                _vel_scale = (_D_p_eff / _D_a_eff) ** 2 if _D_a_eff > 0 else 1.0
+            st.markdown("##### System Pressure Breakdown")
+            with st.container(border=True):
+                _bk1, _bk2 = st.columns(2)
+                with _bk1:
+                    st.markdown(f"**{_la} system  ({_la} → {_lc} → Separator)**")
+                    st.metric(f"{_la} inlet",
+                              f"{_gsr_h2['P_line_in']:.4f} bara")
+                    st.metric(f"{_la} outlet / {_lc} inlet",
+                              f"{_gsr_h2['P_line_out']:.4f} bara",
+                              delta=f"{_la} ΔP = {_gsr_h2['dp_line']:.3f} kPa",
+                              delta_color="off")
+                    st.metric(f"{_la} Separator",
+                              f"{_gsr_h2['P_sep']:.4f} bara",
+                              delta=f"{_lc}+T ΔP = {_gsr_h2['dp_hdr']:.3f} kPa",
+                              delta_color="off")
+                with _bk2:
+                    st.markdown(f"**{_lb} system  ({_lb} → {_ld} → Separator)**")
+                    st.metric(f"{_lb} inlet",
+                              f"{_gsr_o2['P_line_in']:.4f} bara")
+                    st.metric(f"{_lb} outlet / {_ld} inlet",
+                              f"{_gsr_o2['P_line_out']:.4f} bara",
+                              delta=f"{_lb} ΔP = {_gsr_o2['dp_line']:.3f} kPa",
+                              delta_color="off")
+                    st.metric(f"{_lb} Separator",
+                              f"{_gsr_o2['P_sep']:.4f} bara",
+                              delta=f"{_ld}+T ΔP = {_gsr_o2['dp_hdr']:.3f} kPa",
+                              delta_color="off")
 
-                _rec_a0 = results_a["grid_records"][0] if results_a.get("grid_records") else {}
-                _rec_b0 = results_b["grid_records"][0] if results_b.get("grid_records") else {}
-                _vm_a_p = float(_rec_a0.get("V_m (m/s)", 0))
-                _vm_b_p = float(_rec_b0.get("V_m (m/s)", 0))
-                _ve_a   = float(_rec_a0.get("V_e (m/s)", 0))
-                _ve_b   = float(_rec_b0.get("V_e (m/s)", 0))
-                _vm_a_a = _vm_a_p * _vel_scale
-                _vm_b_a = _vm_b_p * _vel_scale
-                _ratio_a = _vm_a_a / _ve_a if _ve_a > 0 else 0.0
-                _ratio_b = _vm_b_a / _ve_b if _ve_b > 0 else 0.0
+            st.divider()
+            st.markdown("##### Apply Results to Cases")
+            st.caption(
+                "Write the required inlet pressures back into Case A and Case B "
+                "so the branch calculations reflect the goal-seek solution."
+            )
+            _ap1, _ap2 = st.columns(2)
+            if _ap1.button(
+                f"Apply {_p_in_a:.4f} bara → {_la}",
+                use_container_width=True, key="stack_apply_a",
+            ):
+                st.session_state["stack_apply_a_pending"] = float(_p_in_a)
+                st.rerun()
+            if _ap2.button(
+                f"Apply {_p_in_b:.4f} bara → {_lb}",
+                use_container_width=True, key="stack_apply_b",
+            ):
+                st.session_state["stack_apply_b_pending"] = float(_p_in_b)
+                st.rerun()
 
+        # ============================================================================
+        # DN STUDY (merged into Goal Seek tab)
+        # ============================================================================
+        st.divider()
+        st.subheader("DN Study — Branch Line Size Comparison")
+        st.caption(
+            "Re-runs the full system (branches A and B + goal-seek) with a different branch DN. "
+            "Header sizes are unchanged. All other inputs (flows, pressure, correlation) are identical."
+        )
+
+        _prereq_ok = (
+            results_a is not None and results_b is not None
+            and results_c is not None and results_d is not None
+        )
+        _gsr_ok = st.session_state.get("gs_mode_used") is not None
+
+        if not _prereq_ok:
+            st.warning("Run all four cases (A, B, C, D) before using DN Study.")
+        elif not _gsr_ok:
+            st.warning("Run the Goal Seek calculation above before using DN Study.")
+        else:
+            _dn_primary = results_a["segments"][0]["dn"] if results_a.get("segments") else "DN50"
+            _dn_all_opts = list(engine.PIPE_DATABASE.keys())
+            _dn_alt_opts = [dn for dn in _dn_all_opts if dn != _dn_primary]
+            _dn_default_idx = _dn_alt_opts.index("DN40") if "DN40" in _dn_alt_opts else 0
+
+            _inp_col, _res_col = st.columns([1, 2])
+
+            with _inp_col:
                 with st.container(border=True):
-                    st.markdown("**Inlet velocity — first segment (estimated)**")
-                    _vc1, _vc2 = st.columns(2)
-                    with _vc1:
-                        st.markdown(f"*{_la} branch*")
-                        st.metric(f"{_dn_p_lbl}", f"{_vm_a_p:.2f} m/s",
-                                  help=f"V_m/V_e = {_vm_a_p/_ve_a:.2f}" if _ve_a > 0 else None)
-                        _dc_a = "inverse" if _ratio_a > 1.0 else ("normal" if _ratio_a > 0.8 else "off")
-                        st.metric(f"{_dn_a_lbl}", f"{_vm_a_a:.2f} m/s",
-                                  delta=f"V_m/V_e = {_ratio_a:.2f}", delta_color=_dc_a)
-                    with _vc2:
-                        st.markdown(f"*{_lb} branch*")
-                        st.metric(f"{_dn_p_lbl}", f"{_vm_b_p:.2f} m/s",
-                                  help=f"V_m/V_e = {_vm_b_p/_ve_b:.2f}" if _ve_b > 0 else None)
-                        _dc_b = "inverse" if _ratio_b > 1.0 else ("normal" if _ratio_b > 0.8 else "off")
-                        st.metric(f"{_dn_a_lbl}", f"{_vm_b_a:.2f} m/s",
-                                  delta=f"V_m/V_e = {_ratio_b:.2f}", delta_color=_dc_b)
+                    st.markdown("**Study Settings**")
+                    dn_alt = st.selectbox(
+                        "Alternative branch DN", _dn_alt_opts,
+                        index=_dn_default_idx, key="dn_study_alt_sel"
+                    )
+                    _p_sep_h2_dn = st.session_state.get("stack_sep_h2", 16.5)
+                    _p_sep_o2_dn = st.session_state.get("stack_sep_o2", 16.5)
                     st.caption(
-                        f"Velocity scales as (ID ratio)²: "
-                        f"{_dn_p_lbl} {_D_p_eff*1000:.1f} mm → {_dn_a_lbl} {_D_a_eff*1000:.1f} mm  "
-                        f"·  factor {_vel_scale:.2f}×.  "
-                        f"Erosion limit V_e from primary case (API RP 14E, C = 100)."
+                        f"Separator targets (from Goal Seek above):  "
+                        f"{_la} {_p_sep_h2_dn:.2f} bara  ·  {_lb} {_p_sep_o2_dn:.2f} bara"
+                    )
+                    _run_dn_study = st.button(
+                        "Run DN Study", type="primary",
+                        use_container_width=True, key="dn_study_run"
                     )
 
-                # ── Flow Regime ───────────────────────────────────────────────
-                _reg_a_stored = st.session_state.get("dn_study_regimes_a", [])
-                _reg_b_stored = st.session_state.get("dn_study_regimes_b", [])
-                if _reg_a_stored or _reg_b_stored:
+            if _run_dn_study:
+                with st.spinner(f"Computing {_dn_primary} vs {dn_alt}…"):
+                    _ra_alt = _apply_dn_override(results_a, dn_alt)
+                    _rb_alt = _apply_dn_override(results_b, dn_alt)
+                    _gsr_h2_alt = _goal_seek_stack(_ra_alt, results_c, _p_sep_h2_dn)
+                    _gsr_o2_alt = _goal_seek_stack(_rb_alt, results_d, _p_sep_o2_dn)
+                    _reg_a_alt  = _calc_regimes_at_p(_ra_alt, _gsr_h2_alt["P_line_in"])
+                    _reg_b_alt  = _calc_regimes_at_p(_rb_alt, _gsr_o2_alt["P_line_in"])
+                st.session_state["dn_study_dn_primary"] = _dn_primary
+                st.session_state["dn_study_dn_alt"]     = dn_alt
+                st.session_state["dn_study_gsr_h2_alt"] = _gsr_h2_alt
+                st.session_state["dn_study_gsr_o2_alt"] = _gsr_o2_alt
+                st.session_state["dn_study_regimes_a"]  = _reg_a_alt
+                st.session_state["dn_study_regimes_b"]  = _reg_b_alt
+                st.rerun()
+
+            _gsr_h2_p = st.session_state.get("stack_gsr_h2")
+            _gsr_o2_p = st.session_state.get("stack_gsr_o2")
+            _gsr_h2_a = st.session_state.get("dn_study_gsr_h2_alt")
+            _gsr_o2_a = st.session_state.get("dn_study_gsr_o2_alt")
+            _dn_p_lbl = st.session_state.get("dn_study_dn_primary", _dn_primary)
+            _dn_a_lbl = st.session_state.get("dn_study_dn_alt", "")
+
+            if _gsr_h2_a and _gsr_o2_a and _dn_a_lbl:
+                with _res_col:
+                    # ── Generator ΔP ──────────────────────────────────────────────
+                    _dp_gen_p_mbar = (_gsr_h2_p["P_line_in"] - _gsr_o2_p["P_line_in"]) * 1000.0
+                    _dp_gen_a_mbar = (_gsr_h2_a["P_line_in"] - _gsr_o2_a["P_line_in"]) * 1000.0
+                    _dp_gen_delta  = _dp_gen_a_mbar - _dp_gen_p_mbar
+
                     with st.container(border=True):
-                        st.markdown("**Flow Regime by Segment**")
-                        _rr1, _rr2 = st.columns(2)
-                        with _rr1:
-                            st.caption(f"*{_la} branch*")
-                            _prim_a_recs = results_a.get("grid_records", [])
-                            _rrA = []
-                            for _ri, _ar in enumerate(_reg_a_stored):
-                                _pr = _prim_a_recs[_ri]["Regime"] if _ri < len(_prim_a_recs) else "—"
-                                _rrA.append({
-                                    "Seg":     _ar["seg"],
-                                    _dn_p_lbl: _pr,
-                                    _dn_a_lbl: _ar["regime"],
-                                    "Changed": "⚠" if _pr != _ar["regime"] else "✓",
-                                })
-                            st.dataframe(pd.DataFrame(_rrA), hide_index=True,
-                                         use_container_width=True)
-                        with _rr2:
-                            st.caption(f"*{_lb} branch*")
-                            _prim_b_recs = results_b.get("grid_records", [])
-                            _rrB = []
-                            for _ri, _br in enumerate(_reg_b_stored):
-                                _pr = _prim_b_recs[_ri]["Regime"] if _ri < len(_prim_b_recs) else "—"
-                                _rrB.append({
-                                    "Seg":     _br["seg"],
-                                    _dn_p_lbl: _pr,
-                                    _dn_a_lbl: _br["regime"],
-                                    "Changed": "⚠" if _pr != _br["regime"] else "✓",
-                                })
-                            st.dataframe(pd.DataFrame(_rrB), hide_index=True,
-                                         use_container_width=True)
+                        st.markdown("**Generator ΔP**")
+                        _gc1, _gc2, _gc3 = st.columns(3)
+                        _gc1.metric(f"{_dn_p_lbl} (primary)", f"{_dp_gen_p_mbar:.1f} mbar")
+                        _gc2.metric(
+                            f"{_dn_a_lbl} (alternative)",
+                            f"{_dp_gen_a_mbar:.1f} mbar",
+                            delta=f"{_dp_gen_delta:+.1f} mbar",
+                            delta_color="off",
+                        )
+                        _winner = _dn_p_lbl if abs(_dp_gen_p_mbar) <= abs(_dp_gen_a_mbar) else _dn_a_lbl
+                        _gc3.metric("Lower |ΔP|", _winner)
 
-                # ── Recommendation ────────────────────────────────────────────
-                _vel_ok        = _ratio_a <= 1.0 and _ratio_b <= 1.0
-                _dp_alt_better = abs(_dp_gen_a_mbar) < abs(_dp_gen_p_mbar)
-                if _dp_alt_better and _vel_ok:
-                    st.success(
-                        f"**{_dn_a_lbl}** gives lower Generator |ΔP| "
-                        f"({_dp_gen_a_mbar:.1f} vs {_dp_gen_p_mbar:.1f} mbar) "
-                        f"with acceptable velocities."
+                    # ── ΔP comparison table ───────────────────────────────────────
+                    _dp_rows = []
+                    for _case_lbl, _dp_p_kpa, _dp_a_kpa in [
+                        (f"{_la} branch", _gsr_h2_p["dp_line"], _gsr_h2_a["dp_line"]),
+                        (f"{_lb} branch", _gsr_o2_p["dp_line"], _gsr_o2_a["dp_line"]),
+                        (f"{_la} header", _gsr_h2_p["dp_hdr"],  _gsr_h2_a["dp_hdr"]),
+                        (f"{_lb} header", _gsr_o2_p["dp_hdr"],  _gsr_o2_a["dp_hdr"]),
+                    ]:
+                        _pct = ((_dp_a_kpa - _dp_p_kpa) / _dp_p_kpa * 100
+                                if _dp_p_kpa and abs(_dp_p_kpa) > 1e-9 else 0.0)
+                        _dp_rows.append({
+                            "Case":                      _case_lbl,
+                            f"{_dn_p_lbl} ΔP (kPa)":    round(_dp_p_kpa, 3),
+                            f"{_dn_a_lbl} ΔP (kPa)":    round(_dp_a_kpa, 3),
+                            "Change (%)":                f"{_pct:+.1f}",
+                        })
+                    st.dataframe(
+                        pd.DataFrame(_dp_rows),
+                        hide_index=True, use_container_width=True,
+                        column_config={
+                            f"{_dn_p_lbl} ΔP (kPa)": st.column_config.NumberColumn(format="%.3f"),
+                            f"{_dn_a_lbl} ΔP (kPa)": st.column_config.NumberColumn(format="%.3f"),
+                        }
                     )
-                elif _dp_alt_better and not _vel_ok:
+
+                    # ── Velocity estimate (first segment, ID-ratio scaling) ────────
+                    _seg0     = results_a["segments"][0]
+                    _pn0      = _seg0["pn"]
+                    _lined0   = _seg0.get("lined", False)
+                    _lthk0_m  = _seg0.get("liner_thickness_mm", 1.0) / 1000.0
+                    _D_p_bore = engine.PIPE_DATABASE[_dn_p_lbl].get(
+                        _pn0, list(engine.PIPE_DATABASE[_dn_p_lbl].values())[0])
+                    _D_a_bore = engine.PIPE_DATABASE[_dn_a_lbl].get(
+                        _pn0, list(engine.PIPE_DATABASE[_dn_a_lbl].values())[0])
+                    _D_p_eff  = _D_p_bore - 2 * _lthk0_m if _lined0 else _D_p_bore
+                    _D_a_eff  = _D_a_bore - 2 * _lthk0_m if _lined0 else _D_a_bore
+                    _vel_scale = (_D_p_eff / _D_a_eff) ** 2 if _D_a_eff > 0 else 1.0
+
+                    _rec_a0 = results_a["grid_records"][0] if results_a.get("grid_records") else {}
+                    _rec_b0 = results_b["grid_records"][0] if results_b.get("grid_records") else {}
+                    _vm_a_p = float(_rec_a0.get("V_m (m/s)", 0))
+                    _vm_b_p = float(_rec_b0.get("V_m (m/s)", 0))
+                    _ve_a   = float(_rec_a0.get("V_e (m/s)", 0))
+                    _ve_b   = float(_rec_b0.get("V_e (m/s)", 0))
+                    _vm_a_a = _vm_a_p * _vel_scale
+                    _vm_b_a = _vm_b_p * _vel_scale
+                    _ratio_a = _vm_a_a / _ve_a if _ve_a > 0 else 0.0
+                    _ratio_b = _vm_b_a / _ve_b if _ve_b > 0 else 0.0
+
+                    with st.container(border=True):
+                        st.markdown("**Inlet velocity — first segment (estimated)**")
+                        _vc1, _vc2 = st.columns(2)
+                        with _vc1:
+                            st.markdown(f"*{_la} branch*")
+                            st.metric(f"{_dn_p_lbl}", f"{_vm_a_p:.2f} m/s",
+                                      help=f"V_m/V_e = {_vm_a_p/_ve_a:.2f}" if _ve_a > 0 else None)
+                            _dc_a = "inverse" if _ratio_a > 1.0 else ("normal" if _ratio_a > 0.8 else "off")
+                            st.metric(f"{_dn_a_lbl}", f"{_vm_a_a:.2f} m/s",
+                                      delta=f"V_m/V_e = {_ratio_a:.2f}", delta_color=_dc_a)
+                        with _vc2:
+                            st.markdown(f"*{_lb} branch*")
+                            st.metric(f"{_dn_p_lbl}", f"{_vm_b_p:.2f} m/s",
+                                      help=f"V_m/V_e = {_vm_b_p/_ve_b:.2f}" if _ve_b > 0 else None)
+                            _dc_b = "inverse" if _ratio_b > 1.0 else ("normal" if _ratio_b > 0.8 else "off")
+                            st.metric(f"{_dn_a_lbl}", f"{_vm_b_a:.2f} m/s",
+                                      delta=f"V_m/V_e = {_ratio_b:.2f}", delta_color=_dc_b)
+                        st.caption(
+                            f"Velocity scales as (ID ratio)²: "
+                            f"{_dn_p_lbl} {_D_p_eff*1000:.1f} mm → {_dn_a_lbl} {_D_a_eff*1000:.1f} mm  "
+                            f"·  factor {_vel_scale:.2f}×.  "
+                            f"Erosion limit V_e from primary case (API RP 14E, C = 100)."
+                        )
+
+                    # ── Flow Regime ───────────────────────────────────────────────
+                    _reg_a_stored = st.session_state.get("dn_study_regimes_a", [])
+                    _reg_b_stored = st.session_state.get("dn_study_regimes_b", [])
+                    if _reg_a_stored or _reg_b_stored:
+                        with st.container(border=True):
+                            st.markdown("**Flow Regime by Segment**")
+                            _rr1, _rr2 = st.columns(2)
+                            with _rr1:
+                                st.caption(f"*{_la} branch*")
+                                _prim_a_recs = results_a.get("grid_records", [])
+                                _rrA = []
+                                for _ri, _ar in enumerate(_reg_a_stored):
+                                    _pr = _prim_a_recs[_ri]["Regime"] if _ri < len(_prim_a_recs) else "—"
+                                    _rrA.append({
+                                        "Seg":     _ar["seg"],
+                                        _dn_p_lbl: _pr,
+                                        _dn_a_lbl: _ar["regime"],
+                                        "Changed": "⚠" if _pr != _ar["regime"] else "✓",
+                                    })
+                                st.dataframe(pd.DataFrame(_rrA), hide_index=True,
+                                             use_container_width=True)
+                            with _rr2:
+                                st.caption(f"*{_lb} branch*")
+                                _prim_b_recs = results_b.get("grid_records", [])
+                                _rrB = []
+                                for _ri, _br in enumerate(_reg_b_stored):
+                                    _pr = _prim_b_recs[_ri]["Regime"] if _ri < len(_prim_b_recs) else "—"
+                                    _rrB.append({
+                                        "Seg":     _br["seg"],
+                                        _dn_p_lbl: _pr,
+                                        _dn_a_lbl: _br["regime"],
+                                        "Changed": "⚠" if _pr != _br["regime"] else "✓",
+                                    })
+                                st.dataframe(pd.DataFrame(_rrB), hide_index=True,
+                                             use_container_width=True)
+
+                    # ── Recommendation ────────────────────────────────────────────
+                    _vel_ok        = _ratio_a <= 1.0 and _ratio_b <= 1.0
+                    _dp_alt_better = abs(_dp_gen_a_mbar) < abs(_dp_gen_p_mbar)
+                    if _dp_alt_better and _vel_ok:
+                        st.success(
+                            f"**{_dn_a_lbl}** gives lower Generator |ΔP| "
+                            f"({_dp_gen_a_mbar:.1f} vs {_dp_gen_p_mbar:.1f} mbar) "
+                            f"with acceptable velocities."
+                        )
+                    elif _dp_alt_better and not _vel_ok:
+                        st.warning(
+                            f"**{_dn_a_lbl}** gives lower Generator |ΔP| but estimated "
+                            f"V_m/V_e exceeds 1.0 — verify erosion before selecting."
+                        )
+                    else:
+                        st.info(
+                            f"**{_dn_p_lbl}** (primary) gives lower Generator |ΔP|. "
+                            f"{_dn_a_lbl} appears undersized for this duty."
+                        )
+
+                    # ── Report ────────────────────────────────────────────────────
+                    st.divider()
+                    _dn_rpt_col1, _dn_rpt_col2 = st.columns(2)
+                    with _dn_rpt_col1:
+                        if st.button("Generate DN Study Report", use_container_width=True,
+                                     key="dn_study_gen_rpt"):
+                            try:
+                                _dn_buf = report_generator.generate_dn_study_report(
+                                    dn_primary=_dn_p_lbl,
+                                    dn_alt=_dn_a_lbl,
+                                    label_a=_la, label_b=_lb,
+                                    gsr_h2_primary=_gsr_h2_p,
+                                    gsr_o2_primary=_gsr_o2_p,
+                                    gsr_h2_alt=_gsr_h2_a,
+                                    gsr_o2_alt=_gsr_o2_a,
+                                    dp_gen_primary_mbar=_dp_gen_p_mbar,
+                                    dp_gen_alt_mbar=_dp_gen_a_mbar,
+                                    vel_data={
+                                        "vm_a_primary": _vm_a_p, "vm_b_primary": _vm_b_p,
+                                        "vm_a_alt":     _vm_a_a, "vm_b_alt":     _vm_b_a,
+                                        "ve_a":         _ve_a,   "ve_b":         _ve_b,
+                                        "D_p_mm":       _D_p_eff * 1000,
+                                        "D_a_mm":       _D_a_eff * 1000,
+                                        "vel_scale":    _vel_scale,
+                                    },
+                                    p_sep_h2=_p_sep_h2_dn,
+                                    p_sep_o2=_p_sep_o2_dn,
+                                )
+                                st.session_state["dn_study_rpt_bytes"] = _dn_buf.getvalue()
+                            except Exception as _re:
+                                st.error(f"Report failed: {_re}")
+                    with _dn_rpt_col2:
+                        if st.session_state.get("dn_study_rpt_bytes"):
+                            st.download_button(
+                                f"Download  {_dn_p_lbl}_vs_{_dn_a_lbl}.docx",
+                                data=st.session_state["dn_study_rpt_bytes"],
+                                file_name=f"dn_study_{_dn_p_lbl}_vs_{_dn_a_lbl}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True, key="dn_study_dl_rpt",
+                            )
+
+
+else:  # Engineering Tools
+    tab_fanno, tab_ro, tab_psv, tab_cv = st.tabs(["Fanno Flow", "RO", "PSV", "Control Valve"])
+
+    # =============================================================================
+    # Tab: Fanno Flow
+    # =============================================================================
+    with tab_fanno:
+        from plotly.subplots import make_subplots
+
+        st.markdown(
+            "Adiabatic compressible flow in a constant-area duct with friction. "
+            "Predicts whether friction chokes the flow and how far you are from the sonic limit."
+        )
+
+        with st.expander("When to use Fanno flow", expanded=False):
+            _fc1, _fc2 = st.columns(2)
+            with _fc1:
+                st.markdown(
+                    """
+    **Use Fanno flow when:**
+    - Single-phase **gas only** — no liquid present
+    - Flow is **adiabatic** (short or well-insulated duct)
+    - **Constant cross-section** — no fittings, valves, or reducers
+    - Inlet **Ma > 0.1** — at lower Ma use Darcy-Weisbach gas-only mode
+    - You need to check whether friction can **choke** the flow or how close you are
+    - Applications: high-velocity gas headers, relief headers, pneumatic conveying, instrument gas
+
+    **Typical services:** H₂, N₂, Air, O₂, natural gas at elevated pressure and high velocity (> 30 m/s).
+    """
+                )
+            with _fc2:
+                st.markdown(
+                    """
+    **Use Darcy-Weisbach (tabs A / B) instead when:**
+    - Ma < 0.1 — compressibility effects < 1 %
+    - **Two-phase** gas–liquid flow
+    - Piping with **fittings, valves, reducers** — use equivalent-length D-W
+    - **Non-ideal gas** at high pressure (Pr > 0.5) — ideal-gas assumption breaks down
+    - Very long pipelines where **isothermal** flow is more representative
+
+    **Fanno vs. isothermal D-W:** agree within ~5 % for Ma < 0.3; Fanno required above Ma = 0.3.
+    """
+                )
+
+        st.divider()
+
+        _fl, _fr = st.columns([1, 1.6], gap="large")
+
+        with _fl:
+            st.subheader("Inputs")
+
+            st.markdown("**Gas**")
+            _fn_species = st.selectbox("Species", list(fanno.GASES.keys()), index=0, key="fn_species")
+            _fn_mw0, _fn_g0, _ = fanno.GASES[_fn_species]
+            if _fn_species == "Custom":
+                _fnc1, _fnc2 = st.columns(2)
+                _fn_mw_gmol = _fnc1.number_input("MW (g/mol)", value=28.0, min_value=1.0, max_value=300.0, step=0.5, key="fn_mw")
+                _fn_gamma   = _fnc2.number_input("γ (Cp/Cv)", value=1.40, min_value=1.01, max_value=1.80, step=0.01, format="%.3f", key="fn_gamma")
+                _fn_mw = _fn_mw_gmol / 1000.0
+            else:
+                _fn_mw    = _fn_mw0
+                _fn_gamma = _fn_g0
+                st.caption(f"MW = {_fn_mw*1000:.3f} g/mol  |  γ = {_fn_gamma:.3f}")
+
+            st.markdown("**Inlet conditions (static)**")
+            _fnc1, _fnc2 = st.columns(2)
+            _fn_P1_bara = _fnc1.number_input("Pressure (bara)", value=5.0, min_value=0.1, max_value=500.0, step=0.5, format="%.2f", key="fn_P1")
+            _fn_T1_C    = _fnc2.number_input("Temperature (°C)", value=20.0, min_value=-50.0, max_value=500.0, step=1.0, format="%.1f", key="fn_T1")
+
+            st.markdown("**Flow rate**")
+            _fn_mdot_kgh = st.number_input("Mass flow rate (kg/h)", value=100.0, min_value=0.01, max_value=1e6, step=10.0, format="%.2f", key="fn_mdot")
+
+            st.markdown("**Pipe**")
+            _fnc1, _fnc2 = st.columns(2)
+            _fn_dn = _fnc1.selectbox("DN", list(engine.PIPE_DATABASE.keys()), index=4, key="fn_dn")
+            _fn_pn = _fnc2.selectbox("PN", ["PN20", "PN25", "PN40"], index=0, key="fn_pn")
+            _fn_D_m = engine.PIPE_DATABASE[_fn_dn][_fn_pn]
+
+            _fnc1, _fnc2 = st.columns(2)
+            _fn_mat   = _fnc1.selectbox("Material", list(engine.MATERIAL_ROUGHNESS.keys()), index=0, key="fn_mat")
+            _fn_liner = _fnc2.selectbox("Liner", ["None"] + list(engine.LINER_ROUGHNESS.keys()), index=0, key="fn_liner")
+            _fn_rough = engine.LINER_ROUGHNESS[_fn_liner] if _fn_liner != "None" else engine.MATERIAL_ROUGHNESS[_fn_mat]
+
+            _fn_L_m = st.number_input("Pipe length (m)", value=50.0, min_value=0.1, max_value=10000.0, step=5.0, format="%.1f", key="fn_L")
+
+            _fn_run = st.button("Calculate", type="primary", use_container_width=True, key="fn_run")
+
+        with _fr:
+            st.subheader("Results")
+
+            if not _fn_run:
+                st.info("Set inputs and press **Calculate**.")
+            else:
+                try:
+                    _fn_res = fanno.fanno_solve(
+                        P1_Pa      = _fn_P1_bara * 1e5,
+                        T1_K       = _fn_T1_C + 273.15,
+                        mdot_kgs   = _fn_mdot_kgh / 3600.0,
+                        D_m        = _fn_D_m,
+                        L_m        = _fn_L_m,
+                        roughness_m= _fn_rough,
+                        MW_kgmol   = _fn_mw,
+                        gamma      = _fn_gamma,
+                        species    = _fn_species,
+                    )
+                except Exception as _fn_exc:
+                    st.error(f"Solver error: {_fn_exc}")
+                    st.stop()
+
+                _fn_Ma1 = _fn_res["Ma1"]
+                _fn_Ma2 = _fn_res["Ma2"]
+
+                # Warnings
+                if _fn_res["choked"]:
+                    st.error(
+                        f"**Choked flow** — pipe length ({_fn_L_m:.1f} m) exceeds critical length "
+                        f"L\* = {_fn_res['L_star_m']:.1f} m. Throughput is limited. "
+                        "Reduce pipe length, increase diameter, or reduce mass flow rate."
+                    )
+                elif _fn_res["margin_pct"] < 20.0:
                     st.warning(
-                        f"**{_dn_a_lbl}** gives lower Generator |ΔP| but estimated "
-                        f"V_m/V_e exceeds 1.0 — verify erosion before selecting."
+                        f"Near-choked: {_fn_res['margin_pct']:.1f} % margin to choking "
+                        f"(L\* = {_fn_res['L_star_m']:.1f} m)."
+                    )
+
+                if _fn_Ma1 < 0.1:
+                    st.warning(
+                        f"Inlet Ma = {_fn_Ma1:.4f} < 0.1. Use the gas-only Darcy-Weisbach mode in tabs A / B."
+                    )
+                elif _fn_Ma1 < 0.3:
+                    st.info(f"Inlet Ma = {_fn_Ma1:.3f} (0.1–0.3). Fanno and isothermal D-W agree within ~5 %.")
+
+                if _fn_Ma1 > 1.0:
+                    st.info(
+                        f"Supersonic inlet (Ma = {_fn_Ma1:.3f}). Friction decelerates toward Ma = 1. "
+                        "Verify that the inlet is truly supersonic."
+                    )
+
+                # Key metrics
+                _fm1, _fm2, _fm3, _fm4, _fm5 = st.columns(5)
+                _fm1.metric("Ma₁ (inlet)",    f"{_fn_Ma1:.4f}")
+                _fm2.metric("Ma₂ (exit)",     f"{_fn_Ma2:.4f}")
+                _fm3.metric("ΔP static",      f"{_fn_res['dP_static_kPa']:.2f} kPa")
+                _fm4.metric("ΔP stagnation",  f"{_fn_res['dP_stag_kPa']:.2f} kPa")
+                _fm5.metric("L / L*",
+                    f"{_fn_L_m / _fn_res['L_star_m'] * 100:.1f} %" if _fn_res['L_star_m'] > 0 else "∞")
+
+                # Condition tables
+                _ft1, _ft2 = st.columns(2)
+                with _ft1:
+                    st.markdown("**Inlet**")
+                    st.table({
+                        "Property": ["P static (bara)", "T static (°C)", "P₀ (bara)", "V (m/s)", "a (m/s)", "Ma", "Re", "f (Churchill)"],
+                        "Value": [
+                            f"{_fn_res['P1_bara']:.4f}",
+                            f"{_fn_res['T1_K'] - 273.15:.2f}",
+                            f"{_fn_res['P01_bara']:.4f}",
+                            f"{_fn_res['V1_ms']:.2f}",
+                            f"{_fn_res['a1_ms']:.2f}",
+                            f"{_fn_Ma1:.5f}",
+                            f"{_fn_res['Re1']:.2e}",
+                            f"{_fn_res['f1']:.5f}",
+                        ],
+                    })
+                with _ft2:
+                    st.markdown("**Exit**")
+                    st.table({
+                        "Property": ["P static (bara)", "T static (°C)", "P₀ (bara)", "V (m/s)", "a (m/s)", "Ma", "L* (m)", "Margin to choke"],
+                        "Value": [
+                            f"{_fn_res['P2_bara']:.4f}",
+                            f"{_fn_res['T2_K'] - 273.15:.2f}",
+                            f"{_fn_res['P02_bara']:.4f}",
+                            f"{_fn_res['V2_ms']:.2f}",
+                            f"{_fn_res['a2_ms']:.2f}",
+                            f"{_fn_Ma2:.5f}",
+                            f"{_fn_res['L_star_m']:.2f}",
+                            f"{_fn_res['margin_pct']:.1f} %" if not _fn_res['choked'] else "CHOKED",
+                        ],
+                    })
+
+                # Charts
+                _fn_x  = _fn_res["x_arr"]
+                _fn_Ma = _fn_res["Ma_arr"]
+                _fn_P  = _fn_res["P_arr_bara"]
+                _fn_T  = _fn_res["T_arr_K"] - 273.15
+                _fn_P0 = _fn_res["P0_arr_bara"]
+                _fn_V  = _fn_res["V_arr_ms"]
+
+                _fig1 = make_subplots(specs=[[{"secondary_y": True}]])
+                _fig1.add_trace(go.Scatter(x=_fn_x, y=_fn_P,  name="P static (bara)",       line=dict(color="#2563eb", width=2)),         secondary_y=False)
+                _fig1.add_trace(go.Scatter(x=_fn_x, y=_fn_P0, name="P₀ stagnation (bara)",  line=dict(color="#2563eb", width=1.5, dash="dash")), secondary_y=False)
+                _fig1.add_trace(go.Scatter(x=_fn_x, y=_fn_T,  name="T static (°C)",         line=dict(color="#dc2626", width=2)),         secondary_y=True)
+                _fig1.update_xaxes(title_text="Distance from inlet (m)")
+                _fig1.update_yaxes(title_text="Pressure (bara)", secondary_y=False)
+                _fig1.update_yaxes(title_text="Temperature (°C)", secondary_y=True)
+                _fig1.update_layout(title="Pressure and Temperature Profile",
+                                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                                    margin=dict(t=60, b=40), height=320)
+                st.plotly_chart(_fig1, use_container_width=True)
+
+                _fig2 = go.Figure()
+                _fig2.add_trace(go.Scatter(x=_fn_x, y=_fn_Ma, name="Ma", line=dict(color="#16a34a", width=2.5)))
+                _fig2.add_hline(y=1.0, line_dash="dot", line_color="gray", annotation_text="Ma = 1 (sonic)")
+                if not _fn_res["choked"]:
+                    _fig2.add_vline(x=_fn_res["L_star_m"], line_dash="dash", line_color="orange",
+                                    annotation_text=f"L* = {_fn_res['L_star_m']:.1f} m",
+                                    annotation_position="top right")
+                _fig2.update_xaxes(title_text="Distance from inlet (m)")
+                _fig2.update_yaxes(title_text="Mach number (−)")
+                _fig2.update_layout(title="Mach Number Profile", margin=dict(t=60, b=40), height=280)
+                st.plotly_chart(_fig2, use_container_width=True)
+
+                _fig3 = go.Figure()
+                _fig3.add_trace(go.Scatter(x=_fn_x, y=_fn_V, name="Velocity (m/s)", line=dict(color="#7c3aed", width=2)))
+                _fig3.update_xaxes(title_text="Distance from inlet (m)")
+                _fig3.update_yaxes(title_text="Velocity (m/s)")
+                _fig3.update_layout(title="Velocity Profile", margin=dict(t=60, b=40), height=240)
+                st.plotly_chart(_fig3, use_container_width=True)
+
+                with st.expander("Assumptions and limitations"):
+                    st.markdown(f"""
+    - **Ideal gas**: ρ = P·MW/(Rᵤ·T). Non-ideal effects (Z ≠ 1) ignored; accuracy degrades above Pr ≈ 0.5.
+    - **Adiabatic duct**: no heat transfer. Heat exchange shifts the critical length vs. this prediction.
+    - **Constant cross-section**: fittings, reducers, and valves not modelled.
+    - **Friction factor** by Churchill (1977) at inlet Re = {_fn_res['Re1']:.2e}, held constant along duct.
+    - **γ = {_fn_gamma:.3f}, MW = {_fn_mw*1000:.3f} g/mol** constant (calorically perfect gas).
+    - Stagnation enthalpy conserved (adiabatic); stagnation temperature T₀ is constant.
+    - Supersonic inlet results assume the inlet is truly supersonic; upstream shock structure not checked.
+    """)
+
+    # =============================================================================
+    # Tab: Restriction Orifice (RO)
+    # =============================================================================
+    with tab_ro:
+        st.markdown(
+            "Single-phase restriction orifice sizing and rating — "
+            "gas (compressible, choke detection) and liquid (cavitation check). "
+            "ISO 5167-2 discharge coefficient · API 520 critical flow · IEC 60534 cavitation index."
+        )
+
+        # ── Top controls ──────────────────────────────────────────────────────────
+        _ro_c1, _ro_c2 = st.columns(2)
+        _ro_mode = _ro_c1.radio("Fluid", ["Gas", "Liquid"], horizontal=True, key="ro_mode")
+        _ro_dir  = _ro_c2.radio("Calculation", ["Size bore  (flow → bore)", "Rate bore  (bore → flow)"], horizontal=True, key="ro_dir")
+        _ro_size_mode = _ro_dir.startswith("Size")
+
+        st.divider()
+        _ro_left, _ro_right = st.columns([1, 1.6], gap="large")
+
+        # ── Inputs ────────────────────────────────────────────────────────────────
+        with _ro_left:
+            st.subheader("Inputs")
+
+            # Pressures (common to both modes)
+            _rc1, _rc2 = st.columns(2)
+            _ro_P1 = _rc1.number_input("P₁ upstream (bara)", value=10.0, min_value=0.01, max_value=1000.0, step=0.5, format="%.2f", key="ro_P1")
+            _ro_P2 = _rc2.number_input("P₂ downstream (bara)", value=5.0, min_value=0.01, max_value=1000.0, step=0.5, format="%.2f", key="ro_P2")
+
+            if _ro_P2 >= _ro_P1:
+                st.warning("P₂ must be less than P₁.")
+
+            # Pipe selector (common)
+            st.markdown("**Pipe (upstream)**")
+            _rc1, _rc2 = st.columns(2)
+            _ro_dn  = _rc1.selectbox("DN", list(engine.PIPE_DATABASE.keys()), index=4, key="ro_dn")
+            _ro_pn  = _rc2.selectbox("PN", ["PN20", "PN25", "PN40"], index=0, key="ro_pn")
+            _ro_D_m = engine.PIPE_DATABASE[_ro_dn][_ro_pn]
+            st.caption(f"Pipe ID = {_ro_D_m*1000:.1f} mm")
+
+            # ── Gas-specific inputs ────────────────────────────────────────────
+            if _ro_mode == "Gas":
+                st.markdown("**Gas**")
+                _ro_species = st.selectbox("Species", list(ro.GASES.keys()), index=0, key="ro_species")
+                _ro_mw0, _ro_g0, _ = ro.GASES[_ro_species]
+                if _ro_species == "Custom":
+                    _rc1, _rc2 = st.columns(2)
+                    _ro_mw_gmol = _rc1.number_input("MW (g/mol)", value=28.0, min_value=1.0, max_value=300.0, key="ro_mw")
+                    _ro_gamma   = _rc2.number_input("γ", value=1.40, min_value=1.01, max_value=1.80, format="%.3f", key="ro_gamma")
+                    _ro_mw = _ro_mw_gmol / 1000.0
+                else:
+                    _ro_mw, _ro_gamma = _ro_mw0, _ro_g0
+                    st.caption(f"MW = {_ro_mw*1000:.3f} g/mol  |  γ = {_ro_gamma:.3f}")
+
+                _ro_T1 = st.number_input("T₁ (°C)", value=20.0, min_value=-50.0, max_value=500.0, step=1.0, format="%.1f", key="ro_T1")
+
+                if _ro_size_mode:
+                    _ro_mdot_kgh = st.number_input("Mass flow (kg/h)", value=500.0, min_value=0.01, max_value=1e6, step=10.0, format="%.1f", key="ro_mdot")
+                else:
+                    _ro_d_mm = st.number_input("Orifice bore d (mm)", value=15.0, min_value=1.0, max_value=_ro_D_m*990, step=0.5, format="%.1f", key="ro_d")
+
+            # ── Liquid-specific inputs ─────────────────────────────────────────
+            else:
+                st.markdown("**Liquid**")
+                _ro_cp_fluids = list(engine.LIQUID_COOLPROP_ID.keys())
+                _ro_liq_opts  = _ro_cp_fluids + ["KOH solution"] + ["Custom"]
+                _ro_liq_type  = st.selectbox("Fluid", _ro_liq_opts, index=0, key="ro_liq_type")
+
+                if _ro_liq_type == "KOH solution":
+                    _ro_T_liq = st.number_input("Temperature (°C)", value=40.0,
+                                                 min_value=10.0, max_value=90.0,
+                                                 step=1.0, format="%.1f", key="ro_T_liq_koh")
+                    _ro_koh_conc = st.slider("Concentration (wt%)", min_value=5, max_value=40,
+                                              value=30, step=5, key="ro_koh_conc",
+                                              help="Gilliam et al. 2007 correlation; valid 0–40 wt%, 10–90 °C.")
+                    _ro_lp  = ro.koh_liquid_properties(_ro_T_liq, float(_ro_koh_conc))
+                    _ro_rho = _ro_lp["rho_kgm3"]
+                    _ro_mu  = _ro_lp["mu_pas"]
+                    _ro_Pv  = _ro_lp["Pv_Pa"]
+                    st.caption(
+                        f"ρ = {_ro_rho:.1f} kg/m³  |  μ = {_ro_mu*1e3:.3f} cP  |  "
+                        f"Pᵥ = {_ro_Pv/1e5:.5f} bara  (water activity {1-ro._KOH_ACTIVITY_SLOPE*_ro_koh_conc:.3f})"
+                    )
+                elif _ro_liq_type != "Custom":
+                    _ro_cp_id  = engine.LIQUID_COOLPROP_ID[_ro_liq_type]
+                    _ro_T_liq  = st.number_input("Temperature (°C)", value=20.0,
+                                                  min_value=-200.0, max_value=500.0,
+                                                  step=1.0, format="%.1f", key="ro_T_liq")
+                    try:
+                        _ro_lp = ro.liquid_properties(_ro_cp_id, _ro_T_liq, _ro_P1 * 1e5)
+                        _ro_rho = _ro_lp["rho_kgm3"]
+                        _ro_mu  = _ro_lp["mu_pas"]
+                        _ro_Pv  = _ro_lp["Pv_Pa"]
+                        _pv_str = f"{_ro_Pv/1e5:.4f}" if _ro_Pv > 0 else "N/A (above Tᶜ)"
+                        st.caption(f"ρ = {_ro_rho:.1f} kg/m³  |  μ = {_ro_mu*1e3:.4f} cP  |  Pᵥ = {_pv_str} bara")
+                        if _ro_Pv > 0 and _ro_Pv > _ro_P1 * 1e5:
+                            st.warning(
+                                f"Pᵥ ({_ro_Pv/1e5:.2f} bara) > P₁ ({_ro_P1:.2f} bara) — "
+                                f"**{_ro_liq_type} is a vapour at these conditions.** "
+                                "Raise P₁ above Pᵥ, or lower the temperature."
+                            )
+                    except Exception as _lp_err:
+                        st.error(f"CoolProp error: {_lp_err}")
+                        _ro_rho, _ro_mu, _ro_Pv = 1000.0, 1e-3, 0.0
+                else:
+                    _rc1, _rc2, _rc3 = st.columns(3)
+                    _ro_rho = _rc1.number_input("ρ (kg/m³)",  value=998.0, min_value=1.0,  max_value=3000.0, step=1.0,   format="%.1f",  key="ro_rho")
+                    _ro_mu  = _rc2.number_input("μ (cP)",     value=1.0,   min_value=0.001, max_value=1e5,   step=0.1,   format="%.3f",  key="ro_mu") * 1e-3
+                    _ro_Pv  = _rc3.number_input("Pᵥ (bara)",  value=0.023, min_value=0.0,   max_value=_ro_P1, step=0.001, format="%.4f", key="ro_Pv") * 1e5
+
+                if _ro_size_mode:
+                    _ro_mdot_kgh = st.number_input("Mass flow (kg/h)", value=50.0, min_value=0.01, max_value=1e6, step=1.0, format="%.2f", key="ro_mdot_liq")
+                else:
+                    _ro_d_mm = st.number_input("Orifice bore d (mm)", value=15.0, min_value=1.0, max_value=_ro_D_m*990, step=0.5, format="%.1f", key="ro_d_liq")
+
+            _ro_run = st.button("Calculate", type="primary", use_container_width=True, key="ro_run")
+
+        # ── Results ───────────────────────────────────────────────────────────────
+        with _ro_right:
+            st.subheader("Results")
+
+            if not _ro_run or _ro_P2 >= _ro_P1:
+                st.info("Set inputs and press **Calculate**.")
+            else:
+                try:
+                    if _ro_mode == "Gas":
+                        if _ro_size_mode:
+                            _ro_res = ro.ro_gas_size(
+                                _ro_P1*1e5, _ro_P2*1e5, _ro_T1+273.15,
+                                _ro_mw, _ro_gamma, _ro_species,
+                                _ro_mdot_kgh/3600.0, _ro_D_m,
+                            )
+                            _ro_d_result = _ro_res["d_m"] * 1000
+                            _ro_flow_kgh = _ro_mdot_kgh
+                        else:
+                            _ro_res = ro.ro_gas_rate(
+                                _ro_P1*1e5, _ro_P2*1e5, _ro_T1+273.15,
+                                _ro_mw, _ro_gamma, _ro_species,
+                                _ro_d_mm/1000.0, _ro_D_m,
+                            )
+                            _ro_d_result = _ro_d_mm
+                            _ro_flow_kgh = _ro_res["mdot_kgs"] * 3600.0
+                    else:
+                        if _ro_size_mode:
+                            _ro_res = ro.ro_liquid_size(
+                                _ro_P1*1e5, _ro_P2*1e5,
+                                _ro_rho, _ro_mu, _ro_Pv,
+                                _ro_mdot_kgh/3600.0, _ro_D_m,
+                            )
+                            _ro_d_result = _ro_res["d_m"] * 1000
+                            _ro_flow_kgh = _ro_mdot_kgh
+                        else:
+                            _ro_res = ro.ro_liquid_rate(
+                                _ro_P1*1e5, _ro_P2*1e5,
+                                _ro_rho, _ro_mu, _ro_Pv,
+                                _ro_d_mm/1000.0, _ro_D_m,
+                            )
+                            _ro_d_result = _ro_d_mm
+                            _ro_flow_kgh = _ro_res["mdot_kgs"] * 3600.0
+
+                except Exception as _ro_exc:
+                    st.error(f"Solver error: {_ro_exc}")
+                    st.stop()
+
+                # ── Warnings ──────────────────────────────────────────────────
+                if _ro_mode == "Gas":
+                    _ro_r_c = _ro_res["r_c"]
+                    if _ro_res["choked"]:
+                        st.error(
+                            f"**Single-stage choked** — P₂/P₁ = {_ro_P2/_ro_P1:.3f} ≤ r_c = {_ro_r_c:.3f}. "
+                            "The single orifice operates at critical (sonic) flow. "
+                            "See multi-stage recommendation below."
+                        )
+                    elif _ro_res["Ma_throat"] > 0.85:
+                        st.warning(
+                            f"High throat Mach number (Ma = {_ro_res['Ma_throat']:.3f}). "
+                            "Choking margin is narrow; noise and erosion risk."
+                        )
+                    if _ro_res["beta"] < 0.10:
+                        st.warning(f"β = {_ro_res['beta']:.3f} < 0.10 — outside ISO 5167 validity. Cd uncertainty ↑.")
+                    elif _ro_res["beta"] > 0.75:
+                        st.warning(f"β = {_ro_res['beta']:.3f} > 0.75 — outside ISO 5167 validity. Consider larger pipe.")
+                else:
+                    _ro_Kc = _ro_res["Kc"]
+                    if _ro_res["choked"]:
+                        st.error("**Liquid choke** — P₂ ≤ Pᵥ. Fluid will flash. Use multi-stage.")
+                    elif _ro_res.get("cavitation_severe"):
+                        st.error(
+                            f"**Severe cavitation** — Kc = {_ro_Kc:.2f} ≥ {ro.KC_SEVERE}. "
+                            "Heavy erosion risk. Multi-stage strongly recommended."
+                        )
+                    elif _ro_res["cavitating"]:
+                        st.warning(
+                            f"**Incipient cavitation** — Kc = {_ro_Kc:.2f} ≥ {ro.KC_INCIPIENT}. "
+                            "Noise and surface erosion risk. Consider multi-stage."
+                        )
+
+                # ── Key metrics ────────────────────────────────────────────────
+                _rm1, _rm2, _rm3, _rm4 = st.columns(4)
+                _rm1.metric("Bore d", f"{_ro_d_result:.2f} mm")
+                _rm2.metric("β = d/D", f"{_ro_res['beta']:.4f}")
+                _rm3.metric("C (ISO 5167)", f"{_ro_res['C']:.4f}")
+                _rm4.metric("Flow", f"{_ro_flow_kgh:.1f} kg/h")
+
+                if _ro_mode == "Gas":
+                    _rm5, _rm6, _rm7, _rm8 = st.columns(4)
+                    _rm5.metric("Ma throat", f"{_ro_res['Ma_throat']:.4f}")
+                    _rm6.metric("ε (expansion)", f"{_ro_res['eps']:.4f}" if not _ro_res['choked'] else "N/A (choked)")
+                    _rm7.metric("ρ₁ (kg/m³)", f"{_ro_res['rho1_kgm3']:.3f}")
+                    _rm8.metric("Re_D", f"{_ro_res['Re_D']:.2e}")
+                else:
+                    _rm5, _rm6 = st.columns(2)
+                    _rm5.metric("Kc (cavitation)", f"{_ro_res['Kc']:.3f}" if _ro_res['Kc'] != float('inf') else "∞")
+                    _rm6.metric("Re_D", f"{_ro_res['Re_D']:.2e}")
+
+                # ── Multi-stage section ────────────────────────────────────────
+                st.divider()
+                st.markdown("#### Multi-stage analysis")
+
+                if _ro_mode == "Gas":
+                    _ms = ro.multistage_gas(
+                        _ro_P1*1e5, _ro_P2*1e5, _ro_T1+273.15,
+                        _ro_mw, _ro_gamma, _ro_species,
+                        _ro_flow_kgh/3600.0, _ro_D_m,
+                    )
+                    if _ms["N"] == 1:
+                        st.success(
+                            f"Single stage is adequate — P₂/P₁ = {_ro_P2/_ro_P1:.3f} > "
+                            f"r_c × 0.90 = {_ms['r_c_design']:.3f}."
+                        )
+                    else:
+                        st.info(
+                            f"**{_ms['N']} stages** recommended — each stage ratio "
+                            f"{_ms['r_stage']:.3f} > r_c×0.90 = {_ms['r_c_design']:.3f}."
+                        )
+
+                    import pandas as pd
+                    _ms_df = pd.DataFrame([{
+                        "Stage": s["stage"],
+                        "P_in (bara)":  f"{s['P_in_bara']:.3f}",
+                        "P_out (bara)": f"{s['P_out_bara']:.3f}",
+                        "ΔP (bar)":     f"{s['dP_bar']:.3f}",
+                        "Bore (mm)":    f"{s['d_mm']:.2f}",
+                        "β":            f"{s['beta']:.4f}",
+                        "C":            f"{s['C']:.4f}",
+                        "ε":            f"{s['eps']:.4f}",
+                        "Ma throat":    f"{s['Ma_throat']:.4f}",
+                    } for s in _ms["stages"]])
+                    st.dataframe(_ms_df, use_container_width=True, hide_index=True)
+
+                else:
+                    _ms = ro.multistage_liquid(
+                        _ro_P1*1e5, _ro_P2*1e5,
+                        _ro_rho, _ro_mu, _ro_Pv,
+                        _ro_flow_kgh/3600.0, _ro_D_m,
+                    )
+                    if _ms["N"] == 1:
+                        st.success(
+                            f"Single stage is adequate — Kc = {_ms['Kc_single']:.3f} < "
+                            f"limit {_ms['kc_limit']:.2f}."
+                        )
+                    else:
+                        st.info(
+                            f"**{_ms['N']} stages** recommended — single-stage "
+                            f"Kc = {_ms['Kc_single']:.2f} ≥ limit {_ms['kc_limit']:.2f}."
+                        )
+
+                    import pandas as pd
+                    _ms_df = pd.DataFrame([{
+                        "Stage":        s["stage"],
+                        "P_in (bara)":  f"{s['P_in_bara']:.3f}",
+                        "P_out (bara)": f"{s['P_out_bara']:.3f}",
+                        "ΔP (bar)":     f"{s['dP_bar']:.3f}",
+                        "Bore (mm)":    f"{s['d_mm']:.2f}",
+                        "β":            f"{s['beta']:.4f}",
+                        "C":            f"{s['C']:.4f}",
+                        "Kc":           f"{s['Kc']:.4f}",
+                    } for s in _ms["stages"]])
+                    st.dataframe(_ms_df, use_container_width=True, hide_index=True)
+
+                # ── Pressure profile chart ─────────────────────────────────────
+                _P_sched = _ms["P_schedule_bara"]
+                _stages_x = []
+                _stages_y = []
+                for _i, (_pin, _pout) in enumerate(zip(_P_sched[:-1], _P_sched[1:])):
+                    _stages_x += [_i, _i, _i + 1, _i + 1]
+                    _stages_y += [None, _pin, _pout, None]
+
+                _pfig = go.Figure()
+                _pfig.add_trace(go.Scatter(
+                    x=list(range(len(_P_sched))),
+                    y=_P_sched,
+                    mode="markers+lines",
+                    marker=dict(size=10, color="#2563eb"),
+                    line=dict(color="#2563eb", width=2, dash="dot"),
+                    name="Stage boundary pressure",
+                ))
+                # Horizontal spans per stage
+                for _i, _stg in enumerate(_ms["stages"]):
+                    _pfig.add_shape(
+                        type="rect",
+                        x0=_i, x1=_i + 1,
+                        y0=_stg["P_out_bara"], y1=_stg["P_in_bara"],
+                        fillcolor="#DBEAFE", opacity=0.3, line_width=0,
+                    )
+                if _ro_P2 / _ro_P1 <= ro.critical_pressure_ratio(_ro_gamma if _ro_mode == "Gas" else 1.4):
+                    _pfig.add_hline(y=_ro_P1 * ro.critical_pressure_ratio(_ro_gamma if _ro_mode == "Gas" else 1.4),
+                                    line_dash="dot", line_color="red",
+                                    annotation_text="choke limit (single stage)")
+                _pfig.update_xaxes(
+                    title_text="Stage number",
+                    tickvals=list(range(len(_P_sched))),
+                    ticktext=[f"Inlet"] + [f"After S{k+1}" for k in range(len(_P_sched)-1)],
+                )
+                _pfig.update_yaxes(title_text="Pressure (bara)")
+                _pfig.update_layout(
+                    title="Pressure Drop Distribution Across Stages",
+                    margin=dict(t=50, b=40), height=320,
+                    showlegend=False,
+                )
+                st.plotly_chart(_pfig, use_container_width=True)
+
+                with st.expander("Assumptions and references"):
+                    st.markdown(f"""
+    **Discharge coefficient C** — ISO 5167-2:2022, Reader-Harris/Gallagher equation, corner taps.
+    Valid for β ∈ [0.10, 0.75], Re_D ≥ 5 000. Outside this range: C = 0.60 (conservative default).
+
+    **Expansion factor ε** — ISO 5167-2:2022, corner-tap formula.
+    Not applicable above the critical pressure ratio (choked gas).
+
+    **Choked gas flow** — API RP 520 Pt I / isentropic critical-flow formula.
+    r_c = (2/(γ+1))^(γ/(γ−1)) = **{ro.critical_pressure_ratio(_ro_gamma if _ro_mode == "Gas" else 1.4):.4f}** for the selected gas.
+    Multi-stage gas: equal pressure-ratio per stage with 10 % choking margin.
+
+    **Cavitation index** — IEC 60534-2 convention: Kc = ΔP / (P₁ − Pᵥ).
+    Incipient: Kc ≥ {ro.KC_INCIPIENT:.2f} | Severe: Kc ≥ {ro.KC_SEVERE:.2f} | Choke: P₂ ≤ Pᵥ.
+    Multi-stage liquid: equal ΔP per stage; minimum N so last-stage Kc < {ro.KC_INCIPIENT:.2f}.
+
+    **Bore tolerance** — standard orifice bore tolerance per ASME B16.36 / ISO 5167 is typically ±0.05 mm.
+    Round calculated bore to nearest 0.5 mm (or preferred drill size) before ordering.
+    """)
+
+    # =============================================================================
+    # Tab: PSV — API 520 Part I / API 526
+    # =============================================================================
+    with tab_psv:
+        st.markdown(
+            "Pressure Safety Valve sizing per **API 520 Part I** (SI). "
+            "Standard orifice selection per **API 526**."
+        )
+
+        _psv_c1, _psv_c2 = st.columns([1, 2], gap="large")
+
+        with _psv_c1:
+            st.markdown("**SERVICE**")
+            _psv_service = st.selectbox(
+                "Service type", ["Gas / Vapour", "Steam", "Liquid"], key="psv_service"
+            )
+            _psv_type = st.selectbox(
+                "PSV type",
+                ["Conventional (spring-loaded)", "Balanced bellows", "Pilot-operated"],
+                key="psv_type",
+            )
+
+            st.markdown("**INLET CONDITIONS**")
+            _psv_Pset_barg = st.number_input(
+                "Set pressure (barg)", value=10.0, min_value=0.1, step=0.5, key="psv_Pset"
+            )
+            _psv_op_pct = st.number_input(
+                "Allowable overpressure (%)", value=10.0, min_value=1.0, max_value=21.0,
+                step=1.0, key="psv_op_pct",
+                help="10 % normal fire case; 21 % for fire + ASME Sec VIII.",
+            )
+            _psv_Patm_bara = st.number_input(
+                "Atmospheric pressure (bara)", value=1.01325, step=0.005, key="psv_Patm",
+                format="%.4f",
+            )
+            _psv_Pback_barg = st.number_input(
+                "Back pressure (barg)", value=0.0, min_value=0.0, step=0.5, key="psv_Pback"
+            )
+            _psv_T_C = st.number_input(
+                "Relieving temperature (°C)", value=50.0, step=5.0, key="psv_T_C"
+            )
+
+            # Derived pressures
+            _psv_P1_bara = _psv_Pset_barg * (1.0 + _psv_op_pct / 100.0) + _psv_Patm_bara
+            _psv_P1_kPa  = _psv_P1_bara * 100.0
+            _psv_Pback_kPa = _psv_Pback_barg * 100.0 + _psv_Patm_bara * 100.0
+            _psv_T1_K    = _psv_T_C + 273.15
+
+            st.caption(
+                f"Relieving pressure P₁ = {_psv_P1_bara:.3f} bara = {_psv_P1_kPa:.1f} kPa abs"
+            )
+
+            st.markdown("**REQUIRED RELIEF RATE**")
+            if _psv_service != "Liquid":
+                _psv_W_kgh = st.number_input(
+                    "Mass flow (kg/h)", value=1000.0, min_value=0.1, step=100.0, key="psv_W"
+                )
+                _psv_Q_m3h = None
+            else:
+                _psv_Q_m3h = st.number_input(
+                    "Volumetric flow (m³/h)", value=10.0, min_value=0.001, step=1.0, key="psv_Q"
+                )
+                _psv_W_kgh = None
+
+            st.markdown("**CORRECTIONS**")
+            _psv_rupture_disc = st.checkbox(
+                "Rupture disc in series upstream",
+                value=False, key="psv_disc",
+                help="Applies Kc = 0.9 per API 520 §4.7",
+            )
+            _psv_Kc = psv.KC_DISC if _psv_rupture_disc else psv.KC_NONE
+
+        # ── Fluid properties (right side top) ──────────────────────────────────
+        with _psv_c2:
+            if _psv_service == "Gas / Vapour":
+                st.markdown("**GAS PROPERTIES**")
+                _psv_species = st.selectbox(
+                    "Species", list(fanno.GASES.keys()), key="psv_species"
+                )
+                _psv_cp_name   = fanno.GASES[_psv_species][2]   # CoolProp ID or None
+                _psv_MW_kgmol  = fanno.GASES[_psv_species][0]   # kg/mol or None
+                _psv_gam_table = fanno.GASES[_psv_species][1]   # table γ or None
+
+                if _psv_cp_name is not None:
+                    # Known species: fetch γ and Z from CoolProp at relieving conditions
+                    _psv_MW    = (_psv_MW_kgmol * 1000.0) if _psv_MW_kgmol else 28.97
+                    _psv_gamma = _psv_gam_table or 1.40
+                    _psv_Z     = 1.0
+                    try:
+                        import CoolProp.CoolProp as CP
+                        _P_Pa_psv = _psv_P1_kPa * 1000.0
+                        _Cp_v = CP.PropsSI("C", "T", _psv_T1_K, "P", _P_Pa_psv, _psv_cp_name)
+                        _Cv_v = CP.PropsSI("O", "T", _psv_T1_K, "P", _P_Pa_psv, _psv_cp_name)
+                        if _Cv_v > 0:
+                            _psv_gamma = _Cp_v / _Cv_v
+                        _rho_v = CP.PropsSI("D", "T", _psv_T1_K, "P", _P_Pa_psv, _psv_cp_name)
+                        _psv_Z = _P_Pa_psv * _psv_MW / (_rho_v * 8314.46 * _psv_T1_K)
+                        st.caption(
+                            f"CoolProp at {_psv_T1_K-273.15:.0f} °C, {_psv_P1_kPa/100:.3f} bara — "
+                            f"γ = {_psv_gamma:.4f}  |  Z = {_psv_Z:.4f}  |  MW = {_psv_MW:.3f} kg/kmol"
+                        )
+                    except Exception as _cp_err:
+                        st.caption(
+                            f"CoolProp unavailable ({_cp_err}) — using table: "
+                            f"γ = {_psv_gamma:.4f}, Z = 1.0"
+                        )
+                else:
+                    # Custom gas: manual inputs
+                    _cg1, _cg2, _cg3 = st.columns(3)
+                    _psv_MW    = _cg1.number_input("MW (kg/kmol)", value=28.97, min_value=1.0, step=0.5, key="psv_MW")
+                    _psv_gamma = _cg2.number_input("γ (Cp/Cv)", value=1.40, min_value=1.01, max_value=2.0, step=0.01, key="psv_gamma")
+                    _psv_Z     = _cg3.number_input("Z", value=1.0, min_value=0.1, max_value=2.0, step=0.01, key="psv_Z")
+
+                # Backpressure correction
+                if "Conventional" in _psv_type:
+                    _psv_Kb = psv.kb_conventional(_psv_Pback_kPa, _psv_P1_kPa)
+                elif "Balanced" in _psv_type:
+                    _psv_Kb = psv.kb_balanced_bellows(_psv_Pback_kPa, _psv_P1_kPa, _psv_gamma)
+                else:
+                    _psv_Kb = psv.kb_pilot(_psv_Pback_kPa, _psv_P1_kPa)
+
+                _psv_res = psv.psv_gas_size(
+                    _psv_W_kgh, _psv_P1_kPa, _psv_T1_K, _psv_MW, _psv_gamma,
+                    Kb=_psv_Kb, Kc=_psv_Kc, Z=_psv_Z,
+                )
+
+            elif _psv_service == "Steam":
+                st.markdown("**STEAM PROPERTIES** — via CoolProp")
+                st.caption("γ and Z are computed from CoolProp at the relieving conditions.")
+                _psv_Z = 1.0
+
+                if "Conventional" in _psv_type:
+                    _psv_Kb = psv.kb_conventional(_psv_Pback_kPa, _psv_P1_kPa)
+                elif "Balanced" in _psv_type:
+                    _psv_Kb = psv.kb_balanced_bellows(_psv_Pback_kPa, _psv_P1_kPa, 1.33)
+                else:
+                    _psv_Kb = psv.kb_pilot(_psv_Pback_kPa, _psv_P1_kPa)
+
+                _psv_res = psv.psv_steam_size(
+                    _psv_W_kgh, _psv_P1_kPa, _psv_T1_K,
+                    Kb=_psv_Kb, Kc=_psv_Kc,
+                )
+                for _note in _psv_res.get("notes", []):
+                    if _note.startswith("UNPHYSICAL"):
+                        st.error(_note)
+                    else:
+                        st.caption(_note)
+                _psv_gamma = _psv_res.get("gamma", 1.33)
+                _psv_MW    = _psv_res.get("MW", 18.015)
+
+            else:  # Liquid
+                st.markdown("**LIQUID PROPERTIES**")
+                _liq_opts = list(engine.LIQUID_COOLPROP_ID.keys()) + ["KOH solution"] + ["Custom"]
+                _liq_pick = st.selectbox("Fluid", _liq_opts, key="psv_liq_fluid")
+
+                _ll1, _ll2, _ll3 = st.columns(3)
+                if _liq_pick == "KOH solution":
+                    _psv_koh_conc = st.slider("Concentration (wt%)", min_value=5, max_value=40,
+                                               value=30, step=5, key="psv_koh_conc",
+                                               help="Valid 0–40 wt%, 10–90 °C (Gilliam et al. 2007)")
+                    _liq_props = ro.koh_liquid_properties(_psv_T_C, float(_psv_koh_conc))
+                    _rho_def   = _liq_props["rho_kgm3"]
+                    _mu_cP_def = _liq_props["mu_pas"] * 1e3
+                    st.caption(
+                        f"ρ = {_rho_def:.1f} kg/m³  |  μ = {_mu_cP_def:.3f} cP  |  "
+                        f"Pᵥ = {_liq_props['Pv_Pa']/1e5:.5f} bara"
+                    )
+                elif _liq_pick != "Custom":
+                    _liq_cp_id = engine.LIQUID_COOLPROP_ID[_liq_pick]
+                    try:
+                        _liq_props = ro.liquid_properties(_liq_cp_id, _psv_T_C, _psv_P1_bara * 1e5)
+                        _rho_def   = _liq_props["rho_kgm3"]
+                        _mu_cP_def = _liq_props["mu_pas"] * 1e3
+                    except Exception:
+                        _rho_def, _mu_cP_def = 1000.0, 1.0
+                else:
+                    _rho_def, _mu_cP_def = 1000.0, 1.0
+
+                with _ll1:
+                    _psv_rho = st.number_input(
+                        "Density (kg/m³)", value=round(_rho_def, 2), min_value=1.0,
+                        step=10.0, key="psv_rho"
+                    )
+                with _ll2:
+                    _psv_mu_cP = st.number_input(
+                        "Viscosity (cP)", value=round(_mu_cP_def, 3), min_value=0.001,
+                        step=0.1, key="psv_mu"
+                    )
+                with _ll3:
+                    _psv_Kw = 1.0 if "Conventional" in _psv_type else st.number_input(
+                        "Kw (back-pressure)", value=1.0, min_value=0.5, max_value=1.0,
+                        step=0.01, key="psv_Kw"
+                    )
+
+                _psv_P2_liq_kPa = _psv_Pback_kPa
+
+                _psv_res = psv.psv_liquid_size(
+                    _psv_Q_m3h, _psv_P1_kPa, _psv_P2_liq_kPa,
+                    _psv_rho, _psv_mu_cP, Kw=_psv_Kw, Kc=_psv_Kc,
+                )
+                _psv_gamma = None
+                _psv_MW    = None
+                _psv_Kb    = _psv_Kw
+
+            # ── Warnings ────────────────────────────────────────────────────────
+            _bp_pct = psv.backpressure_pct(_psv_Pback_kPa, _psv_P1_kPa)
+            if "Conventional" in _psv_type and _bp_pct > 10.0:
+                st.warning(
+                    f"Back pressure = {_bp_pct:.1f}% of relieving pressure P₁. "
+                    "API 520 recommends consulting the valve vendor above 10% for conventional valves."
+                )
+            if "Balanced" in _psv_type and _bp_pct > 30.0:
+                st.warning(
+                    f"Back pressure = {_bp_pct:.1f}% of P₁. Kb correction applied. "
+                    "Verify with valve vendor for back pressure > 30%."
+                )
+            if _psv_res["orifice_letter"] == "T+":
+                st.error(
+                    "Required area exceeds the largest API 526 standard orifice (T = 16 774 mm²). "
+                    "Consider multiple PSVs in parallel or a non-standard design."
+                )
+
+            # Back-pressure subcritical warning for gas/steam
+            if _psv_service in ("Gas / Vapour", "Steam") and _psv_gamma:
+                _r_c = (2.0 / (_psv_gamma + 1.0)) ** (_psv_gamma / (_psv_gamma - 1.0))
+                if _psv_Pback_kPa / _psv_P1_kPa > _r_c:
+                    st.warning(
+                        f"Back pressure ratio {_psv_Pback_kPa/_psv_P1_kPa:.3f} > critical ratio "
+                        f"{_r_c:.4f} — flow may be subcritical at the nozzle. "
+                        "Contact valve vendor for subcritical-flow rated capacity."
+                    )
+
+            # ── Results ─────────────────────────────────────────────────────────
+            st.divider()
+            st.subheader("Sizing Results")
+
+            _rc1, _rc2, _rc3, _rc4 = st.columns(4)
+            _rc1.metric("Required area", f"{_psv_res['A_req_mm2']:.1f} mm²")
+            _rc2.metric("API 526 orifice", _psv_res["orifice_letter"])
+            _rc3.metric("Orifice area", f"{_psv_res['orifice_area_mm2']:.1f} mm²"
+                        if _psv_res["orifice_area_mm2"] < math.inf else "N/A")
+            _area_margin = (
+                (_psv_res["orifice_area_mm2"] / _psv_res["A_req_mm2"] - 1.0) * 100.0
+                if _psv_res["orifice_area_mm2"] < math.inf and _psv_res["A_req_mm2"] > 0
+                else 0.0
+            )
+            _rc4.metric("Area margin", f"+{_area_margin:.1f}%")
+
+            # ── Flange row ───────────────────────────────────────────────────────
+            _flange = psv.flange_nps(_psv_res["orifice_letter"])
+            if _flange:
+                _in_nps, _out_nps = _flange
+                _in_dn,  _out_dn  = psv.nps_to_dn(_in_nps), psv.nps_to_dn(_out_nps)
+                _fl_class = psv.min_flange_class(_psv_P1_bara)
+                _rfl1, _rfl2, _rfl3, _rfl4 = st.columns(4)
+                _rfl1.metric("Inlet flange",
+                             f"NPS {_in_nps:g}\" / DN {_in_dn}")
+                _rfl2.metric("Outlet flange",
+                             f"NPS {_out_nps:g}\" / DN {_out_dn}")
+                _rfl3.metric("Min. flange class",
+                             f"ASME {_fl_class} lb",
+                             help="ASME B16.5 Group 1.1 CS at 38 °C. Class 300 is the "
+                                  "industry minimum for PSV inlets per API 526.")
+                _rfl4.metric("Orifice designation",
+                             f"{_in_nps:g}\" × {_out_nps:g}\" – {_psv_res['orifice_letter']}")
+
+            # Rated capacity row
+            if _psv_service in ("Gas / Vapour", "Steam") and "capacity_selected_kgh" in _psv_res:
+                _rcap1, _rcap2, _rcap3, _rcap4 = st.columns(4)
+                _rcap1.metric("Rated capacity", f"{_psv_res['capacity_selected_kgh']:.0f} kg/h")
+                _rcap2.metric("Required flow",  f"{_psv_W_kgh:.0f} kg/h")
+                _rcap3.metric("C coefficient",  f"{_psv_res['C_coeff']:.5f}")
+                _rcap4.metric("Kb",             f"{_psv_res['Kb']:.3f}")
+            elif _psv_service == "Liquid" and "capacity_selected_m3h" in _psv_res:
+                _rcap1, _rcap2, _rcap3, _rcap4 = st.columns(4)
+                _rcap1.metric("Rated capacity", f"{_psv_res['capacity_selected_m3h']:.2f} m³/h")
+                _rcap2.metric("Required flow",  f"{_psv_Q_m3h:.2f} m³/h")
+                _rcap3.metric("Kv (viscosity)", f"{_psv_res['Kv']:.4f}")
+                _rcap4.metric("Re_v",           f"{_psv_res['Re_v']:.0f}")
+
+            # Correction factors table
+            st.markdown("**Correction factors applied**")
+            _kfactors = {
+                "Factor": ["Kd (discharge)", "Kb (back pressure)", "Kc (comb. disc)"],
+                "Value":  [
+                    f"{_psv_res['Kd']:.3f}",
+                    f"{_psv_res.get('Kb', _psv_res.get('Kw', 1.0)):.3f}",
+                    f"{_psv_res['Kc']:.3f}",
+                ],
+                "Source": [
+                    "API 520 Table 5",
+                    "API 520 §3.3 / PSV type",
+                    "API 520 §4.7",
+                ],
+            }
+            if _psv_service == "Liquid":
+                _kfactors["Factor"].append("Kw (back pressure)")
+                _kfactors["Value"].append(f"{_psv_res['Kw']:.3f}")
+                _kfactors["Source"].append("API 520 §3.5")
+            st.dataframe(pd.DataFrame(_kfactors), use_container_width=True, hide_index=True)
+
+            # Standard orifice table with flange sizes
+            st.markdown("**API 526 standard orifice and flange sizes**")
+            _orifice_rows = []
+            for _letter, _area in psv.API526_ORIFICES.items():
+                _fn = psv.flange_nps(_letter)
+                _in_str  = f"NPS {_fn[0]:g}\" (DN {psv.nps_to_dn(_fn[0])})" if _fn else "—"
+                _out_str = f"NPS {_fn[1]:g}\" (DN {psv.nps_to_dn(_fn[1])})" if _fn else "—"
+                _orifice_rows.append({
+                    "Letter": _letter,
+                    "Eff. area (mm²)": f"{_area:.1f}",
+                    "Inlet flange": _in_str,
+                    "Outlet flange": _out_str,
+                    "": "✓" if _letter == _psv_res["orifice_letter"] else "",
+                })
+            st.dataframe(pd.DataFrame(_orifice_rows), use_container_width=True, hide_index=True)
+
+            with st.expander("Assumptions and references"):
+                st.markdown(f"""
+    **API 520 Part I** (SI, 10th Ed.) — PSV sizing for gas/vapour, steam, and liquid service.
+
+    **API 526** (7th Ed.) — standard effective orifice areas (D through T). Effective area is
+    derated from the curtain area; actual installed orifice will be larger.
+
+    **Gas / vapour formula** — API 520 Eq. (3):
+    A = W / (C · Kd · P₁ · Kb · Kc) · √(T·Z/M)
+    with C = 0.03948·√(γ·(2/(γ+1))^((γ+1)/(γ−1))) = **{psv.c_gas(_psv_gamma if _psv_gamma else 1.4):.5f}** for the selected gas.
+
+    **Liquid formula** — derived from Bernoulli (API 520 Eq. (12)):
+    A = (Q/3600) / (Kd · Kw · Kc · Kv · √(2·ρ·ΔP))
+
+    **Viscosity correction Kv** — API 520 Figure 13:
+    Kv = 1/(0.9935 + 2.878/R^0.5 + 342.75/R^1.5), R = 17 900·W/(μ·√A).
+    Kv ≈ 1.0 for R ≥ 10 000 (typical light-to-medium liquids).
+
+    **Backpressure Kb (conventional)** — Kb = 1.0 (nozzle remains choked).
+    Limit: back pressure ≤ 10% of set pressure before contacting vendor.
+
+    **Backpressure Kb (balanced bellows)** — API 520 Figure 31 conservative curve-fit.
+    Kb = 1.0 when back pressure ≤ critical ratio; linear decay above.
+
+    **Overpressure allowance** — 10% for non-fire; 21% for fire case (API 520 §3.1 / ASME Sec VIII-1).
+    """)
+
+    # =========================================================================
+    # Tab: Control Valve — IEC 60534-2-1
+    # =========================================================================
+    with tab_cv:
+        st.markdown(
+            "Control valve sizing per **IEC 60534-2-1** (≡ ISA 75.01.01). "
+            "Calculates the required flow coefficient Kv / Cv and recommends a valve body size."
+        )
+
+        _cv_col_in, _cv_col_out = st.columns([1, 2], gap="large")
+
+        with _cv_col_in:
+            st.markdown("**SERVICE**")
+            _cv_service = st.selectbox(
+                "Service type", ["Liquid", "Gas / Vapour", "Steam"], key="cv_service"
+            )
+
+            st.markdown("**VALVE TYPE**")
+            _cv_vtype = st.selectbox(
+                "Valve type", list(cv.VALVE_TYPES.keys()), key="cv_vtype"
+            )
+            _vt = cv.VALVE_TYPES[_cv_vtype]
+            _vt_col1, _vt_col2 = st.columns(2)
+            with _vt_col1:
+                _cv_FL = st.number_input(
+                    "FL (pressure recovery)",
+                    value=float(_vt["FL"]) if _vt["FL"] else 0.90,
+                    min_value=0.1, max_value=1.0, step=0.01, format="%.2f",
+                    key="cv_FL",
+                    help="Liquid pressure recovery factor — vendor datasheet preferred.",
+                )
+            with _vt_col2:
+                _cv_xT = st.number_input(
+                    "xT (choked ΔP ratio)",
+                    value=float(_vt["xT"]) if _vt["xT"] else 0.72,
+                    min_value=0.1, max_value=1.0, step=0.01, format="%.2f",
+                    key="cv_xT",
+                    help="Gas pressure drop ratio at choked flow — vendor datasheet preferred.",
+                )
+
+            st.markdown("**CONDITIONS**")
+            _cv_P1 = st.number_input(
+                "Upstream pressure P₁ (bara)", value=10.0, min_value=0.1,
+                step=0.5, key="cv_P1"
+            )
+            _cv_P2 = st.number_input(
+                "Downstream pressure P₂ (bara)", value=8.0, min_value=0.0,
+                max_value=_cv_P1, step=0.5, key="cv_P2"
+            )
+            _cv_T_C = st.number_input(
+                "Temperature (°C)", value=20.0, step=5.0, key="cv_T_C"
+            )
+            _cv_T1_K = _cv_T_C + 273.15
+            _cv_dP   = _cv_P1 - _cv_P2
+            st.caption(f"ΔP = {_cv_dP:.3f} bar  |  ΔP/P₁ = {_cv_dP/_cv_P1:.3f}")
+
+            st.markdown("**PIPING CORRECTION**")
+            _cv_FP = st.number_input(
+                "FP (piping geometry factor)", value=1.0,
+                min_value=0.5, max_value=1.0, step=0.01, format="%.3f",
+                key="cv_FP",
+                help="1.0 for no reducers. Compute per IEC 60534-2-3 when pipe ≠ valve size.",
+            )
+
+        # ── Fluid and flow rate (right column) ───────────────────────────────
+        with _cv_col_out:
+            if _cv_service == "Liquid":
+                st.markdown("**LIQUID PROPERTIES**")
+                _cv_liq_opts = list(engine.LIQUID_COOLPROP_ID.keys()) + ["KOH solution", "Custom"]
+                _cv_liq = st.selectbox("Fluid", _cv_liq_opts, key="cv_liq")
+
+                _cv_T_liq = _cv_T_C   # shared temperature
+
+                if _cv_liq == "KOH solution":
+                    _cv_koh_conc = st.slider(
+                        "Concentration (wt%)", 5, 40, 30, 5, key="cv_koh_conc"
+                    )
+                    _lp = ro.koh_liquid_properties(_cv_T_liq, float(_cv_koh_conc))
+                    _cv_rho = _lp["rho_kgm3"]
+                    _cv_mu  = _lp["mu_pas"]
+                    _cv_Pv  = _lp["Pv_Pa"]
+                    _cv_Pc  = 0.0  # no critical pressure for mixture
+                    st.caption(f"ρ = {_cv_rho:.1f} kg/m³  |  μ = {_cv_mu*1e3:.3f} cP  |  Pᵥ = {_cv_Pv/1e5:.5f} bara")
+                elif _cv_liq != "Custom":
+                    _cv_cp_id = engine.LIQUID_COOLPROP_ID[_cv_liq]
+                    try:
+                        _lp = ro.liquid_properties(_cv_cp_id, _cv_T_liq, _cv_P1 * 1e5)
+                        _cv_rho = _lp["rho_kgm3"]
+                        _cv_mu  = _lp["mu_pas"]
+                        _cv_Pv  = _lp["Pv_Pa"]
+                        _cv_Pc  = cv.critical_pressure(_cv_cp_id)
+                        st.caption(
+                            f"ρ = {_cv_rho:.1f} kg/m³  |  μ = {_cv_mu*1e3:.4f} cP  |  "
+                            f"Pᵥ = {_cv_Pv/1e5:.5f} bara  |  Pc = {_cv_Pc/1e5:.1f} bara"
+                        )
+                    except Exception as _e:
+                        st.error(f"CoolProp: {_e}")
+                        _cv_rho, _cv_mu, _cv_Pv, _cv_Pc = 1000.0, 1e-3, 0.0, 0.0
+                else:
+                    _cvc1, _cvc2, _cvc3 = st.columns(3)
+                    _cv_rho = _cvc1.number_input("ρ (kg/m³)",  value=1000.0, min_value=1.0,  step=10.0,  key="cv_rho")
+                    _cv_mu  = _cvc2.number_input("μ (cP)",     value=1.0,    min_value=0.001, step=0.1,  key="cv_mu") * 1e-3
+                    _cv_Pv  = _cvc3.number_input("Pᵥ (bara)",  value=0.023,  min_value=0.0,  step=0.001, key="cv_Pv",  format="%.4f") * 1e5
+                    _cv_Pc  = st.number_input("Pc (bara, crit.)", value=220.6, min_value=0.0, step=1.0, key="cv_Pc") * 1e5
+
+                st.markdown("**FLOW RATE**")
+                _cv_liq_flow_mode = st.radio(
+                    "Input as", ["Volumetric (m³/h)", "Mass (kg/h)"],
+                    horizontal=True, key="cv_liq_flow_mode"
+                )
+                if _cv_liq_flow_mode == "Volumetric (m³/h)":
+                    _cv_Q_m3h = st.number_input(
+                        "Flow rate (m³/h)", value=10.0, min_value=0.0001, step=1.0, key="cv_Q_liq"
                     )
                 else:
-                    st.info(
-                        f"**{_dn_p_lbl}** (primary) gives lower Generator |ΔP|. "
-                        f"{_dn_a_lbl} appears undersized for this duty."
+                    _cv_W_kgh_liq = st.number_input(
+                        "Mass flow (kg/h)", value=10_000.0, min_value=0.001, step=100.0, key="cv_W_liq"
+                    )
+                    _cv_Q_m3h = _cv_W_kgh_liq / _cv_rho if _cv_rho > 0 else 0.0
+
+                _cv_res = cv.cv_liquid_size(
+                    _cv_Q_m3h, _cv_P1 * 1e5, _cv_P2 * 1e5,
+                    _cv_rho, _cv_Pv, _cv_Pc, _cv_FL, _cv_FP,
+                )
+
+            elif _cv_service == "Gas / Vapour":
+                st.markdown("**GAS PROPERTIES**")
+                _gp1, _gp2 = st.columns(2)
+                with _gp1:
+                    _cv_species = st.selectbox(
+                        "Species", list(fanno.GASES.keys()), key="cv_gas_species"
+                    )
+                _cv_MW_def  = fanno.GASES[_cv_species][0]
+                _cv_gam_def = fanno.GASES[_cv_species][1]
+                with _gp2:
+                    _cv_Z = st.number_input(
+                        "Compressibility Z", value=1.0, min_value=0.1, max_value=2.0,
+                        step=0.01, key="cv_Z"
+                    )
+                _gp3, _gp4 = st.columns(2)
+                with _gp3:
+                    _cv_MW = st.number_input(
+                        "MW (kg/kmol)",
+                        value=float(_cv_MW_def) * 1000.0 if _cv_MW_def else 28.97,
+                        min_value=1.0, step=0.5, key="cv_MW"
+                    )
+                with _gp4:
+                    _cv_gamma = st.number_input(
+                        "γ (Cp/Cv)",
+                        value=float(_cv_gam_def) if _cv_gam_def else 1.40,
+                        min_value=1.01, max_value=2.0, step=0.01, key="cv_gamma"
                     )
 
-                # ── Report ────────────────────────────────────────────────────
-                st.divider()
-                _dn_rpt_col1, _dn_rpt_col2 = st.columns(2)
-                with _dn_rpt_col1:
-                    if st.button("Generate DN Study Report", use_container_width=True,
-                                 key="dn_study_gen_rpt"):
-                        try:
-                            _dn_buf = report_generator.generate_dn_study_report(
-                                dn_primary=_dn_p_lbl,
-                                dn_alt=_dn_a_lbl,
-                                label_a=_la, label_b=_lb,
-                                gsr_h2_primary=_gsr_h2_p,
-                                gsr_o2_primary=_gsr_o2_p,
-                                gsr_h2_alt=_gsr_h2_a,
-                                gsr_o2_alt=_gsr_o2_a,
-                                dp_gen_primary_mbar=_dp_gen_p_mbar,
-                                dp_gen_alt_mbar=_dp_gen_a_mbar,
-                                vel_data={
-                                    "vm_a_primary": _vm_a_p, "vm_b_primary": _vm_b_p,
-                                    "vm_a_alt":     _vm_a_a, "vm_b_alt":     _vm_b_a,
-                                    "ve_a":         _ve_a,   "ve_b":         _ve_b,
-                                    "D_p_mm":       _D_p_eff * 1000,
-                                    "D_a_mm":       _D_a_eff * 1000,
-                                    "vel_scale":    _vel_scale,
-                                },
-                                p_sep_h2=_p_sep_h2_dn,
-                                p_sep_o2=_p_sep_o2_dn,
-                            )
-                            st.session_state["dn_study_rpt_bytes"] = _dn_buf.getvalue()
-                        except Exception as _re:
-                            st.error(f"Report failed: {_re}")
-                with _dn_rpt_col2:
-                    if st.session_state.get("dn_study_rpt_bytes"):
-                        st.download_button(
-                            f"Download  {_dn_p_lbl}_vs_{_dn_a_lbl}.docx",
-                            data=st.session_state["dn_study_rpt_bytes"],
-                            file_name=f"dn_study_{_dn_p_lbl}_vs_{_dn_a_lbl}.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            use_container_width=True, key="dn_study_dl_rpt",
-                        )
+                st.markdown("**FLOW RATE**")
+                _cv_gas_flow_mode = st.radio(
+                    "Input as", ["Mass flow (kg/h)", "Normal volumetric (Nm³/h)"],
+                    horizontal=True, key="cv_gas_flow_mode"
+                )
+                if _cv_gas_flow_mode == "Mass flow (kg/h)":
+                    _cv_W_kgh = st.number_input(
+                        "Mass flow (kg/h)", value=1000.0, min_value=0.001, step=100.0, key="cv_W_gas"
+                    )
+                else:
+                    _cv_Qn = st.number_input(
+                        "Normal flow (Nm³/h)", value=5000.0, min_value=0.001, step=100.0, key="cv_Qn"
+                    )
+                    _cv_W_kgh = cv.nm3h_to_kgh(_cv_Qn, _cv_MW, _cv_Z)
+                    st.caption(f"≡ {_cv_W_kgh:.1f} kg/h at MW = {_cv_MW:.2f} kg/kmol")
+
+                _cv_res = cv.cv_gas_size(
+                    _cv_W_kgh, _cv_P1 * 1e5, _cv_P2 * 1e5, _cv_T1_K,
+                    _cv_MW, _cv_gamma, _cv_Z, _cv_xT, _cv_FP,
+                )
+
+            else:  # Steam
+                st.markdown("**STEAM PROPERTIES** — from CoolProp at relieving conditions")
+
+                st.markdown("**FLOW RATE**")
+                _cv_W_steam = st.number_input(
+                    "Mass flow (kg/h)", value=1000.0, min_value=0.001, step=100.0, key="cv_W_steam"
+                )
+
+                _cv_res = cv.cv_steam_size(
+                    _cv_W_steam, _cv_P1 * 1e5, _cv_P2 * 1e5, _cv_T1_K, _cv_xT, _cv_FP,
+                )
+                for _note in _cv_res.get("notes", []):
+                    if _note.startswith("UNPHYSICAL"):
+                        st.error(_note)
+                    else:
+                        st.caption(_note)
+
+            # ── Results ───────────────────────────────────────────────────────
+            st.divider()
+            st.subheader("Sizing Results")
+
+            _kv  = _cv_res["Kv_req"]
+            _cv_ = _cv_res["Cv_req"]
+
+            _r1, _r2, _r3, _r4 = st.columns(4)
+            _r1.metric("Kv required", f"{_kv:.2f} m³/h/√bar")
+            _r2.metric("Cv required", f"{_cv_:.2f} USgpm/√psi")
+            _r3.metric("ΔP actual",   f"{_cv_res['dP_bar']:.3f} bar")
+
+            if _cv_service == "Liquid":
+                _dp_chok = _cv_res["dP_choked_bar"]
+                _r4.metric(
+                    "ΔP choked",
+                    f"{_dp_chok:.3f} bar" if _dp_chok < math.inf else "∞ (no Pᵥ data)"
+                )
+            else:
+                _r4.metric("x / xT", f"{_cv_res['x']:.3f} / {_cv_res['x_choked']:.3f}")
+
+            # Flow status row
+            _s1, _s2, _s3, _s4 = st.columns(4)
+            if _cv_service == "Liquid":
+                _s1.metric("Ff (crit. press. ratio)", f"{_cv_res['Ff']:.4f}")
+                _s2.metric("FL", f"{_cv_res['FL']:.3f}")
+                _sig = _cv_res["sigma"]
+                _s3.metric("σ (cavitation index)", f"{_sig:.3f}" if _sig < 1e6 else "∞")
+                _s4.metric("FP (piping)", f"{_cv_res['FP']:.3f}")
+            else:
+                _s1.metric("Y (expansion factor)", f"{_cv_res['Y']:.4f}")
+                _s2.metric("Fγ", f"{_cv_res['Fgamma']:.3f}")
+                _s3.metric("ρ₁", f"{_cv_res['rho1_kgm3']:.3f} kg/m³")
+                _s4.metric("FP (piping)", f"{_cv_res['FP']:.3f}")
+
+            # Warnings
+            if _cv_service == "Liquid":
+                if _cv_res["choked"]:
+                    st.warning(
+                        f"Choked liquid flow — ΔP ({_cv_res['dP_bar']:.3f} bar) exceeds "
+                        f"ΔP_choked ({_cv_res['dP_choked_bar']:.3f} bar). "
+                        "Kv is sized to the choked ΔP; actual flow will not increase with further ΔP increase."
+                    )
+                if _cv_res["cavitating"]:
+                    st.warning(
+                        f"Cavitation risk — σ = {_cv_res['sigma']:.3f} < 1/FL² = "
+                        f"{1/_cv_FL**2:.3f}. Consider a higher-FL valve, multi-stage letdown, "
+                        "or an anti-cavitation trim."
+                    )
+            else:
+                if _cv_res["choked"]:
+                    st.warning(
+                        f"Choked gas flow — x ({_cv_res['x']:.3f}) ≥ Fγ·xT ({_cv_res['x_choked']:.3f}). "
+                        "Flow is at the sonic limit; further lowering P₂ does not increase flow."
+                    )
+
+            # Valve body recommendation
+            st.markdown("**Valve body size recommendation**")
+            _sz = cv.suggest_valve_size(_kv, target_opening=0.80)
+            _b1, _b2, _b3 = st.columns(3)
+            _b1.metric("Minimum Kv_100 needed", f"{_sz['Kv_min']:.2f}")
+            _b2.metric("Suggested body (indicative)", _sz["size_label"])
+            _b3.metric("Opening at design flow", f"{_sz['opening_pct']:.0f}%")
+
+            if _sz["oversized"]:
+                st.error("Required Kv exceeds the largest standard body in the table. Use parallel valves or a custom design.")
+            elif _sz["opening_pct"] < 20.0:
+                st.warning(
+                    f"Valve is only {_sz['opening_pct']:.0f}% open at design flow — "
+                    "consider a smaller body for better controllability."
+                )
+            elif _sz["opening_pct"] > 90.0:
+                st.warning(
+                    f"Valve is {_sz['opening_pct']:.0f}% open — tight controllability margin. "
+                    "Verify with vendor Kv_100 before ordering."
+                )
+
+            # Indicative body size table
+            st.markdown("**Indicative Kv_100 by body size** (globe valve — verify with vendor)")
+            _kv_rows = []
+            for _lbl, _k100 in cv.INDICATIVE_KV.items():
+                _kv_rows.append({
+                    "Body size":     _lbl,
+                    "Kv_100":        f"{_k100:.1f}",
+                    "Cv_100":        f"{_k100 * cv.KV_TO_CV:.1f}",
+                    "At design flow": f"{_kv/_k100*100:.0f}%" if _k100 >= _kv * 0.2 else "—",
+                    "":              "✓" if _lbl == _sz["size_label"] else "",
+                })
+            st.dataframe(pd.DataFrame(_kv_rows), use_container_width=True, hide_index=True)
+
+            with st.expander("Equations and references"):
+                st.markdown(f"""
+**Standard**: IEC 60534-2-1:2011 (≡ ISA 75.01.01) — Inherent flow characteristics and rangeability.
+
+**Liquid Kv** (no choke):
+Kv = Q [m³/h] / √(ΔP [bar] / G_f)  where G_f = ρ / 1000 (specific gravity)
+
+**Choked liquid ΔP** (IEC 60534-2-1 §5.2):
+ΔP_choked = FL² · (P₁ − Ff · Pv)
+Ff = 0.96 − 0.28 · √(Pv / Pc) = **{_cv_res.get('Ff', 0.96):.4f}**
+FL = **{_cv_FL:.2f}**  (liquid pressure recovery factor — valve specific)
+
+**Gas / vapour Kv** (IEC 60534-2-1 §5.3):
+W [kg/h] = 31.6 · FP · Kv · Y · √(x · P₁ [bar] · ρ₁ [kg/m³])
+Y = 1 − x / (3 · Fγ · xT) = **{_cv_res.get('Y', 1.0):.4f}** (expansion factor; 0.667 at choke)
+Fγ = γ / 1.4,  xT = **{_cv_xT:.2f}**  (pressure drop ratio at choke — valve specific)
+Choked when x = ΔP/P₁ ≥ Fγ · xT
+
+**Kv → Cv**: Cv = Kv / 0.865  (Kv: m³/h at 1 bar ΔP → Cv: USgpm at 1 psi ΔP)
+
+**Valve body table**: indicative globe-trim Kv_100; ball and butterfly valves are
+typically 2–5× higher for the same body size. Always confirm with vendor.
+
+**Cavitation**: σ = (P₁ − Pv) / ΔP. Incipient cavitation when σ < 1/FL².
+Anti-cavitation trims can operate at σ down to ~0.5 FL².
+""")
+
+
