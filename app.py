@@ -12,6 +12,7 @@ import ro_engine as ro
 import psv_engine as psv
 import cv_engine as cv
 import hashlib
+from models import SegmentRow
 import json
 from fluids.two_phase import (Taitel_Dukler_regime as _TD_regime,
                                Mandhane_Gregory_Aziz_regime as _MGA_regime)
@@ -311,13 +312,6 @@ with st.sidebar:
     st.divider()
     st.header("Session")
 
-    # ── Case labels ───────────────────────────────────────────────────────────
-    _slcol1, _slcol2 = st.columns(2)
-    _slcol1.text_input("Tab A label", key="label_a", max_chars=20,
-                       help="Short name used in tabs, charts, and reports.")
-    _slcol2.text_input("Tab B label", key="label_b", max_chars=20,
-                       help="Short name used in tabs, charts, and reports.")
-
     # ── Save ──────────────────────────────────────────────────────────────────
     _save_json = json.dumps(_collect_save_state(), indent=2, ensure_ascii=False)
     st.download_button(
@@ -553,6 +547,10 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         if _seg.get("kind", "pipe") == "pipe":
             if _seg["material"] not in _VALID_MATS:    _seg["material"] = "SS316L"
             if _seg["liner_material"] not in _VALID_LINERS: _seg["liner_material"] = "FEP"
+
+    _lbl_c, _ = st.columns([1, 3])
+    _lbl_c.text_input("Case label", key=f"label_{cid}", max_chars=20,
+                      help="Name shown in tabs, charts, and reports.")
 
     col_in, col_out = st.columns([1, 1.2])
 
@@ -1315,18 +1313,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             json.dumps(_loop_hash_src, sort_keys=True, default=str).encode()
         ).hexdigest()
         _lc         = st.session_state.get(k("loop_cache"), {})
-        _loop_stale = _lc.get("hash") != _loop_hash
-        _cb1, _cb2  = st.columns([4, 1])
-        _calc_btn   = _cb1.button(
-            "▶  Calculate", key=k("calc_btn"), type="primary", width='stretch',
-            help="Run the segment-by-segment pressure drop calculation.")
-        if not _lc:
-            _cb2.info("No results")
-        elif _loop_stale:
-            _cb2.warning("Stale")
-        else:
-            _cb2.success("Current")
-        _run_calc = _calc_btn or not _lc
+        _run_calc   = _lc.get("hash") != _loop_hash
         # ─────────────────────────────────────────────────────────────────────
 
         _snap_stream("S0 — Inlet", props)
@@ -1374,29 +1361,28 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 _v_dP_Pa  = _vres["dP_Pa"]
                 _v_end_P  = current_P - _v_dP_Pa
                 _v_D      = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
-                grid_records.append({
-                    "Seg":           f"#{i+1}",
-                    "Type":          "Valve",
-                    "Pipe":          f"{seg['dn']}/{seg['pn']}",
-                    "ID (mm)":       round(_v_D*1000, 1),
-                    "L (m)":         0.0,
-                    "L_eq (m)":      0.0,
-                    "Fittings":      _v_label,
-                    "Regime":        f"Q={_vres['Q_m3h']:.3f} m³/h  ρ_hom={_vres['rho_hom']:.1f} kg/m³",
-                    "ΔP (kPa)":      round(_v_dP_Pa/1000, 3),
-                    "P_in (bara)":   round(current_P/1e5, 4),
-                    "P_out (bara)":  round(_v_end_P/1e5, 4),
-                    "V_m (m/s)":     0.0,   "V_m/V_e":       0.0,
-                    "V_sg (m/s)":    0.0,   "V_sl (m/s)":    0.0,
-                    "V_e (m/s)":     0.0,
-                    "ΔP_fric (kPa)": round(_v_dP_Pa/1000, 3),
-                    "ΔP_grav (kPa)": 0.0,  "ΔP_accel (kPa)": 0.0,
-                    "Material":      "—",
-                    "ρ_g (kg/m³)":  round(_vp["rho_g"], 4),
-                    "L_eff (m)":     0.0,
-                    "α (void)":      round(_vp["alpha"], 4),
-                    "dP/dz (Pa/m)":  0.0,
-                })
+                grid_records.append(SegmentRow(
+                    seg=f"#{i+1}",
+                    type="Valve",
+                    pipe=f"{seg['dn']}/{seg['pn']}",
+                    id_mm=round(_v_D*1000, 1),
+                    l_m=0.0,
+                    l_eq_m=0.0,
+                    fittings=_v_label,
+                    regime=f"Q={_vres['Q_m3h']:.3f} m³/h  ρ_hom={_vres['rho_hom']:.1f} kg/m³",
+                    dp_kPa=round(_v_dP_Pa/1000, 3),
+                    p_in_bara=round(current_P/1e5, 4),
+                    p_out_bara=round(_v_end_P/1e5, 4),
+                    v_m_ms=0.0, v_m_ve=0.0,
+                    v_sg_ms=0.0, v_sl_ms=0.0, v_e_ms=0.0,
+                    dp_fric_kPa=round(_v_dP_Pa/1000, 3),
+                    dp_grav_kPa=0.0, dp_accel_kPa=0.0,
+                    material="—",
+                    rho_g=round(_vp["rho_g"], 4),
+                    l_eff_m=0.0,
+                    alpha_void=round(_vp["alpha"], 4),
+                    dp_dz=0.0,
+                ).to_dict())
                 total_dp_fric_kpa += _v_dP_Pa / 1000.0
                 current_P = max(1000.0, _v_end_P)
                 pressure_profile_x.append(cumulative_distance)
@@ -1420,29 +1406,28 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                         _delta_T = (_hx_duty * 1000.0) / (_hp["m_total_kgs"] * _Cp)
                 current_T_C += _delta_T
                 _hx_sign = f"+{_hx_duty:.1f}" if _hx_duty >= 0 else f"{_hx_duty:.1f}"
-                grid_records.append({
-                    "Seg":           f"#{i+1}",
-                    "Type":          "Heat Exchanger",
-                    "Pipe":          f"{seg['dn']}/{seg['pn']}",
-                    "ID (mm)":       round(_hx_D*1000, 1),
-                    "L (m)":         0.0,
-                    "L_eq (m)":      0.0,
-                    "Fittings":      f"Q={_hx_sign} kW",
-                    "Regime":        f"ΔT={_delta_T:+.2f}°C  →  T_out={current_T_C:.1f}°C",
-                    "ΔP (kPa)":      round(_hx_dP_Pa/1000, 3),
-                    "P_in (bara)":   round(current_P/1e5, 4),
-                    "P_out (bara)":  round(_hx_end_P/1e5, 4),
-                    "V_m (m/s)":     0.0,   "V_m/V_e":       0.0,
-                    "V_sg (m/s)":    0.0,   "V_sl (m/s)":    0.0,
-                    "V_e (m/s)":     0.0,
-                    "ΔP_fric (kPa)": round(_hx_dP_Pa/1000, 3),
-                    "ΔP_grav (kPa)": 0.0,  "ΔP_accel (kPa)": 0.0,
-                    "Material":      "—",
-                    "ρ_g (kg/m³)":  0.0,
-                    "L_eff (m)":     0.0,
-                    "α (void)":      0.0,
-                    "dP/dz (Pa/m)":  0.0,
-                })
+                grid_records.append(SegmentRow(
+                    seg=f"#{i+1}",
+                    type="Heat Exchanger",
+                    pipe=f"{seg['dn']}/{seg['pn']}",
+                    id_mm=round(_hx_D*1000, 1),
+                    l_m=0.0,
+                    l_eq_m=0.0,
+                    fittings=f"Q={_hx_sign} kW",
+                    regime=f"ΔT={_delta_T:+.2f}°C  →  T_out={current_T_C:.1f}°C",
+                    dp_kPa=round(_hx_dP_Pa/1000, 3),
+                    p_in_bara=round(current_P/1e5, 4),
+                    p_out_bara=round(_hx_end_P/1e5, 4),
+                    v_m_ms=0.0, v_m_ve=0.0,
+                    v_sg_ms=0.0, v_sl_ms=0.0, v_e_ms=0.0,
+                    dp_fric_kPa=round(_hx_dP_Pa/1000, 3),
+                    dp_grav_kPa=0.0, dp_accel_kPa=0.0,
+                    material="—",
+                    rho_g=0.0,
+                    l_eff_m=0.0,
+                    alpha_void=0.0,
+                    dp_dz=0.0,
+                ).to_dict())
                 total_dp_fric_kpa += _hx_dP_Pa / 1000.0
                 current_P = max(1000.0, _hx_end_P)
                 pressure_profile_x.append(cumulative_distance)
@@ -1500,37 +1485,36 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             _mat_str = seg.get("material","SS316L")
             if _lined:
                 _mat_str += f" / {_lmat} {seg.get('liner_thickness_mm',1.0):.1f}mm"
-            grid_records.append({
-                # --- actionable columns first ---
-                "Seg":             f"#{i+1}",
-                "Type":            seg["type"],
-                "Pipe":            f"{seg['dn']}/{seg['pn']}",
-                "ID (mm)":         round(D_eff*1000, 1),
-                "L (m)":           seg["length"],
-                "L_eq (m)":        round(le_fit, 3),
-                "Fittings":        (", ".join(f"{f['type']} ×{f['qty']}"
-                                              for f in seg.get("fittings_list", [])
-                                              if f.get("qty", 0) > 0)
-                                    or "—"),
-                "Regime":          regime,
-                "ΔP (kPa)":        round(dP_Pa/1000, 3),
-                "P_in (bara)":     round(current_P/1e5, 4),
-                "P_out (bara)":    round(end_P/1e5, 4),
-                "V_m (m/s)":       round(V_m, 3),
-                "V_m/V_e":         round(erosion_ratio, 3),
-                "V_sg (m/s)":      round(Vsg, 3),
-                "V_sl (m/s)":      round(Vsl, 3),
-                "V_e (m/s)":       round(V_e, 2),
-                "ΔP_fric (kPa)":   round(dP_fric_Pa/1000, 3),
-                "ΔP_grav (kPa)":   round(dP_grav_Pa/1000, 3),
-                "ΔP_accel (kPa)":  round(dP_accel_Pa/1000, 3),
-                # --- internal / secondary columns ---
-                "Material":        _mat_str,
-                "ρ_g (kg/m³)":    round(props_seg["rho_g"], 4),
-                "L_eff (m)":       round(L_eff, 2),
-                "α (void)":        round(alpha_seg, 4),
-                "dP/dz (Pa/m)":    round(dP_per_dz, 2),
-            })
+            grid_records.append(SegmentRow(
+                seg=f"#{i+1}",
+                type=seg["type"],
+                pipe=f"{seg['dn']}/{seg['pn']}",
+                id_mm=round(D_eff*1000, 1),
+                l_m=seg["length"],
+                l_eq_m=round(le_fit, 3),
+                fittings=(", ".join(f"{f['type']} ×{f['qty']}"
+                                    for f in seg.get("fittings_list", [])
+                                    if f.get("qty", 0) > 0)
+                          or "—"),
+                regime=regime,
+                dp_kPa=round(dP_Pa/1000, 3),
+                p_in_bara=round(current_P/1e5, 4),
+                p_out_bara=round(end_P/1e5, 4),
+                v_m_ms=round(V_m, 3),
+                v_m_ve=round(erosion_ratio, 3),
+                v_sg_ms=round(Vsg, 3),
+                v_sl_ms=round(Vsl, 3),
+                v_e_ms=round(V_e, 2),
+                dp_fric_kPa=round(dP_fric_Pa/1000, 3),
+                dp_fric_100m_kPa=round(dP_fric_Pa/1000/max(L_eff,0.001)*100, 2),
+                dp_grav_kPa=round(dP_grav_Pa/1000, 3),
+                dp_accel_kPa=round(dP_accel_Pa/1000, 3),
+                material=_mat_str,
+                rho_g=round(props_seg["rho_g"], 4),
+                l_eff_m=round(L_eff, 2),
+                alpha_void=round(alpha_seg, 4),
+                dp_dz=round(dP_per_dz, 2),
+            ).to_dict())
             total_dp_fric_kpa  += dP_fric_Pa / 1000.0
             total_dp_grav_kpa  += dP_grav_Pa / 1000.0
             total_dp_accel_kpa += dP_accel_Pa / 1000.0
@@ -1613,8 +1597,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
         # ── Segment Analysis ──────────────────────────────────────────────────
         _primary_cols = ["Seg", "Type", "Pipe", "ID (mm)", "L (m)", "Fittings",
-                         "Regime", "ΔP (kPa)", "P_in (bara)", "P_out (bara)",
-                         "V_m (m/s)", "V_m/V_e"]
+                         "Regime", "ΔP (kPa)", "ΔP_fric/100m (kPa)",
+                         "P_in (bara)", "P_out (bara)", "V_m (m/s)", "V_m/V_e"]
         _detail_cols  = ["V_sg (m/s)", "V_sl (m/s)", "V_e (m/s)",
                          "ΔP_fric (kPa)", "ΔP_grav (kPa)", "ΔP_accel (kPa)",
                          "ρ_g (kg/m³)", "L_eff (m)", "α (void)", "dP/dz (Pa/m)", "Material"]
@@ -1631,6 +1615,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             "V_sg (m/s)":      st.column_config.NumberColumn(format="%.3f"),
             "V_sl (m/s)":      st.column_config.NumberColumn(format="%.3f"),
             "V_e (m/s)":       st.column_config.NumberColumn(format="%.2f"),
+            "ΔP_fric/100m (kPa)": st.column_config.NumberColumn(format="%.2f"),
             "ΔP_fric (kPa)":   st.column_config.NumberColumn(format="%.3f"),
             "ΔP_grav (kPa)":   st.column_config.NumberColumn(format="%.3f"),
             "ΔP_accel (kPa)":  st.column_config.NumberColumn(format="%.3f"),
@@ -2173,7 +2158,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         for _prop_label, _key in _hmb_rows_def:
             _row = {"Property": _prop_label}
             for _sr in stream_records:
-                _row[_sr["Stream"]] = _sr.get(_key, "—")
+                _row[_sr["Stream"]] = _sr.get(_key, None)
             _hmb_table.append(_row)
         _hmb_df      = pd.DataFrame(_hmb_table)
         _stream_cols = [sr["Stream"] for sr in stream_records]
@@ -4691,8 +4676,8 @@ if _group != "Engineering Tools":
 
 
 else:  # Engineering Tools
-    tab_fanno, tab_ro, tab_psv, tab_cv, tab_dg = st.tabs(
-        ["Fanno Flow", "RO", "PSV", "Control Valve", "Dissolved Gas Flash"]
+    tab_fanno, tab_ro, tab_psv, tab_cv, tab_dg, tab_pump, tab_ls = st.tabs(
+        ["Fanno Flow", "RO", "PSV", "Control Valve", "Dissolved Gas Flash", "Pump", "Line Size"]
     )
     import dissolution_engine as dg
 
@@ -6146,6 +6131,851 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
 - Sander R. (2015). *Compilation of Henry's law constants.* ACP **15**, 4399.
   (O₂ Sechenov constants)
 """)
+
+    # =========================================================================
+    # Tab: Pump Hydraulics
+    # =========================================================================
+    with tab_pump:
+        import pump_engine as pe
+        import plotly.graph_objects as go
+        import numpy as np
+
+        st.markdown(
+            "Centrifugal and positive-displacement pump sizing — hydraulic head, "
+            "NPSH, power, and design pressure for downstream piping per API 610 / "
+            "NORSOK P-001 / ASME B31.3."
+        )
+
+        _pu_c1, _pu_c2 = st.columns([1, 1.4], gap="large")
+
+        # ── LEFT COLUMN — INPUTS ─────────────────────────────────────────────
+        with _pu_c1:
+
+            # ── Pump type ────────────────────────────────────────────────────
+            st.markdown("**PUMP TYPE**")
+            _pu_type = st.radio(
+                "Pump type", ["Centrifugal", "Positive Displacement (PD)"],
+                horizontal=True, key="pu_type", label_visibility="collapsed",
+            )
+            _pu_is_pd = (_pu_type == "Positive Displacement (PD)")
+
+            st.divider()
+
+            # ── Fluid ────────────────────────────────────────────────────────
+            st.markdown("**FLUID**")
+            _pu_fluid_type = st.radio(
+                "Fluid type", ["KOH solution", "CoolProp liquid"],
+                horizontal=True, key="pu_fluid_type", label_visibility="collapsed",
+            )
+            _pu_T_C = st.number_input(
+                "Temperature (°C)", value=float(st.session_state.get("pu_T_C", 25.0)),
+                min_value=-50.0, max_value=200.0, step=5.0, key="pu_T_C",
+            )
+            _pu_P_bara = st.number_input(
+                "Suction pressure (bara)", value=float(st.session_state.get("pu_P_bara", 2.0)),
+                min_value=0.1, max_value=500.0, step=0.5, key="pu_P_bara",
+            )
+
+            if _pu_fluid_type == "KOH solution":
+                _pu_koh_conc = st.slider(
+                    "KOH concentration (wt%)", min_value=20, max_value=40,
+                    value=int(st.session_state.get("pu_koh_conc", 30)),
+                    step=1, key="pu_koh_conc",
+                    help="Typical alkaline electrolyser: 25–32 wt%.",
+                )
+                _pu_rho, _pu_mu, _pu_Pv = pe.koh_properties(_pu_T_C, _pu_koh_conc)
+            else:
+                _pu_cp_opts = list(engine.LIQUID_COOLPROP_ID.keys())
+                _pu_fluid_name = st.selectbox(
+                    "Fluid", _pu_cp_opts,
+                    index=_pu_cp_opts.index(st.session_state.get("pu_fluid_name", "Water"))
+                          if st.session_state.get("pu_fluid_name", "Water") in _pu_cp_opts else 0,
+                    key="pu_fluid_name",
+                )
+                try:
+                    _pu_rho, _pu_mu, _pu_Pv = pe.coolprop_liquid_properties(
+                        _pu_fluid_name, _pu_T_C, _pu_P_bara)
+                except Exception as _e:
+                    st.error(f"CoolProp error: {_e}")
+                    _pu_rho, _pu_mu, _pu_Pv = 1000.0, 1e-3, 0.023
+
+            _fm1, _fm2, _fm3 = st.columns(3)
+            _fm1.metric("ρ", f"{_pu_rho:.1f} kg/m³")
+            _fm2.metric("μ", f"{_pu_mu*1e3:.3f} mPa·s")
+            _fm3.metric("Pv", f"{_pu_Pv:.4f} bara",
+                        help="Vapour pressure at pump inlet temperature. "
+                             "KOH Pv accounts for ionic activity depression.")
+
+            st.divider()
+
+            # ── H-Q curve (centrifugal only) ──────────────────────────────
+            if not _pu_is_pd:
+                st.markdown("**PUMP CURVE  (H-Q)**")
+                _pu_hq_mode = st.radio(
+                    "Input mode", ["3-point parametric", "Tabular (up to 10 points)"],
+                    horizontal=True, key="pu_hq_mode", label_visibility="collapsed",
+                )
+
+                if _pu_hq_mode == "3-point parametric":
+                    _pu_H0  = st.number_input("Shut-off head H₀ (m)", value=float(st.session_state.get("pu_H0", 80.0)),
+                                              min_value=1.0, max_value=5000.0, step=5.0, key="pu_H0")
+                    _hc1, _hc2 = st.columns(2)
+                    _pu_Hbep = _hc1.number_input("BEP head (m)", value=float(st.session_state.get("pu_Hbep", 60.0)),
+                                                  min_value=0.1, max_value=4000.0, step=5.0, key="pu_Hbep")
+                    _pu_Qbep = _hc2.number_input("BEP flow (m³/h)", value=float(st.session_state.get("pu_Qbep", 50.0)),
+                                                  min_value=0.1, max_value=100000.0, step=5.0, key="pu_Qbep")
+                    _pu_use_runout = st.checkbox("Add runout point", key="pu_use_runout")
+                    if _pu_use_runout:
+                        _ro1, _ro2 = st.columns(2)
+                        _pu_Hro = _ro1.number_input("Runout head (m)", value=float(st.session_state.get("pu_Hro", 40.0)),
+                                                     min_value=0.0, max_value=4000.0, step=5.0, key="pu_Hro")
+                        _pu_Qro = _ro2.number_input("Runout flow (m³/h)", value=float(st.session_state.get("pu_Qro", 80.0)),
+                                                     min_value=0.1, max_value=100000.0, step=5.0, key="pu_Qro")
+                    else:
+                        _pu_Hro = _pu_Qro = None
+
+                    try:
+                        _pu_hq_coeffs = pe.fit_hq_3point(
+                            _pu_H0, _pu_Hbep, _pu_Qbep, _pu_Hro, _pu_Qro)
+                    except ValueError as _e:
+                        st.error(f"H-Q curve error: {_e}")
+                        _pu_hq_coeffs = None
+
+                else:  # Tabular
+                    st.caption("Enter Q (m³/h) and H (m) pairs — minimum 3 rows including Q=0.")
+                    _pu_tab_default = [
+                        {"Q (m³/h)": 0.0,  "H (m)": 80.0},
+                        {"Q (m³/h)": 25.0, "H (m)": 72.0},
+                        {"Q (m³/h)": 50.0, "H (m)": 60.0},
+                        {"Q (m³/h)": 75.0, "H (m)": 42.0},
+                        {"Q (m³/h)": 90.0, "H (m)": 28.0},
+                    ]
+                    _pu_tab_data = st.data_editor(
+                        _pu_tab_default, num_rows="dynamic", key="pu_hq_table",
+                        column_config={
+                            "Q (m³/h)": st.column_config.NumberColumn(min_value=0.0),
+                            "H (m)":    st.column_config.NumberColumn(min_value=0.0),
+                        },
+                        hide_index=True,
+                    )
+                    _pu_Qs = [r["Q (m³/h)"] for r in _pu_tab_data if r["Q (m³/h)"] is not None]
+                    _pu_Hs = [r["H (m)"]    for r in _pu_tab_data if r["H (m)"]    is not None]
+                    if len(_pu_Qs) >= 3:
+                        try:
+                            _pu_hq_coeffs = pe.fit_hq_tabular(_pu_Qs, _pu_Hs)
+                            _pu_H0  = pe.hq_shutoff(_pu_hq_coeffs)
+                            _pu_Qbep = max(_pu_Qs) * 0.65
+                        except Exception as _e:
+                            st.error(f"Curve fit error: {_e}")
+                            _pu_hq_coeffs = None
+                    else:
+                        st.warning("Enter at least 3 Q/H points.")
+                        _pu_hq_coeffs = None
+
+                # Speed / VSD
+                st.markdown("**SPEED**")
+                _sc1, _sc2 = st.columns(2)
+                _pu_speed_rpm = _sc1.number_input(
+                    "Rated speed (rpm)", value=int(st.session_state.get("pu_speed_rpm", 1450)),
+                    min_value=100, max_value=10000, step=50, key="pu_speed_rpm",
+                )
+                _pu_vsd = _sc2.checkbox("VSD fitted", key="pu_vsd")
+                if _pu_vsd:
+                    _pu_n_max_pct = st.slider(
+                        "Max VSD speed (% of rated)", min_value=50, max_value=120,
+                        value=int(st.session_state.get("pu_n_max_pct", 105)),
+                        step=1, key="pu_n_max_pct",
+                    )
+                    _pu_n_ratio = _pu_n_max_pct / 100.0
+                else:
+                    _pu_n_ratio = 1.0
+
+                # Efficiency
+                st.markdown("**EFFICIENCY**")
+                _ec1, _ec2 = st.columns(2)
+                _pu_eta_bep = _ec1.number_input(
+                    "Pump η at BEP (%)", value=float(st.session_state.get("pu_eta_bep", 72.0)),
+                    min_value=10.0, max_value=95.0, step=1.0, key="pu_eta_bep",
+                )
+                _pu_eta_motor = _ec2.number_input(
+                    "Motor η (%)", value=float(st.session_state.get("pu_eta_motor", 93.0)),
+                    min_value=50.0, max_value=99.0, step=0.5, key="pu_eta_motor",
+                )
+                if _pu_hq_coeffs:
+                    _pu_Q_max = pe.hq_max_flow(_pu_hq_coeffs)
+                    _pu_eta_params = pe.fit_eta_parabolic(
+                        _pu_eta_bep,
+                        _pu_Qbep if _pu_hq_mode == "3-point parametric" else _pu_Q_max * 0.65,
+                        Q_runout=_pu_Q_max,
+                    )
+
+                st.divider()
+
+            # ── System curve ─────────────────────────────────────────────────
+            st.markdown("**SYSTEM CURVE**")
+            _pu_H_static = st.number_input(
+                "Static head H_static (m)",
+                value=float(st.session_state.get("pu_H_static", 20.0)),
+                min_value=-500.0, max_value=5000.0, step=1.0, key="pu_H_static",
+                help=(
+                    "Total head the pump must overcome at zero flow — elevation + pressure difference.  \n"
+                    "H_static = Δz + (P_discharge − P_suction) × 1e5 / (ρ × g)  \n"
+                    "Negative if pumping downhill or suction vessel is at higher pressure."
+                ),
+            )
+            with st.expander("H_static calculator"):
+                _hsc1, _hsc2 = st.columns(2)
+                _pu_dz_calc   = _hsc1.number_input("Elevation Δz (m)", value=5.0,
+                                                    min_value=-500.0, max_value=500.0, step=1.0,
+                                                    key="pu_dz_calc",
+                                                    help="z_discharge − z_suction.")
+                _pu_dP_calc   = _hsc2.number_input("Pressure difference ΔP (bar)",
+                                                    value=5.0, step=0.5, key="pu_dP_calc",
+                                                    help="P_discharge − P_suction in bar. Negative if suction vessel is at higher pressure.")
+                _pu_H_static_calc = _pu_dz_calc + _pu_dP_calc * 1e5 / (_pu_rho * pe.g)
+                st.metric("Calculated H_static", f"{_pu_H_static_calc:.2f} m",
+                          help="Copy this value into H_static above.")
+
+            _sy1, _sy2 = st.columns(2)
+            _pu_Q_ref = _sy1.number_input(
+                "Reference flow (m³/h)",
+                value=float(st.session_state.get("pu_Q_ref", 50.0)),
+                min_value=0.0, step=5.0, key="pu_Q_ref",
+                help="Flow at which the friction head below is estimated.",
+            )
+            _pu_H_fric_ref = _sy2.number_input(
+                "Friction head at ref. flow (m)",
+                value=float(st.session_state.get("pu_H_fric_ref", 8.0)),
+                min_value=0.0, step=1.0, key="pu_H_fric_ref",
+                help="Pipeline friction losses expressed as metres of head at the reference flow.  \n"
+                     "H_friction = ΔP_friction [bar] × 1e5 / (ρ × g)",
+            )
+            _pu_k_fric = pe.k_from_reference(_pu_Q_ref, _pu_H_fric_ref) if _pu_Q_ref > 0 else 0.0
+
+            st.divider()
+
+            # ── NPSH ─────────────────────────────────────────────────────────
+            if not _pu_is_pd:
+                st.markdown("**NPSH**")
+                _nc1, _nc2 = st.columns(2)
+                _pu_z_suc = _nc1.number_input(
+                    "Liquid level above pump CL (m)",
+                    value=float(st.session_state.get("pu_z_suc", 2.0)),
+                    min_value=-20.0, max_value=50.0, step=0.5, key="pu_z_suc",
+                    help="Positive if liquid surface is above pump centreline (flooded suction). "
+                         "Negative for suction lift.",
+                )
+                _pu_h_suc_loss = _nc2.number_input(
+                    "Suction pipe loss (m head)",
+                    value=float(st.session_state.get("pu_h_suc_loss", 1.0)),
+                    min_value=0.0, max_value=50.0, step=0.5, key="pu_h_suc_loss",
+                    help="Friction + fitting losses in suction line, expressed as metres of head.",
+                )
+                _pu_NPSH_R = st.number_input(
+                    "NPSH required — vendor value (m)",
+                    value=float(st.session_state.get("pu_NPSH_R", 3.0)),
+                    min_value=0.0, max_value=50.0, step=0.5, key="pu_NPSH_R",
+                    help="From pump datasheet at operating flow. "
+                         "Use the value at BEP flow if operating point is unknown.",
+                )
+                st.divider()
+
+            # ── Design pressure ───────────────────────────────────────────────
+            st.markdown("**DESIGN PRESSURE — DOWNSTREAM PIPING**")
+
+            if _pu_is_pd:
+                _pu_PSV_set = st.number_input(
+                    "PSV set pressure (barg)", value=float(st.session_state.get("pu_PSV_set", 12.0)),
+                    min_value=0.1, max_value=500.0, step=0.5, key="pu_PSV_set",
+                    help="Mandatory for PD pumps. Set at or below MAWP of weakest downstream element.",
+                )
+                _pu_pd_accum = st.selectbox(
+                    "Accumulation scenario",
+                    ["Standard process — 10 %", "Fire case — 21 %"],
+                    key="pu_pd_accum_pd",
+                )
+                _pu_pd_acc_pct = 10.0 if "10" in _pu_pd_accum else 21.0
+            else:
+                _pu_dp_method = st.selectbox(
+                    "Design pressure method",
+                    options=list(pe.DESIGN_PRESSURE_METHODS.keys()),
+                    format_func=lambda x: f"{x}. {pe.DESIGN_PRESSURE_METHODS[x]}",
+                    key="pu_dp_method",
+                )
+
+                _pu_needs_PSV = _pu_dp_method in (4, 5, 6)
+
+                if _pu_dp_method in (1, 2, 3):
+                    if _pu_dp_method == 3:
+                        st.caption("Enter the upstream PSV accumulation pressure as suction basis.")
+                    _pu_P_suc_max = st.number_input(
+                        "Max suction pressure (bara)" if _pu_dp_method < 3
+                        else "Upstream PSV accumulation pressure (bara)",
+                        value=float(st.session_state.get("pu_P_suc_max", 11.0)),
+                        min_value=0.1, max_value=500.0, step=0.5, key="pu_P_suc_max",
+                        help="Conservative basis: upstream vessel design pressure. "
+                             "Method 3: upstream PSV set × 1.10.",
+                    )
+                else:
+                    _pu_P_suc_max = _pu_P_bara  # not used for PSV methods
+
+                if _pu_needs_PSV:
+                    _pu_PSV_set = st.number_input(
+                        "Discharge PSV set pressure (barg)",
+                        value=float(st.session_state.get("pu_PSV_set", 12.0)),
+                        min_value=0.1, max_value=500.0, step=0.5, key="pu_PSV_set",
+                        help="PSV must be installed on the pump discharge side of the first isolation valve.",
+                    )
+                else:
+                    _pu_PSV_set = None
+
+                if _pu_dp_method == 6:
+                    st.info(
+                        "Method 6 requires a SIL-assessed SIS per IEC 61511. "
+                        "The design pressure calculation is the same as Method 4 — "
+                        "the SIL documentation provides the engineering justification "
+                        "for using PSV accumulation as the sole design basis.",
+                        icon="ℹ️",
+                    )
+
+            _pu_mat_group = st.selectbox(
+                "Pipe material group (ASME B16.5)",
+                pe.MATERIAL_GROUPS,
+                index=pe.MATERIAL_GROUPS.index(
+                    st.session_state.get("pu_mat_group", pe.MATERIAL_GROUPS[1])
+                ) if st.session_state.get("pu_mat_group") in pe.MATERIAL_GROUPS else 1,
+                key="pu_mat_group",
+            )
+
+        # ── RIGHT COLUMN — RESULTS ────────────────────────────────────────────
+        with _pu_c2:
+
+            # ── Compute design pressure ───────────────────────────────────────
+            try:
+                if _pu_is_pd:
+                    _pu_dp_res = pe.pd_pump_design_pressure(
+                        _pu_PSV_set, _pu_pd_acc_pct)
+                else:
+                    if _pu_hq_coeffs is None:
+                        st.warning("Fix H-Q curve inputs to see results.")
+                        st.stop()
+                    _pu_H0_max = pe.hq_shutoff(
+                        pe.scale_hq_to_speed(_pu_hq_coeffs, _pu_n_ratio))
+                    _pu_dp_res = pe.centrifugal_design_pressure(
+                        method          = _pu_dp_method,
+                        P_suction_bara  = _pu_P_suc_max if _pu_dp_method <= 3 else _pu_P_bara,
+                        H_shutoff_rated_m = pe.hq_shutoff(_pu_hq_coeffs),
+                        rho_kgm3        = _pu_rho,
+                        n_max_ratio     = _pu_n_ratio,
+                        PSV_set_barg    = _pu_PSV_set,
+                    )
+            except Exception as _pu_e:
+                st.error(f"Design pressure calculation error: {_pu_e}")
+                st.stop()
+
+            _pu_P_design_barg = _pu_dp_res["P_design_barg"]
+            _pu_ansi = pe.ansi_class_lookup(_pu_P_design_barg, _pu_mat_group)
+
+            # ── Operating point (centrifugal) ─────────────────────────────────
+            if not _pu_is_pd:
+                try:
+                    _pu_Q_max = pe.hq_max_flow(_pu_hq_coeffs)
+                    _pu_Qop, _pu_Hop = pe.find_operating_point(
+                        _pu_hq_coeffs, _pu_H_static, _pu_k_fric, _pu_Q_max * 1.05)
+                    _pu_eta_op  = pe.eval_eta(_pu_eta_params, _pu_Qop)
+                    _pu_P_shaft = pe.shaft_power_kw(_pu_rho, _pu_Qop, _pu_Hop, max(_pu_eta_op, 1.0))
+                    _pu_P_motor = pe.motor_power_kw(_pu_P_shaft, _pu_eta_motor)
+                    _pu_P_frame = pe.next_motor_frame_kw(_pu_P_motor)
+                    _pu_NPSH_A  = pe.npsh_available(
+                        _pu_P_bara, _pu_Pv, _pu_rho, _pu_z_suc, _pu_h_suc_loss)
+                    _pu_npsh_margin, _pu_npsh_status, _pu_npsh_color = pe.npsh_margin_status(
+                        _pu_NPSH_A, _pu_NPSH_R)
+                    _pu_op_ok = True
+                except Exception as _pu_oe:
+                    _pu_op_ok = False
+                    st.error(f"Operating point error: {_pu_oe}")
+
+            # ── KPIs ──────────────────────────────────────────────────────────
+            if not _pu_is_pd and _pu_op_ok:
+                st.markdown("**OPERATING POINT**")
+                _pu_Hop_bar = pe.head_to_bar(_pu_Hop, _pu_rho)
+                _k1, _k2, _k3, _k4 = st.columns(4)
+                _k1.metric("Flow", f"{_pu_Qop:.1f} m³/h")
+                _k2.metric("Head", f"{_pu_Hop:.1f} m",
+                           delta=f"{_pu_Hop_bar:.2f} bar", delta_color="off")
+                _k3.metric("η pump", f"{_pu_eta_op:.1f} %")
+                _k4.metric("P shaft", f"{_pu_P_shaft:.1f} kW")
+
+                _k5, _k6, _k7, _k8 = st.columns(4)
+                _k5.metric("P motor (input)", f"{_pu_P_motor:.1f} kW",
+                           help=f"Next IEC frame: {_pu_P_frame:.0f} kW")
+                _k6.metric("NPSH available", f"{_pu_NPSH_A:.2f} m")
+                _k7.metric("NPSH required", f"{_pu_NPSH_R:.2f} m")
+                _npsh_delta = f"{_pu_npsh_margin:+.2f} m  ({_pu_npsh_status})"
+                _k8.metric("NPSH margin", f"{_pu_npsh_margin:.2f} m",
+                           delta=_npsh_delta,
+                           delta_color="normal" if _pu_npsh_color == "green"
+                                       else ("off" if _pu_npsh_color == "orange" else "inverse"))
+
+                # BEP deviation warning
+                _pu_Qbep_used = (_pu_Qbep if _pu_hq_mode == "3-point parametric"
+                                 else _pu_Q_max * 0.65)
+                if _pu_Qop < 0.70 * _pu_Qbep_used:
+                    st.warning(
+                        f"Operating flow ({_pu_Qop:.1f} m³/h) is below 70 % of BEP "
+                        f"({_pu_Qbep_used:.1f} m³/h). Risk of internal recirculation, "
+                        "vibration, and premature seal/bearing wear."
+                    )
+                elif _pu_Qop > 1.10 * _pu_Qbep_used:
+                    st.warning(
+                        f"Operating flow ({_pu_Qop:.1f} m³/h) exceeds 110 % of BEP. "
+                        "Risk of cavitation, motor overload, and reduced seal life."
+                    )
+
+                st.divider()
+
+                # ── H-Q + System curve chart ──────────────────────────────────
+                st.markdown("**PUMP & SYSTEM CURVES**")
+                _pu_Q_plot = np.linspace(0, _pu_Q_max * 1.05, 200)
+                _pu_H_plot = [pe.eval_hq(_pu_hq_coeffs, q) for q in _pu_Q_plot]
+                _pu_Hs_plot = [pe.system_head(q, _pu_H_static, _pu_k_fric) for q in _pu_Q_plot]
+                _pu_eta_plot = [pe.eval_eta(_pu_eta_params, q) for q in _pu_Q_plot]
+
+                _fig_hq = go.Figure()
+                _fig_hq.add_trace(go.Scatter(
+                    x=list(_pu_Q_plot), y=_pu_H_plot,
+                    name="Pump H-Q", line=dict(color="#2563EB", width=2.5),
+                ))
+                _fig_hq.add_trace(go.Scatter(
+                    x=list(_pu_Q_plot), y=_pu_Hs_plot,
+                    name="System curve", line=dict(color="#D97706", width=2.5, dash="dash"),
+                ))
+                # Operating point marker
+                _fig_hq.add_trace(go.Scatter(
+                    x=[_pu_Qop], y=[_pu_Hop],
+                    name="Operating point",
+                    mode="markers",
+                    marker=dict(size=12, color="#16A34A", symbol="circle",
+                                line=dict(color="white", width=2)),
+                ))
+                # BEP marker (on pump curve)
+                _pu_Hbep_on_curve = pe.eval_hq(_pu_hq_coeffs, _pu_Qbep_used)
+                _fig_hq.add_trace(go.Scatter(
+                    x=[_pu_Qbep_used], y=[_pu_Hbep_on_curve],
+                    name="BEP",
+                    mode="markers",
+                    marker=dict(size=10, color="#7C3AED", symbol="diamond",
+                                line=dict(color="white", width=2)),
+                ))
+                _fig_hq.update_layout(
+                    xaxis_title="Flow (m³/h)", yaxis_title="Head (m)",
+                    height=300, margin=dict(l=10, r=10, t=10, b=10),
+                    legend=dict(orientation="h", y=-0.25),
+                )
+                st.plotly_chart(_fig_hq, use_container_width=True)
+
+                # ── η-Q chart ─────────────────────────────────────────────────
+                _fig_eta = go.Figure()
+                _fig_eta.add_trace(go.Scatter(
+                    x=list(_pu_Q_plot), y=_pu_eta_plot,
+                    name="Efficiency", line=dict(color="#7C3AED", width=2.5),
+                    fill="tozeroy", fillcolor="rgba(124,58,237,0.08)",
+                ))
+                _fig_eta.add_vline(x=_pu_Qop, line=dict(color="#16A34A", dash="dot", width=1.5),
+                                   annotation_text=f"Q_op={_pu_Qop:.1f}", annotation_position="top right")
+                _fig_eta.update_layout(
+                    xaxis_title="Flow (m³/h)", yaxis_title="Efficiency (%)",
+                    yaxis_range=[0, 100],
+                    height=200, margin=dict(l=10, r=10, t=10, b=10),
+                    showlegend=False,
+                )
+                st.plotly_chart(_fig_eta, use_container_width=True)
+
+                st.divider()
+
+            # ── Design pressure results ───────────────────────────────────────
+            st.markdown("**DESIGN PRESSURE — DOWNSTREAM PIPING**")
+            if not _pu_is_pd and _pu_hq_coeffs:
+                _pu_H0_disp = pe.hq_shutoff(pe.scale_hq_to_speed(_pu_hq_coeffs, _pu_n_ratio))
+                _pu_H0_bar  = pe.head_to_bar(_pu_H0_disp, _pu_rho)
+                st.caption(
+                    f"Shut-off head (at {'max VSD' if _pu_vsd else 'rated'} speed): "
+                    f"**{_pu_H0_disp:.1f} m**  =  **{_pu_H0_bar:.2f} bar**  "
+                    f"(ρ = {_pu_rho:.0f} kg/m³)"
+                )
+            _dp1, _dp2, _dp3 = st.columns(3)
+            _dp1.metric("P design", f"{_pu_dp_res['P_design_bara']:.2f} bara")
+            _dp2.metric("P design", f"{_pu_P_design_barg:.2f} barg")
+            _dp3.metric("ANSI class", _pu_ansi["class_label"],
+                        delta=f"Rated {_pu_ansi['rated_barg']:.1f} barg",
+                        delta_color="normal" if _pu_ansi["adequate"] else "inverse")
+
+            if not _pu_ansi["adequate"]:
+                st.error(
+                    f"Design pressure ({_pu_P_design_barg:.2f} barg) exceeds the maximum "
+                    f"ANSI 2500 rating ({_pu_ansi['rated_barg']:.1f} barg) for the selected "
+                    "material group. Review design basis or use a higher-pressure standard."
+                )
+
+            st.caption(_pu_dp_res["notes"])
+
+            # ── ANSI class table ──────────────────────────────────────────────
+            with st.expander("ANSI B16.5 pressure class ratings — all classes"):
+                _ansi_df = pd.DataFrame(_pu_ansi["all_classes"])
+                st.dataframe(_ansi_df, hide_index=True, use_container_width=True)
+
+            # ── Design pressure method comparison table ────────────────────────
+            if not _pu_is_pd:
+                with st.expander("Design pressure method comparison"):
+                    st.markdown(
+                        "All six methods evaluated at current inputs. "
+                        "Methods 4–6 require a PSV on the pump discharge."
+                    )
+                    _cmp_rows = []
+                    _H0_rated = pe.hq_shutoff(_pu_hq_coeffs)
+                    _H0_max   = _H0_rated * (_pu_n_ratio ** 2)
+
+                    # Build rows for each method
+                    _pset_barg = _pu_PSV_set if _pu_PSV_set is not None else 0.0
+                    for _m in range(1, 7):
+                        try:
+                            _mr = pe.centrifugal_design_pressure(
+                                method            = _m,
+                                P_suction_bara    = _pu_P_suc_max if _m <= 3 else _pu_P_bara,
+                                H_shutoff_rated_m = _H0_rated,
+                                rho_kgm3          = _pu_rho,
+                                n_max_ratio       = _pu_n_ratio,
+                                PSV_set_barg      = _pset_barg if _m >= 4 else None,
+                            )
+                            _pu_ansi_m = pe.ansi_class_lookup(_mr["P_design_barg"], _pu_mat_group)
+                            _selected_marker = " ◀ selected" if _m == _pu_dp_method else ""
+                            _cmp_rows.append({
+                                "#":              _m,
+                                "Method":         pe.DESIGN_PRESSURE_METHODS[_m].split("(")[0].strip(),
+                                "P design (barg)": _mr["P_design_barg"],
+                                "ANSI class":     _pu_ansi_m["class_label"] + _selected_marker,
+                            })
+                        except Exception:
+                            _cmp_rows.append({
+                                "#":              _m,
+                                "Method":         pe.DESIGN_PRESSURE_METHODS[_m].split("(")[0].strip(),
+                                "P design (barg)": "—  (PSV set required)",
+                                "ANSI class":     "—",
+                            })
+
+                    st.dataframe(
+                        pd.DataFrame(_cmp_rows),
+                        hide_index=True, use_container_width=True,
+                        column_config={"P design (barg)": st.column_config.NumberColumn(format="%.2f")},
+                    )
+
+    # =========================================================================
+    # Tab: Line Size
+    # =========================================================================
+    with tab_ls:
+        import math as _ls_math
+
+        st.markdown(
+            "Quick pipe size selection — find the minimum DN that meets velocity "
+            "and pressure-drop-per-100-m criteria for a given flow and fluid."
+        )
+
+        # ── Service presets ──────────────────────────────────────────────────
+        _LS_PRESETS = {
+            "General process liquid":     dict(v_min=1.0,  v_max=3.0,  dp=50.0),
+            "Pump suction line":          dict(v_min=0.3,  v_max=1.5,  dp=20.0),
+            "Pump discharge line":        dict(v_min=1.5,  v_max=3.0,  dp=100.0),
+            "Cooling water":              dict(v_min=1.0,  v_max=3.0,  dp=50.0),
+            "Slurry / solids-bearing":    dict(v_min=1.5,  v_max=3.5,  dp=100.0),
+            "Low-pressure gas (< 5 bar)": dict(v_min=5.0,  v_max=15.0, dp=50.0),
+            "High-pressure gas":          dict(v_min=10.0, v_max=25.0, dp=20.0),
+            "Steam (low pressure)":       dict(v_min=20.0, v_max=40.0, dp=100.0),
+            "Custom":                     dict(v_min=None, v_max=None,  dp=None),
+        }
+
+        _ls_c1, _ls_c2 = st.columns([1, 1.3], gap="large")
+
+        with _ls_c1:
+            # ── Phase & fluid ────────────────────────────────────────────────
+            st.markdown("**FLUID**")
+            _ls_phase = st.radio(
+                "Phase", ["Liquid", "Gas"], horizontal=True,
+                key="ls_phase", label_visibility="collapsed",
+            )
+            _ls_T = st.number_input(
+                "Temperature (°C)", value=25.0,
+                min_value=-50.0, max_value=300.0, step=5.0, key="ls_T",
+            )
+            _ls_P = st.number_input(
+                "Pressure (bara)", value=5.0,
+                min_value=0.1, max_value=500.0, step=0.5, key="ls_P",
+            )
+
+            if _ls_phase == "Liquid":
+                _ls_liq_src = st.radio(
+                    "Source", ["KOH solution", "CoolProp liquid"],
+                    horizontal=True, key="ls_liq_src", label_visibility="collapsed",
+                )
+                if _ls_liq_src == "KOH solution":
+                    _ls_koh_c = st.slider(
+                        "KOH concentration (wt%)", 20, 40, 30, key="ls_koh_c",
+                    )
+                    _ls_rho, _ls_mu, _ = engine.koh_properties(_ls_T, _ls_koh_c)
+                else:
+                    _ls_cp_opts = list(engine.LIQUID_COOLPROP_ID.keys())
+                    _ls_cp_fluid = st.selectbox(
+                        "Fluid", _ls_cp_opts,
+                        index=_ls_cp_opts.index(
+                            st.session_state.get("ls_cp_fluid", "Water")
+                        ) if st.session_state.get("ls_cp_fluid", "Water") in _ls_cp_opts else 0,
+                        key="ls_cp_fluid",
+                    )
+                    import CoolProp.CoolProp as _ls_CP
+                    _ls_cpid = engine.LIQUID_COOLPROP_ID[_ls_cp_fluid]
+                    try:
+                        _ls_rho = _ls_CP.PropsSI("D", "T", _ls_T+273.15, "P", _ls_P*1e5, _ls_cpid)
+                        _ls_mu  = _ls_CP.PropsSI("V", "T", _ls_T+273.15, "P", _ls_P*1e5, _ls_cpid)
+                    except Exception:
+                        _ls_rho, _ls_mu = 1000.0, 1e-3
+            else:
+                _ls_gas_opts = [k for k in engine.GAS_SPECIES if k != "Custom"]
+                _ls_gas = st.selectbox("Gas species", _ls_gas_opts, key="ls_gas")
+                _ls_MW  = engine.GAS_SPECIES[_ls_gas]["MW"]   # kg/mol
+                _ls_rho = _ls_P * 1e5 * _ls_MW / (8.31446 * (_ls_T + 273.15))
+                import CoolProp.CoolProp as _ls_CP
+                _ls_cpid_g = engine.GAS_SPECIES[_ls_gas].get("coolprop_id")
+                try:
+                    _ls_mu = _ls_CP.PropsSI("V", "T", _ls_T+273.15, "P", _ls_P*1e5, _ls_cpid_g) if _ls_cpid_g else engine.GAS_SPECIES[_ls_gas].get("mu_ref", 1.8e-5)
+                except Exception:
+                    _ls_mu = engine.GAS_SPECIES[_ls_gas].get("mu_ref", 1.8e-5)
+
+            _lf1, _lf2 = st.columns(2)
+            if _ls_phase == "Liquid":
+                _lf1.metric("ρ", f"{_ls_rho:.1f} kg/m³")
+                _lf2.metric("μ", f"{_ls_mu*1e3:.3f} mPa·s")
+            else:
+                _lf1.metric("ρ", f"{_ls_rho:.4f} kg/m³")
+                _lf2.metric("μ", f"{_ls_mu*1e6:.2f} μPa·s")
+                st.caption("Density at inlet conditions (incompressible approximation). "
+                           "Accurate when ΔP < 10 % of inlet pressure.")
+
+            st.divider()
+
+            # ── Flow rate ────────────────────────────────────────────────────
+            st.markdown("**FLOW RATE**")
+            _ls_fu = st.radio(
+                "Unit", ["kg/h", "m³/h"], horizontal=True,
+                key="ls_fu", label_visibility="collapsed",
+            )
+            _ls_fv = st.number_input(
+                "Flow", value=10000.0, min_value=0.001, step=100.0,
+                format="%.3f", key="ls_fv",
+            )
+            if _ls_fu == "kg/h":
+                _ls_m_kgh  = _ls_fv
+                _ls_Q_m3h  = _ls_m_kgh / max(_ls_rho, 1e-6)
+            else:
+                _ls_Q_m3h  = _ls_fv
+                _ls_m_kgh  = _ls_Q_m3h * _ls_rho
+            st.caption(f"= {_ls_Q_m3h:.3f} m³/h  ·  {_ls_m_kgh:.1f} kg/h")
+
+            st.divider()
+
+            # ── Pipe ─────────────────────────────────────────────────────────
+            st.markdown("**PIPE**")
+            _ls_pn_opts  = ["PN20", "PN25", "PN40"]
+            _ls_mat_opts = list(engine.MATERIAL_ROUGHNESS.keys())
+            _ls_dn_opts  = list(engine.PIPE_DATABASE.keys())
+
+            _lp1, _lp2 = st.columns(2)
+            _ls_pn  = _lp1.selectbox("PN rating", _ls_pn_opts, index=2, key="ls_pn")
+            _ls_mat = _lp2.selectbox("Material", _ls_mat_opts, key="ls_mat")
+
+            _ls_dn_min = st.selectbox(
+                "Min DN", _ls_dn_opts, index=0, key="ls_dn_min",
+            )
+            _ls_dn_max = st.selectbox(
+                "Max DN", _ls_dn_opts,
+                index=len(_ls_dn_opts) - 1, key="ls_dn_max",
+            )
+
+            st.divider()
+
+            # ── Sizing criteria ───────────────────────────────────────────────
+            st.markdown("**SIZING CRITERIA**")
+            _ls_preset = st.selectbox(
+                "Service preset", list(_LS_PRESETS.keys()), key="ls_preset",
+            )
+            _pre = _LS_PRESETS[_ls_preset]
+            if _pre["v_min"] is not None:
+                st.caption(
+                    f"Guidance for *{_ls_preset}*: "
+                    f"v = {_pre['v_min']}–{_pre['v_max']} m/s, "
+                    f"ΔP/100m ≤ {_pre['dp']} kPa"
+                )
+
+            _sc1, _sc2 = st.columns(2)
+            _ls_v_min = _sc1.number_input(
+                "Min velocity (m/s)",
+                value=float(_pre["v_min"] if _pre["v_min"] is not None else 1.0),
+                min_value=0.0, step=0.5, key="ls_v_min",
+            )
+            _ls_v_max = _sc2.number_input(
+                "Max velocity (m/s)",
+                value=float(_pre["v_max"] if _pre["v_max"] is not None else 3.0),
+                min_value=0.0, step=0.5, key="ls_v_max",
+            )
+            _ls_dp_max = st.number_input(
+                "Max ΔP/100m (kPa)",
+                value=float(_pre["dp"] if _pre["dp"] is not None else 50.0),
+                min_value=0.0, step=5.0, key="ls_dp_max",
+            )
+
+        # ── RIGHT COLUMN — RESULTS ────────────────────────────────────────────
+        with _ls_c2:
+
+            def _ls_friction_f(Re, eps_D):
+                """Darcy friction factor — Churchill (1977), valid all Re."""
+                if Re < 1e-9:
+                    return 64.0
+                if Re <= 2300.0:
+                    return 64.0 / Re
+                A = (-2.457 * _ls_math.log((7.0 / Re) ** 0.9 + 0.27 * eps_D)) ** 16
+                B = (37530.0 / Re) ** 16
+                return 8.0 * ((8.0 / Re) ** 12 + (A + B) ** (-1.5)) ** (1.0 / 12.0)
+
+            _ls_eps    = engine.MATERIAL_ROUGHNESS.get(_ls_mat, 1.5e-5)
+            _ls_Q_m3s  = _ls_Q_m3h / 3600.0
+            _ls_dn_i   = _ls_dn_opts.index(_ls_dn_min)
+            _ls_dn_j   = _ls_dn_opts.index(_ls_dn_max)
+            _ls_dns    = _ls_dn_opts[_ls_dn_i: _ls_dn_j + 1]
+
+            _ls_rows         = []
+            _ls_recommended  = None
+
+            for _dn in _ls_dns:
+                _pndb = engine.PIPE_DATABASE.get(_dn, {})
+                if _ls_pn not in _pndb:
+                    continue
+                _D   = _pndb[_ls_pn]            # bore in metres
+                _A   = _ls_math.pi / 4.0 * _D ** 2
+                _v   = _ls_Q_m3s / _A
+                _Re  = _ls_rho * _v * _D / max(_ls_mu, 1e-12)
+                _eD  = _ls_eps / _D
+                _f   = _ls_friction_f(_Re, _eD)
+                _dp_pa_m     = _f * (_ls_rho * _v ** 2 / 2.0) / _D
+                _dp_kpa_100m = _dp_pa_m * 100.0 / 1000.0
+
+                _regime = ("Laminar" if _Re < 2300
+                           else ("Transitional" if _Re < 4000 else "Turbulent"))
+                _v_ok  = _ls_v_min <= _v <= _ls_v_max
+                _dp_ok = _dp_kpa_100m <= _ls_dp_max
+                _ok    = _v_ok and _dp_ok
+
+                if _ok and _ls_recommended is None:
+                    _ls_recommended = _dn
+
+                _ls_rows.append({
+                    "DN":               _dn,
+                    "ID (mm)":          round(_D * 1000, 1),
+                    "v (m/s)":          round(_v, 3),
+                    "Re":               int(_Re),
+                    "Regime":           _regime,
+                    "ΔP/100m (kPa)":    round(_dp_kpa_100m, 2),
+                    "v ✓":              "✓" if _v_ok  else "✗",
+                    "ΔP ✓":             "✓" if _dp_ok else "✗",
+                    "Adequate":         "✓" if _ok    else "—",
+                })
+
+            if not _ls_rows:
+                st.warning("No DN entries found for the selected PN rating in this range.")
+            else:
+                if _ls_recommended:
+                    st.success(
+                        f"**Recommended: {_ls_recommended}** — "
+                        f"smallest DN meeting both velocity and ΔP/100m criteria."
+                    )
+                else:
+                    st.warning(
+                        "No DN in the selected range meets all criteria. "
+                        "Try a larger DN range or relax the criteria."
+                    )
+
+                _ls_df = pd.DataFrame(_ls_rows)
+                st.dataframe(
+                    _ls_df, hide_index=True, use_container_width=True,
+                    column_config={
+                        "v (m/s)":       st.column_config.NumberColumn(format="%.3f"),
+                        "Re":            st.column_config.NumberColumn(format="%d"),
+                        "ΔP/100m (kPa)": st.column_config.NumberColumn(format="%.2f"),
+                    },
+                )
+
+                # ── Velocity and ΔP/100m vs DN chart ──────────────────────────
+                _ls_dns_plot  = [r["DN"]            for r in _ls_rows]
+                _ls_v_plot    = [r["v (m/s)"]       for r in _ls_rows]
+                _ls_dp_plot   = [r["ΔP/100m (kPa)"] for r in _ls_rows]
+
+                _fig_ls = go.Figure()
+
+                # Velocity trace (primary y)
+                _fig_ls.add_trace(go.Scatter(
+                    x=_ls_dns_plot, y=_ls_v_plot, name="Velocity (m/s)",
+                    mode="lines+markers",
+                    line=dict(color="#2563EB", width=2.5),
+                    marker=dict(size=7),
+                    yaxis="y1",
+                ))
+                # Velocity band shading
+                _fig_ls.add_hrect(
+                    y0=_ls_v_min, y1=_ls_v_max,
+                    fillcolor="rgba(37,99,235,0.08)", line_width=0,
+                    annotation_text="v target", annotation_position="top left",
+                    yref="y1",
+                )
+
+                # ΔP/100m trace (secondary y)
+                _fig_ls.add_trace(go.Scatter(
+                    x=_ls_dns_plot, y=_ls_dp_plot, name="ΔP/100m (kPa)",
+                    mode="lines+markers",
+                    line=dict(color="#D97706", width=2.5, dash="dash"),
+                    marker=dict(size=7),
+                    yaxis="y2",
+                ))
+                # ΔP limit line
+                _fig_ls.add_hline(
+                    y=_ls_dp_max, line=dict(color="#D97706", dash="dot", width=1.5),
+                    annotation_text=f"ΔP limit {_ls_dp_max} kPa",
+                    annotation_position="bottom right",
+                    yref="y2",
+                )
+
+                # Recommended DN vertical marker (add_vline doesn't support categorical axes)
+                if _ls_recommended:
+                    _fig_ls.add_shape(
+                        type="line",
+                        x0=_ls_recommended, x1=_ls_recommended,
+                        y0=0, y1=1, yref="paper",
+                        line=dict(color="#16A34A", dash="dot", width=2),
+                    )
+                    _fig_ls.add_annotation(
+                        x=_ls_recommended, y=1.02, yref="paper",
+                        text=f"▼ {_ls_recommended}",
+                        showarrow=False, yanchor="bottom",
+                        font=dict(color="#16A34A", size=12),
+                    )
+
+                _fig_ls.update_layout(
+                    xaxis_title="Pipe size",
+                    yaxis=dict(title=dict(text="Velocity (m/s)", font=dict(color="#2563EB"))),
+                    yaxis2=dict(
+                        title=dict(text="ΔP/100m (kPa)", font=dict(color="#D97706")),
+                        overlaying="y", side="right",
+                    ),
+                    legend=dict(orientation="h", y=-0.25),
+                    height=320, margin=dict(l=10, r=10, t=20, b=10),
+                )
+                st.plotly_chart(_fig_ls, use_container_width=True)
 
 
 

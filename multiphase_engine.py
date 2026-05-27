@@ -32,60 +32,9 @@ _g = 9.80665
 # ============================================================================
 # 1. INDUSTRIAL STANDARDS DATABASE
 # ============================================================================
-# Inner diameters (m) based on ANSI B36.10 / B36.19 schedule pipe:
-#   PN20 / PN25  ≈  Schedule 40   (same bore for all metallic alloys at a given schedule)
-#   PN40         ≈  Schedule 80
-# Material does NOT affect bore at the same schedule — wall thickness is defined
-# by schedule number, not alloy.  All five metallic materials below use this table.
-PIPE_DATABASE = {
-    "DN20":  {"PN20": 0.0209, "PN25": 0.0209, "PN40": 0.0189},
-    "DN25":  {"PN20": 0.0266, "PN25": 0.0266, "PN40": 0.0243},
-    "DN40":  {"PN20": 0.0409, "PN25": 0.0409, "PN40": 0.0381},
-    "DN50":  {"PN20": 0.0525, "PN25": 0.0525, "PN40": 0.0493},
-    "DN80":  {"PN20": 0.0779, "PN25": 0.0779, "PN40": 0.0737},
-    "DN100": {"PN20": 0.1023, "PN25": 0.1023, "PN40": 0.0972},
-    "DN150": {"PN20": 0.1541, "PN25": 0.1541, "PN40": 0.1463},
-    "DN200": {"PN20": 0.2027, "PN25": 0.2027, "PN40": 0.1937},
-    "DN250": {"PN20": 0.2545, "PN25": 0.2545, "PN40": 0.2429},
-}
-
-# Absolute roughness (m) by pipe material — Crane TP-410 / ASHRAE
-MATERIAL_ROUGHNESS = {
-    "SS316L":            1.5e-5,
-    "Duplex SS 2205":    1.5e-5,
-    "Carbon Steel":      4.6e-5,
-    "Hastelloy C-276":   1.5e-5,
-    "Titanium Gr. 2":    1.5e-5,
-}
-
-# Absolute roughness (m) for fluoropolymer pipe liners.
-LINER_ROUGHNESS = {
-    "PTFE":  5.0e-8,
-    "FEP":   5.0e-8,
-    "PFA":   5.0e-8,
-    "PVDF":  1.5e-7,
-}
-
-# Equivalent-length (Le/D) factors for minor losses — Crane TP-410
-FITTING_Le_over_D = {
-    "90° Standard Elbow":              30,
-    "90° Long Radius Elbow (1.5D)":    16,
-    "45° Elbow":                       16,
-    "180° Return Bend":                50,
-    "Tee — Branch Flow":               60,
-    "Tee — Run Through":               20,
-    "Gate Valve — Fully Open":          8,
-    "Globe Valve — Fully Open":       340,
-    "Ball Valve — Fully Open":          3,
-    "Butterfly Valve":                 45,
-    "Swing Check Valve":              100,
-    "Lift Check Valve":               600,
-    "Concentric Reducer — Gradual (15°)":  5,
-    "Concentric Reducer — Sudden":        26,
-    "Eccentric Reducer — Gradual (15°)":   5,
-    "Expansion — Gradual (15°)":          10,
-    "Expansion — Sudden":                 30,
-}
+from standards.piping import (
+    PIPE_DATABASE, MATERIAL_ROUGHNESS, LINER_ROUGHNESS, FITTING_Le_over_D
+)
 
 
 def _seg_le_fit(seg, D_eff):

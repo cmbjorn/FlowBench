@@ -13,91 +13,12 @@ import fanno_engine as _fan
 R_u  = _fan.R_u
 GASES = _fan.GASES
 
-# ── API 526 effective orifice areas ────────────────────────────────────────
-API526_ORIFICES: dict[str, float] = {
-    "D":  71.0,
-    "E":  126.5,
-    "F":  198.1,
-    "G":  324.5,
-    "H":  506.4,
-    "J":  830.3,
-    "K":  1_186.0,
-    "L":  1_841.0,
-    "M":  2_322.0,
-    "N":  2_800.0,
-    "P":  4_116.0,
-    "Q":  7_129.0,
-    "R":  10_323.0,
-    "T":  16_774.0,
-}  # mm²
-
-KD_GAS    = 0.975   # API 520 Table 5 — gas / vapour / steam
-KD_LIQUID = 0.65    # API 520 Table 5 — liquid
-
-# Combination factor when a rupture disc is installed upstream (API 520 §4.7)
-KC_DISC = 0.9
-KC_NONE = 1.0
-
-# ── API 526 standard inlet × outlet flange sizes (NPS, inches) ─────────────
-# Source: API 526, 7th Ed., Table 1.
-# Inlet NPS is the size of the pipe connection upstream of the valve.
-# Outlet NPS is the size of the pipe connection downstream (discharge side).
-API526_FLANGE_NPS: dict[str, tuple[float, float]] = {
-    "D": (1.0,  2.0),
-    "E": (1.0,  2.0),
-    "F": (1.5,  2.5),
-    "G": (1.5,  3.0),
-    "H": (2.0,  3.0),
-    "J": (3.0,  4.0),
-    "K": (3.0,  4.0),
-    "L": (4.0,  6.0),
-    "M": (4.0,  6.0),
-    "N": (4.0,  6.0),
-    "P": (6.0,  8.0),
-    "Q": (6.0, 10.0),
-    "R": (6.0, 10.0),
-    "T": (8.0, 10.0),
-}  # (inlet NPS in, outlet NPS in)
-
-# NPS (in) → DN (mm) — ASME B36.10M standard designations
-_NPS_TO_DN: dict[float, int] = {
-    0.5: 15, 0.75: 20, 1.0: 25, 1.25: 32, 1.5: 40,
-    2.0: 50, 2.5: 65, 3.0: 80, 4.0: 100, 6.0: 150,
-    8.0: 200, 10.0: 250, 12.0: 300,
-}
-
-
-def nps_to_dn(nps_inch: float) -> int:
-    """Convert NPS (inches) to DN (mm). Returns nearest known DN."""
-    return _NPS_TO_DN.get(nps_inch, round(nps_inch * 25.0))
-
-
-def flange_nps(orifice_letter: str) -> tuple[float, float] | None:
-    """Return (inlet_NPS_in, outlet_NPS_in) for a given API 526 orifice letter, or None."""
-    return API526_FLANGE_NPS.get(orifice_letter)
-
-
-# ── Minimum flange pressure class (ASME B16.5, Group 1.1 CS at 38 °C) ──────
-# Class pressure limits (bara) — conservative: use the inlet relieving pressure
-_CLASS_LIMITS_BARA = [
-    (300,  51.1),
-    (600, 102.1),
-    (900, 153.2),
-    (1500, 255.2),
-    (2500, 425.6),
-]
-
-
-def min_flange_class(P_bara: float) -> int:
-    """
-    Minimum ASME B16.5 flange pressure class for the given pressure (bara).
-    Uses Group 1.1 carbon steel ratings at 38 °C (100 °F).
-    Class 300 is the industry minimum for PSV inlet flanges per API 526 practice.
-    """
-    for cls, limit in _CLASS_LIMITS_BARA:
-        if P_bara <= limit:
-            return cls
-    return 2500
+from standards.pressure_relief import (
+    API526_ORIFICES, API526_FLANGE_NPS,
+    KD_GAS, KD_LIQUID, KC_DISC, KC_NONE,
+    flange_nps,
+)
+from standards.piping import nps_to_dn, min_flange_class
 
 
 # ── Gas coefficient ─────────────────────────────────────────────────────────
