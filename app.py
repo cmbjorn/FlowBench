@@ -4611,7 +4611,10 @@ if _group != "Engineering Tools":
 
 
 else:  # Engineering Tools
-    tab_fanno, tab_ro, tab_psv, tab_cv = st.tabs(["Fanno Flow", "RO", "PSV", "Control Valve"])
+    tab_fanno, tab_ro, tab_psv, tab_cv, tab_dg = st.tabs(
+        ["Fanno Flow", "RO", "PSV", "Control Valve", "Dissolved Gas Flash"]
+    )
+    import dissolution_engine as dg
 
     # =============================================================================
     # Tab: Fanno Flow
@@ -5832,5 +5835,230 @@ typically 2–5× higher for the same body size. Always confirm with vendor.
 **Cavitation**: σ = (P₁ − Pv) / ΔP. Incipient cavitation when σ < 1/FL².
 Anti-cavitation trims can operate at σ down to ~0.5 FL².
 """)
+
+    # =========================================================================
+    # Tab: Dissolved Gas Flash
+    # =========================================================================
+    with tab_dg:
+        st.markdown("## Dissolved Gas Flash")
+        st.markdown(
+            "Calculates gas released (or absorbed) when a liquid **saturated** with a gas "
+            "at upstream conditions flashes to lower pressure and/or temperature. "
+            "Uses tabulated Henry's Law constants (Battino et al.) with a Sechenov correction "
+            "for KOH salting-out."
+        )
+
+        _dg_c1, _dg_c2 = st.columns(2)
+
+        with _dg_c1:
+            st.markdown("**Gas & Solvent**")
+            _dg_gas = st.selectbox(
+                "Dissolved gas",
+                list(dg.GAS_LABELS.keys()),
+                format_func=lambda g: dg.GAS_LABELS[g],
+                key="dg_gas",
+            )
+            _dg_solvent = st.selectbox(
+                "Solvent",
+                ["KOH solution", "Pure water"],
+                key="dg_solvent",
+            )
+            if _dg_solvent == "KOH solution":
+                _dg_koh_wt = st.slider(
+                    "KOH concentration (wt%)", 5.0, 50.0, 30.0, 1.0, key="dg_koh_wt"
+                )
+            else:
+                _dg_koh_wt = 0.0
+
+            _dg_y_gas = st.number_input(
+                "Gas mole fraction in vapour (y)", 0.01, 1.0, 1.0, 0.01,
+                help="1.0 = pure gas atmosphere. Use <1.0 for mixed gas (e.g. 0.5 for 50 vol% H₂ in N₂).",
+                key="dg_y_gas",
+            )
+
+        with _dg_c2:
+            st.markdown("**Upstream conditions (saturated)**")
+            _dg_T1 = st.number_input("T₁ (°C)", -10.0, 200.0, 80.0, 1.0, key="dg_T1")
+            _dg_P1 = st.number_input("P₁ (bar a)", 0.5, 300.0, 30.0, 0.5, key="dg_P1")
+
+            st.markdown("**Downstream conditions**")
+            _dg_T2 = st.number_input("T₂ (°C)", -10.0, 200.0, 70.0, 1.0, key="dg_T2")
+            _dg_P2 = st.number_input("P₂ (bar a)", 0.1, 300.0, 29.0, 0.5, key="dg_P2")
+
+        st.divider()
+
+        # ── Compute ──────────────────────────────────────────────────────────
+        try:
+            _dg_res = dg.flash_dissolved_gas(
+                gas=_dg_gas,
+                T1_C=_dg_T1,
+                P1_bar=_dg_P1,
+                T2_C=_dg_T2,
+                P2_bar=_dg_P2,
+                wt_pct_koh=_dg_koh_wt,
+                y_gas=_dg_y_gas,
+            )
+
+            _dg_released = _dg_res["dC_combined_mol_L"] > 0
+
+            # ── KPIs ─────────────────────────────────────────────────────────
+            st.markdown("**Flash result — combined (ΔP + ΔT)**")
+            _dg_ka, _dg_kb, _dg_kc, _dg_kd = st.columns(4)
+            _dg_ka.metric(
+                "Net Δ concentration",
+                f"{_dg_res['dC_combined_mol_L']*1e3:+.3f} mmol/L",
+                help="Positive = gas released; negative = more gas can dissolve (liquid stays undersaturated).",
+            )
+            _dg_kb.metric(
+                "Released volume",
+                f"{_dg_res['released_mL_per_L']:.2f} mL/L" if _dg_released else "0 (absorbed)",
+                help="mL of gas at STP (0 °C, 1 atm) per litre of liquid.",
+            )
+            _dg_kc.metric(
+                "Nm³/m³ liquid",
+                f"{_dg_res['released_Nm3_per_m3']:.4f}" if _dg_released else "0",
+            )
+            _dg_kd.metric(
+                "Mass released",
+                f"{_dg_res['released_g_per_L']*1e3:.3f} mg/L" if _dg_released else "0",
+            )
+
+            if not _dg_released:
+                st.info(
+                    f"The outlet conditions can hold **more** {_dg_gas} than at inlet. "
+                    "The liquid is **undersaturated** after the HX — no gas is released."
+                )
+
+            # ── Decomposition table ──────────────────────────────────────────
+            st.markdown("**Effect decomposition**")
+            _dg_dec = {
+                "Effect": ["Pressure drop only (ΔP, same T₁)", "Cooling only (ΔT, same P₁)", "Combined (ΔP + ΔT)"],
+                "ΔC (mmol/L)": [
+                    f"{_dg_res['dC_pressure_mol_L']*1e3:+.3f}",
+                    f"{_dg_res['dC_temp_mol_L']*1e3:+.3f}",
+                    f"{_dg_res['dC_combined_mol_L']*1e3:+.3f}",
+                ],
+                "Released (mL/L STP)": [
+                    f"{_dg_res['pressure_effect']['V_mL_per_L']:.3f}" if _dg_res['dC_pressure_mol_L'] > 0 else "0 (absorbed)",
+                    f"{_dg_res['temp_effect']['V_mL_per_L']:.3f}"    if _dg_res['dC_temp_mol_L'] > 0    else "0 (absorbed)",
+                    f"{_dg_res['combined_effect']['V_mL_per_L']:.3f}" if _dg_res['dC_combined_mol_L'] > 0 else "0 (absorbed)",
+                ],
+                "Nm³/m³": [
+                    f"{_dg_res['pressure_effect']['V_Nm3_per_m3']:.4f}" if _dg_res['dC_pressure_mol_L'] > 0 else "—",
+                    f"{_dg_res['temp_effect']['V_Nm3_per_m3']:.4f}"    if _dg_res['dC_temp_mol_L'] > 0    else "—",
+                    f"{_dg_res['combined_effect']['V_Nm3_per_m3']:.4f}" if _dg_res['dC_combined_mol_L'] > 0 else "—",
+                ],
+            }
+            st.dataframe(pd.DataFrame(_dg_dec), hide_index=True, use_container_width=True)
+
+            # ── Henry constants table ────────────────────────────────────────
+            st.markdown("**Henry's Law constants**")
+            _dg_solvent_label = f"KOH {_dg_koh_wt:.0f} wt%" if _dg_koh_wt > 0 else "Pure water"
+            _dg_htab = {
+                "State": ["Upstream (T₁, P₁)", "Downstream (T₂, P₂)"],
+                "T (°C)": [f"{_dg_T1:.1f}", f"{_dg_T2:.1f}"],
+                "P gas (bar)": [
+                    f"{_dg_P1 * _dg_y_gas:.3f}",
+                    f"{_dg_P2 * _dg_y_gas:.3f}",
+                ],
+                "K_H water (mol/L/bar)": [
+                    f"{_dg_res['K_H1_water']:.4e}",
+                    f"{_dg_res['K_H2_water']:.4e}",
+                ],
+                f"K_H {_dg_solvent_label} (mol/L/bar)": [
+                    f"{_dg_res['K_H1_soln']:.4e}",
+                    f"{_dg_res['K_H2_soln']:.4e}",
+                ],
+                "K_s (L/mol)": [
+                    f"{_dg_res['K_s1']:.4f}",
+                    f"{_dg_res['K_s2']:.4f}",
+                ],
+                "C (mol/L)": [
+                    f"{_dg_res['C1_mol_L']:.4e}",
+                    f"{_dg_res['C2_mol_L']:.4e}",
+                ],
+            }
+            st.dataframe(pd.DataFrame(_dg_htab), hide_index=True, use_container_width=True)
+
+            if _dg_koh_wt > 0:
+                _dg_c_koh = _dg_res["c_koh1_mol_L"]
+                st.caption(
+                    f"KOH {_dg_koh_wt:.0f} wt% → {_dg_c_koh:.2f} mol/L at T₁.  "
+                    f"Sechenov factor at T₁: 10^(−{_dg_res['K_s1']:.3f} × {_dg_c_koh:.2f}) "
+                    f"= {10**(-_dg_res['K_s1']*_dg_c_koh):.3f}  "
+                    f"(solubility reduced to {10**(-_dg_res['K_s1']*_dg_c_koh)*100:.0f}% of pure-water value)"
+                )
+
+            # ── K_H vs T chart ────────────────────────────────────────────────
+            st.markdown("**K_H vs Temperature (solubility curve)**")
+            _dg_temps = [t for t in range(-5, 101, 5)]
+            _dg_kh_w = [dg._interp_kh_water(t, _dg_gas) * 1e4 for t in _dg_temps]
+            _dg_kh_s = [dg.kh_solution(t, _dg_gas, _dg_koh_wt) * 1e4 for t in _dg_temps] if _dg_koh_wt > 0 else None
+
+            _dg_fig = go.Figure()
+            _dg_fig.add_trace(go.Scatter(
+                x=_dg_temps, y=_dg_kh_w, mode="lines",
+                name="Pure water", line=dict(color="#3b82f6", width=2),
+            ))
+            if _dg_kh_s:
+                _dg_fig.add_trace(go.Scatter(
+                    x=_dg_temps, y=_dg_kh_s, mode="lines",
+                    name=f"KOH {_dg_koh_wt:.0f} wt%", line=dict(color="#f59e0b", width=2, dash="dash"),
+                ))
+            # Mark operating points
+            _dg_kh1_plot = dg.kh_solution(_dg_T1, _dg_gas, _dg_koh_wt) * 1e4
+            _dg_kh2_plot = dg.kh_solution(_dg_T2, _dg_gas, _dg_koh_wt) * 1e4
+            _dg_fig.add_trace(go.Scatter(
+                x=[_dg_T1, _dg_T2], y=[_dg_kh1_plot, _dg_kh2_plot],
+                mode="markers",
+                marker=dict(size=10, color=["#16a34a", "#dc2626"], symbol="circle"),
+                name="Operating points (T₁/T₂)",
+            ))
+            _dg_fig.update_layout(
+                xaxis_title="Temperature (°C)",
+                yaxis_title="K_H (×10⁻⁴ mol/L/bar)",
+                height=320,
+                margin=dict(t=20, b=40, l=60, r=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            )
+            st.plotly_chart(_dg_fig, use_container_width=True)
+
+        except Exception as _dg_err:
+            st.error(f"Calculation error: {_dg_err}")
+
+        with st.expander("Theory & References"):
+            st.markdown("""
+**Henry's Law**
+
+At equilibrium: C [mol/L] = K_H(T) × P_gas [bar]
+
+K_H is strongly temperature-dependent and shows a **minimum near 45–55 °C for H₂** — above
+this temperature, H₂ becomes *more* soluble with increasing temperature (unusual behaviour).
+This means cooling a hot, pressurised H₂ stream can *increase* solubility and partially or
+fully offset the effect of a pressure drop.
+
+**Sechenov equation (KOH salting-out)**
+
+log₁₀(K_H_water / K_H_KOH) = K_s × c_KOH
+
+where K_s ≈ 0.069 L/mol for H₂ in KOH (Tremosa et al. 2019).
+At 30 wt% KOH (~5.4 mol/L) and 25 °C, this gives a solubility reduction to ~45% of the pure-water value.
+
+K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
+
+**Flash convention**
+- Positive ΔC → gas released from solution
+- Negative ΔC → liquid is *undersaturated* after the step; no gas is released
+
+**References**
+
+- Battino R., Rettich T.R., Tominaga T. (1984). *The solubility of nitrogen and air in liquids.* JPCRD **13**, 563.
+  (H₂ and O₂ tables used for interpolation)
+- Tremosa J. et al. (2019). *Geochemical characterization and modelling of hydrogen gas solubility in KOH solutions.* Applied Geochemistry.
+  (K_s = 0.069 L/mol for H₂ in KOH)
+- Sander R. (2015). *Compilation of Henry's law constants.* ACP **15**, 4399.
+  (O₂ Sechenov constants)
+""")
+
 
 
