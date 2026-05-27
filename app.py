@@ -256,7 +256,7 @@ with st.sidebar:
         if _sb_sel:
             _sb_case = val_cases.get_validation_case(_sb_sel)
             st.info(val_cases.get_case_info(_sb_sel))
-            if st.button("Run", key="sb_run_val", use_container_width=True):
+            if st.button("Run", key="sb_run_val", width='stretch'):
                 _sb_vi   = _sb_case["inputs"]
                 _sb_mode = _sb_case.get("mode", "gas_liquid")
                 _sb_D    = engine.PIPE_DATABASE[_sb_vi["pipe_dn"]][_sb_vi["pipe_pn"]]
@@ -325,7 +325,7 @@ with st.sidebar:
         data=_save_json,
         file_name="hydraulic_session.json",
         mime="application/json",
-        use_container_width=True,
+        width='stretch',
         help="Download all current inputs as a JSON file you can reload later.",
     )
 
@@ -1046,7 +1046,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
             st.session_state[k("segments")] = current_specs
             _ab1, _ab2, _ab3, _ab4 = st.columns(4)
-            if _ab1.button("+ Pipe segment", key=k("add_seg"), use_container_width=True):
+            if _ab1.button("+ Pipe segment", key=k("add_seg"), width='stretch'):
                 _last = st.session_state[k("segments")][-1]
                 _last_pipe = next(
                     (s for s in reversed(st.session_state[k("segments")]) if s.get("kind","pipe") == "pipe"),
@@ -1062,7 +1062,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     "liner_thickness_mm": _last_pipe.get("liner_thickness_mm", 1.0),
                 })
                 st.rerun()
-            if _ab2.button("+ Valve", key=k("add_valve"), use_container_width=True):
+            if _ab2.button("+ Valve", key=k("add_valve"), width='stretch'):
                 _last_dn = next(
                     (s.get("dn","DN50") for s in reversed(st.session_state[k("segments")])), "DN50")
                 _last_pn = next(
@@ -1073,7 +1073,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     "characteristic": "equal-percentage",
                 })
                 st.rerun()
-            if _ab3.button("+ Heat exchanger", key=k("add_hx"), use_container_width=True):
+            if _ab3.button("+ Heat exchanger", key=k("add_hx"), width='stretch'):
                 _last_dn = next(
                     (s.get("dn","DN50") for s in reversed(st.session_state[k("segments")])), "DN50")
                 _last_pn = next(
@@ -1083,7 +1083,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     "type": "Horizontal", "duty_kw": 0.0, "dp_kpa": 20.0,
                 })
                 st.rerun()
-            if _ab4.button("− Remove last", key=k("rem_seg"), use_container_width=True) and \
+            if _ab4.button("− Remove last", key=k("rem_seg"), width='stretch') and \
                len(st.session_state[k("segments")]) > 1:
                 st.session_state[k("segments")].pop()
                 st.rerun()
@@ -1175,7 +1175,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                         column_config={c: st.column_config.NumberColumn(format="%.4f")
                                        for c in ["Feed (kg/h)", "Gas phase (kg/h)",
                                                  "Liquid phase (kg/h)"]},
-                        hide_index=True, use_container_width=True)
+                        hide_index=True, width='stretch')
                     _fv1, _fv2 = st.columns(2)
                     _fv1.metric("Vapour fraction (mass)", f"{_flash['VF_mass']*100:.2f} %")
                     _fv2.metric("Vapour fraction (mol)",  f"{_flash['VF_mol']*100:.2f} %")
@@ -1563,13 +1563,13 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         st.subheader("Segment Analysis")
         st.dataframe(_grid_df[_existing_primary],
                      column_config=_seg_col_cfg,
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width='stretch')
         _existing_detail = [c for c in _detail_cols if c in _grid_df.columns]
         if _existing_detail:
             with st.expander("Detail columns"):
                 st.dataframe(_grid_df[["Seg"] + _existing_detail],
                              column_config=_seg_col_cfg,
-                             hide_index=True, use_container_width=True)
+                             hide_index=True, width='stretch')
 
         # ── Key Results — fill the top-of-column placeholder ─────────────────
         total_dp_kpa         = ((P_bara*1e5) - current_P) / 1000.0
@@ -1655,7 +1655,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0",
                         borderwidth=1, orientation="h", y=1.08),
             font=dict(size=12, color="#374151"))
-        st.plotly_chart(fig_decomp, use_container_width=True, key=k("fig_decomp"))
+        st.plotly_chart(fig_decomp, width='stretch', key=k("fig_decomp"))
 
     # ── VISUALISATIONS ────────────────────────────────────────────────────────
     _nodes = [(0.0, 0.0)]
@@ -1783,10 +1783,10 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
     tab_vle_dist = _tabs[3] if _is_vle else None
 
     with tab_sch:
-        st.plotly_chart(fig_sch, use_container_width=True, key=k("fig_sch"))
+        st.plotly_chart(fig_sch, width='stretch', key=k("fig_sch"))
         st.caption("Line width ∝ DN  ·  Colour = flow regime  ·  Regime name on each segment")
     with tab_prof_tab:
-        st.plotly_chart(fig_prof, use_container_width=True, key=k("fig_prof"))
+        st.plotly_chart(fig_prof, width='stretch', key=k("fig_prof"))
     with tab_regime_map:
         # Determine single-phase status for regime map (need both phases for meaningful map)
         _gas_ok_rm  = bool(_eff_gas_flows) and any(v > 0 for v in (_eff_gas_flows or {}).values())
@@ -1954,7 +1954,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 title=dict(text="Flow Regime Map — operating points per segment",
                            font=dict(size=13), x=0),
             )
-            st.plotly_chart(fig_regime, use_container_width=True, key=k("fig_regime"))
+            st.plotly_chart(fig_regime, width='stretch', key=k("fig_regime"))
             _corr_note = ("Taitel-Dukler (1976) + Mandhane-Gregory-Aziz (1974)"
                           if _use_horiz else "Wallis annular criterion + void-fraction thresholds")
             st.caption(
@@ -2004,7 +2004,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 legend=dict(orientation="h", x=0.01, y=1.08, bgcolor="rgba(0,0,0,0)"),
                 hovermode="x unified", font=dict(size=11, color="#374151"),
             )
-            st.plotly_chart(_fig_pt, use_container_width=True, key=k("fig_vle_pt"))
+            st.plotly_chart(_fig_pt, width='stretch', key=k("fig_vle_pt"))
 
             # ── Chart 2: vapour/liquid split as stacked area ──────────────────
             _fig_split = go.Figure()
@@ -2040,7 +2040,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 legend=dict(orientation="h", x=0.01, y=1.10, bgcolor="rgba(0,0,0,0)"),
                 hovermode="x unified", font=dict(size=11, color="#374151"),
             )
-            st.plotly_chart(_fig_split, use_container_width=True, key=k("fig_vle_split"))
+            st.plotly_chart(_fig_split, width='stretch', key=k("fig_vle_split"))
 
             # ── Table ─────────────────────────────────────────────────────────
             _vd_table = []
@@ -2056,7 +2056,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 })
             st.dataframe(
                 pd.DataFrame(_vd_table),
-                hide_index=True, use_container_width=True,
+                hide_index=True, width='stretch',
                 column_config={
                     "P (bara)":      st.column_config.NumberColumn(format="%.3f"),
                     "T_sat (°C)":    st.column_config.NumberColumn(format="%.2f"),
@@ -2101,7 +2101,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                         for col in _stream_cols}
         st.subheader("Heat & Mass Balance")
         st.dataframe(_hmb_df, column_config=_num_col_cfg,
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width='stretch')
 
 
     # ── METHOD SENSITIVITY ────────────────────────────────────────────────────
@@ -2200,7 +2200,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                            font=dict(size=12), x=0),
                 showlegend=False,
             )
-            st.plotly_chart(_fig_ms, use_container_width=True, key=k("fig_method_sens"))
+            st.plotly_chart(_fig_ms, width='stretch', key=k("fig_method_sens"))
 
             # Data table
             _ms_rows = []
@@ -2214,7 +2214,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             st.dataframe(
                 pd.DataFrame(_ms_rows),
                 hide_index=True,
-                use_container_width=True,
+                width='stretch',
                 column_config={
                     "ΔP (kPa)": st.column_config.NumberColumn(format="%.3f"),
                 },
@@ -2259,14 +2259,14 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         _wg1, _wg2 = st.columns(2)
         with _wg1:
             if st.button("Generate (tables only)", type="primary",
-                         use_container_width=True, key=k("gen_rpt")):
+                         width='stretch', key=k("gen_rpt")):
                 with st.spinner("Building document…"):
                     _buf = report_generator.generate_report(
                         **_rpt_kwargs(), fig_sch=None, fig_prof=None)
                     st.session_state[k("rpt_bytes")] = _buf.getvalue()
                     st.session_state[k("rpt_hash")]  = _rpt_hash
         with _wg2:
-            if st.button("Generate with charts", use_container_width=True,
+            if st.button("Generate with charts", width='stretch',
                          key=k("gen_rpt_ch")):
                 with st.spinner("Building document with charts…"):
                     _buf = report_generator.generate_report(
@@ -2281,7 +2281,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     data=st.session_state[k("rpt_bytes")],
                     file_name=f"hydraulic_report_case_{cid}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True, key=k("dl_rpt"))
+                    width='stretch', key=k("dl_rpt"))
             elif st.session_state.get(k("rpt_bytes")):
                 st.info("Inputs changed — regenerate.")
         with _wd2:
@@ -2291,7 +2291,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     data=st.session_state[k("rpt_bytes_ch")],
                     file_name=f"hydraulic_report_case_{cid}_charts.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True, key=k("dl_rpt_ch"))
+                    width='stretch', key=k("dl_rpt_ch"))
             elif st.session_state.get(k("rpt_bytes_ch")):
                 st.info("Inputs changed — regenerate.")
 
@@ -2396,7 +2396,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
         _xc1, _xc2 = st.columns([1, 2])
         with _xc1:
-            if st.button("Generate Excel", use_container_width=True, key=k("gen_xl")):
+            if st.button("Generate Excel", width='stretch', key=k("gen_xl")):
                 try:
                     st.session_state[k("xl_bytes")] = _build_xlsx_case().getvalue()
                 except Exception as _xe:
@@ -2407,7 +2407,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     data=st.session_state[k("xl_bytes")],
                     file_name=f"hydraulic_data_case_{cid}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True, key=k("dl_xl"))
+                    width='stretch', key=k("dl_xl"))
 
     return {
         "P_bara":               P_bara,
@@ -3376,7 +3376,7 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
             P_inlet_bara, worst_arm,
             dp_l_kpa, dp_r_kpa,
             P_T_l_bara, P_T_r_bara, P_sep_bara)
-        st.plotly_chart(fig_sch_hdr, use_container_width=True,
+        st.plotly_chart(fig_sch_hdr, width='stretch',
                         key=f"{cid}_hdr_schematic")
 
         _col_hdr = ["Seg", "Taps in seg", "From T (m)", "To T (m)", "L (m)",
@@ -3405,21 +3405,21 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
                 _df_l = pd.DataFrame(rec_l)
                 st.dataframe(_df_l[[c for c in _col_hdr if c in _df_l.columns]],
                              column_config=_col_cfg_hdr,
-                             hide_index=True, use_container_width=True)
+                             hide_index=True, width='stretch')
         with tr:
             st.markdown(f"**Right arm**  {'⚠️ governing' if worst_arm == 'Right' else ''}")
             if rec_r:
                 _df_r = pd.DataFrame(rec_r)
                 st.dataframe(_df_r[[c for c in _col_hdr if c in _df_r.columns]],
                              column_config=_col_cfg_hdr,
-                             hide_index=True, use_container_width=True)
+                             hide_index=True, width='stretch')
 
         if rec_t:
             st.markdown("**T-segment** (junction → separator)")
             _df_t = pd.DataFrame([rec_t])
             _t_cols = [c for c in _col_hdr if c in _df_t.columns]
             st.dataframe(_df_t[_t_cols], column_config=_col_cfg_hdr,
-                         hide_index=True, use_container_width=True)
+                         hide_index=True, width='stretch')
 
         fig_hdr = None
         if rec_l or rec_r:
@@ -3448,7 +3448,7 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
                 paper_bgcolor="white", plot_bgcolor="white",
                 xaxis_gridcolor="#F1F5F9", yaxis_gridcolor="#F1F5F9",
             )
-            st.plotly_chart(fig_hdr, use_container_width=True,
+            st.plotly_chart(fig_hdr, width='stretch',
                             key=f"{cid}_hdr_pressure_profile")
 
     # ── RETURN DICT ────────────────────────────────────────────────────────────
@@ -3672,7 +3672,7 @@ if _group != "Engineering Tools":
             yaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
             legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0", borderwidth=1),
             font=dict(size=12, color="#374151"))
-        st.plotly_chart(fig_cmp, use_container_width=True, key="fig_cmp")
+        st.plotly_chart(fig_cmp, width='stretch', key="fig_cmp")
 
         # ── Per-segment ΔP comparison ──────────────────────────────────────────────
         st.markdown("#### Pressure Drop by Segment")
@@ -3693,7 +3693,7 @@ if _group != "Engineering Tools":
             yaxis=dict(gridcolor="#F1F5F9", linecolor="#E2E8F0"),
             legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0", borderwidth=1),
             font=dict(size=12, color="#374151"))
-        st.plotly_chart(fig_bar, use_container_width=True, key="fig_bar")
+        st.plotly_chart(fig_bar, width='stretch', key="fig_bar")
 
         # ── Method Sensitivity Analysis ────────────────────────────────────────────
         st.markdown("#### Method Sensitivity Analysis")
@@ -3707,7 +3707,7 @@ if _group != "Engineering Tools":
         _sc1, _sc2 = st.columns([1, 3])
         with _sc1:
             _run_sens = st.button("Run Sensitivity Analysis", type="primary",
-                                  use_container_width=True, key="run_sens")
+                                  width='stretch', key="run_sens")
         with _sc2:
             if "sens_a" in st.session_state and "sens_b" in st.session_state:
                 st.success("Results shown below — click again to refresh after input changes.")
@@ -3835,7 +3835,7 @@ if _group != "Engineering Tools":
                 legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#E2E8F0",
                             borderwidth=1, orientation="h", y=1.10, x=0),
                 font=dict(size=11, color="#374151"))
-            st.plotly_chart(fig_sens, use_container_width=True, key="fig_sens")
+            st.plotly_chart(fig_sens, width='stretch', key="fig_sens")
 
             _n_failed = sum(1 for ok in _ok_a + _ok_b if not ok)
             if _n_failed > 0:
@@ -3857,7 +3857,7 @@ if _group != "Engineering Tools":
                      "Selected (kPa)": f"{rb['total_dp_kpa']:.3f}",
                      "Max (kPa)":      f"{_b_max:.3f}",
                      "Spread (kPa)":   f"{_b_max - _b_min:.3f}"},
-                ]), hide_index=True, use_container_width=True)
+                ]), hide_index=True, width='stretch')
                 if _overlap:
                     st.warning(
                         f"Ranges **overlap** — the relative ordering of {_la} vs {_lb} depends on "
@@ -3916,13 +3916,13 @@ if _group != "Engineering Tools":
             with _rca:
                 st.markdown(f"**{_la}**")
                 if _rt_a is not None:
-                    st.dataframe(_rt_a, hide_index=True, use_container_width=True)
+                    st.dataframe(_rt_a, hide_index=True, width='stretch')
                 else:
                     st.caption("No regime data available.")
             with _rcb:
                 st.markdown(f"**{_lb}**")
                 if _rt_b is not None:
-                    st.dataframe(_rt_b, hide_index=True, use_container_width=True)
+                    st.dataframe(_rt_b, hide_index=True, width='stretch')
                 else:
                     st.caption("No regime data available.")
 
@@ -4003,7 +4003,7 @@ if _group != "Engineering Tools":
         _cmp_btn_col, _cmp_dl_col = st.columns(2)
         with _cmp_btn_col:
             if st.button("Generate Comparison (tables only)", type="primary",
-                         use_container_width=True, key="gen_cmp_rpt"):
+                         width='stretch', key="gen_cmp_rpt"):
                 with st.spinner("Building comparison report…"):
                     try:
                         _sd = _build_sens_data()
@@ -4017,7 +4017,7 @@ if _group != "Engineering Tools":
                         st.success("Ready.")
                     except Exception as _e:
                         st.error(f"Failed: {_e}")
-            if st.button("Generate Comparison with charts", use_container_width=True,
+            if st.button("Generate Comparison with charts", width='stretch',
                          key="gen_cmp_rpt_ch"):
                 with st.spinner("Building comparison report with charts…"):
                     try:
@@ -4038,20 +4038,20 @@ if _group != "Engineering Tools":
                     data=st.session_state["cmp_rpt_bytes"],
                     file_name="report_comparison.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True, key="dl_cmp_rpt")
+                    width='stretch', key="dl_cmp_rpt")
             if st.session_state.get("cmp_rpt_bytes_ch"):
                 st.download_button(
                     "Download Comparison with charts  (.docx)",
                     data=st.session_state["cmp_rpt_bytes_ch"],
                     file_name="report_comparison_charts.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True, key="dl_cmp_rpt_ch")
+                    width='stretch', key="dl_cmp_rpt_ch")
 
         # ── Combined report ───────────────────────────────────────────────────────
         _cmb_btn_col, _cmb_dl_col = st.columns(2)
         with _cmb_btn_col:
             if st.button("Generate Combined (tables only)", type="primary",
-                         use_container_width=True, key="gen_combined_rpt"):
+                         width='stretch', key="gen_combined_rpt"):
                 with st.spinner("Building combined report…"):
                     try:
                         _sd = _build_sens_data()
@@ -4066,7 +4066,7 @@ if _group != "Engineering Tools":
                         st.success("Ready.")
                     except Exception as _e:
                         st.error(f"Failed: {_e}")
-            if st.button("Generate Combined with charts", use_container_width=True,
+            if st.button("Generate Combined with charts", width='stretch',
                          key="gen_combined_rpt_ch"):
                 with st.spinner("Building combined report with charts…"):
                     try:
@@ -4088,14 +4088,14 @@ if _group != "Engineering Tools":
                     data=st.session_state["combined_rpt_bytes"],
                     file_name="report_combined.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True, key="dl_combined_rpt")
+                    width='stretch', key="dl_combined_rpt")
             if st.session_state.get("combined_rpt_bytes_ch"):
                 st.download_button(
                     "Download Combined with charts  (.docx)",
                     data=st.session_state["combined_rpt_bytes_ch"],
                     file_name="report_combined_charts.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True, key="dl_combined_rpt_ch")
+                    width='stretch', key="dl_combined_rpt_ch")
 
         st.caption("ℹ Individual case reports (A, B) are available in their respective tabs.")
         if not _sens_avail:
@@ -4128,11 +4128,11 @@ if _group != "Engineering Tools":
         with _ta:
             st.markdown(f"**{_la}**")
             st.dataframe(pd.DataFrame(ra["grid_records"])[_cmp_cols],
-                         column_config=_col_cfg, hide_index=True, use_container_width=True)
+                         column_config=_col_cfg, hide_index=True, width='stretch')
         with _tb:
             st.markdown(f"**{_lb}**")
             st.dataframe(pd.DataFrame(rb["grid_records"])[_cmp_cols],
-                         column_config=_col_cfg, hide_index=True, use_container_width=True)
+                         column_config=_col_cfg, hide_index=True, width='stretch')
 
 
     # ============================================================================
@@ -4190,7 +4190,7 @@ if _group != "Engineering Tools":
                         help=f"Target pressure at the {_lb} gas-liquid separator.",
                     )
                 _sk_run = st.button("Calculate", type="primary",
-                                    use_container_width=True, key="stack_run")
+                                    width='stretch', key="stack_run")
 
             if _sk_run:
                 with st.spinner(f"Solving {_la} and {_lb} systems…"):
@@ -4234,7 +4234,7 @@ if _group != "Engineering Tools":
                         help=f"Fixed inlet pressure for the {_lb} branch.",
                     )
                 _fwd_run = st.button("Calculate", type="primary",
-                                     use_container_width=True, key="gs_fwd_run")
+                                     width='stretch', key="gs_fwd_run")
 
             if _fwd_run:
                 with st.spinner(f"Marching {_la} and {_lb} systems forward…"):
@@ -4339,13 +4339,13 @@ if _group != "Engineering Tools":
             _ap1, _ap2 = st.columns(2)
             if _ap1.button(
                 f"Apply {_p_in_a:.4f} bara → {_la}",
-                use_container_width=True, key="stack_apply_a",
+                width='stretch', key="stack_apply_a",
             ):
                 st.session_state["stack_apply_a_pending"] = float(_p_in_a)
                 st.rerun()
             if _ap2.button(
                 f"Apply {_p_in_b:.4f} bara → {_lb}",
-                use_container_width=True, key="stack_apply_b",
+                width='stretch', key="stack_apply_b",
             ):
                 st.session_state["stack_apply_b_pending"] = float(_p_in_b)
                 st.rerun()
@@ -4393,7 +4393,7 @@ if _group != "Engineering Tools":
                     )
                     _run_dn_study = st.button(
                         "Run DN Study", type="primary",
-                        use_container_width=True, key="dn_study_run"
+                        width='stretch', key="dn_study_run"
                     )
 
             if _run_dn_study:
@@ -4457,7 +4457,7 @@ if _group != "Engineering Tools":
                         })
                     st.dataframe(
                         pd.DataFrame(_dp_rows),
-                        hide_index=True, use_container_width=True,
+                        hide_index=True, width='stretch',
                         column_config={
                             f"{_dn_p_lbl} ΔP (kPa)": st.column_config.NumberColumn(format="%.3f"),
                             f"{_dn_a_lbl} ΔP (kPa)": st.column_config.NumberColumn(format="%.3f"),
@@ -4532,7 +4532,7 @@ if _group != "Engineering Tools":
                                         "Changed": "⚠" if _pr != _ar["regime"] else "✓",
                                     })
                                 st.dataframe(pd.DataFrame(_rrA), hide_index=True,
-                                             use_container_width=True)
+                                             width='stretch')
                             with _rr2:
                                 st.caption(f"*{_lb} branch*")
                                 _prim_b_recs = results_b.get("grid_records", [])
@@ -4546,7 +4546,7 @@ if _group != "Engineering Tools":
                                         "Changed": "⚠" if _pr != _br["regime"] else "✓",
                                     })
                                 st.dataframe(pd.DataFrame(_rrB), hide_index=True,
-                                             use_container_width=True)
+                                             width='stretch')
 
                     # ── Recommendation ────────────────────────────────────────────
                     _vel_ok        = _ratio_a <= 1.0 and _ratio_b <= 1.0
@@ -4572,7 +4572,7 @@ if _group != "Engineering Tools":
                     st.divider()
                     _dn_rpt_col1, _dn_rpt_col2 = st.columns(2)
                     with _dn_rpt_col1:
-                        if st.button("Generate DN Study Report", use_container_width=True,
+                        if st.button("Generate DN Study Report", width='stretch',
                                      key="dn_study_gen_rpt"):
                             try:
                                 _dn_buf = report_generator.generate_dn_study_report(
@@ -4606,7 +4606,7 @@ if _group != "Engineering Tools":
                                 data=st.session_state["dn_study_rpt_bytes"],
                                 file_name=f"dn_study_{_dn_p_lbl}_vs_{_dn_a_lbl}.docx",
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                use_container_width=True, key="dn_study_dl_rpt",
+                                width='stretch', key="dn_study_dl_rpt",
                             )
 
 
@@ -4698,7 +4698,7 @@ else:  # Engineering Tools
 
             _fn_L_m = st.number_input("Pipe length (m)", value=50.0, min_value=0.1, max_value=10000.0, step=5.0, format="%.1f", key="fn_L")
 
-            _fn_run = st.button("Calculate", type="primary", use_container_width=True, key="fn_run")
+            _fn_run = st.button("Calculate", type="primary", width='stretch', key="fn_run")
 
         with _fr:
             st.subheader("Results")
@@ -4811,7 +4811,7 @@ else:  # Engineering Tools
                 _fig1.update_layout(title="Pressure and Temperature Profile",
                                     legend=dict(orientation="h", yanchor="bottom", y=1.02),
                                     margin=dict(t=60, b=40), height=320)
-                st.plotly_chart(_fig1, use_container_width=True)
+                st.plotly_chart(_fig1, width='stretch')
 
                 _fig2 = go.Figure()
                 _fig2.add_trace(go.Scatter(x=_fn_x, y=_fn_Ma, name="Ma", line=dict(color="#16a34a", width=2.5)))
@@ -4823,14 +4823,14 @@ else:  # Engineering Tools
                 _fig2.update_xaxes(title_text="Distance from inlet (m)")
                 _fig2.update_yaxes(title_text="Mach number (−)")
                 _fig2.update_layout(title="Mach Number Profile", margin=dict(t=60, b=40), height=280)
-                st.plotly_chart(_fig2, use_container_width=True)
+                st.plotly_chart(_fig2, width='stretch')
 
                 _fig3 = go.Figure()
                 _fig3.add_trace(go.Scatter(x=_fn_x, y=_fn_V, name="Velocity (m/s)", line=dict(color="#7c3aed", width=2)))
                 _fig3.update_xaxes(title_text="Distance from inlet (m)")
                 _fig3.update_yaxes(title_text="Velocity (m/s)")
                 _fig3.update_layout(title="Velocity Profile", margin=dict(t=60, b=40), height=240)
-                st.plotly_chart(_fig3, use_container_width=True)
+                st.plotly_chart(_fig3, width='stretch')
 
                 with st.expander("Assumptions and limitations"):
                     st.markdown(f"""
@@ -4957,7 +4957,7 @@ else:  # Engineering Tools
                 else:
                     _ro_d_mm = st.number_input("Orifice bore d (mm)", value=15.0, min_value=1.0, max_value=_ro_D_m*990, step=0.5, format="%.1f", key="ro_d_liq")
 
-            _ro_run = st.button("Calculate", type="primary", use_container_width=True, key="ro_run")
+            _ro_run = st.button("Calculate", type="primary", width='stretch', key="ro_run")
 
         # ── Results ───────────────────────────────────────────────────────────────
         with _ro_right:
@@ -5090,7 +5090,7 @@ else:  # Engineering Tools
                         "ε":            f"{s['eps']:.4f}",
                         "Ma throat":    f"{s['Ma_throat']:.4f}",
                     } for s in _ms["stages"]])
-                    st.dataframe(_ms_df, use_container_width=True, hide_index=True)
+                    st.dataframe(_ms_df, width='stretch', hide_index=True)
 
                 else:
                     _ms = ro.multistage_liquid(
@@ -5120,7 +5120,7 @@ else:  # Engineering Tools
                         "C":            f"{s['C']:.4f}",
                         "Kc":           f"{s['Kc']:.4f}",
                     } for s in _ms["stages"]])
-                    st.dataframe(_ms_df, use_container_width=True, hide_index=True)
+                    st.dataframe(_ms_df, width='stretch', hide_index=True)
 
                 # ── Pressure profile chart ─────────────────────────────────────
                 _P_sched = _ms["P_schedule_bara"]
@@ -5162,7 +5162,7 @@ else:  # Engineering Tools
                     margin=dict(t=50, b=40), height=320,
                     showlegend=False,
                 )
-                st.plotly_chart(_pfig, use_container_width=True)
+                st.plotly_chart(_pfig, width='stretch')
 
                 with st.expander("Assumptions and references"):
                     st.markdown(f"""
@@ -5483,7 +5483,7 @@ else:  # Engineering Tools
                 _kfactors["Factor"].append("Kw (back pressure)")
                 _kfactors["Value"].append(f"{_psv_res['Kw']:.3f}")
                 _kfactors["Source"].append("API 520 §3.5")
-            st.dataframe(pd.DataFrame(_kfactors), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(_kfactors), width='stretch', hide_index=True)
 
             # Standard orifice table with flange sizes
             st.markdown("**API 526 standard orifice and flange sizes**")
@@ -5499,7 +5499,7 @@ else:  # Engineering Tools
                     "Outlet flange": _out_str,
                     "": "✓" if _letter == _psv_res["orifice_letter"] else "",
                 })
-            st.dataframe(pd.DataFrame(_orifice_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(_orifice_rows), width='stretch', hide_index=True)
 
             with st.expander("Assumptions and references"):
                 st.markdown(f"""
@@ -5807,7 +5807,7 @@ else:  # Engineering Tools
                     "At design flow": f"{_kv/_k100*100:.0f}%" if _k100 >= _kv * 0.2 else "—",
                     "":              "✓" if _lbl == _sz["size_label"] else "",
                 })
-            st.dataframe(pd.DataFrame(_kv_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(_kv_rows), width='stretch', hide_index=True)
 
             with st.expander("Equations and references"):
                 st.markdown(f"""
@@ -5949,7 +5949,7 @@ Anti-cavitation trims can operate at σ down to ~0.5 FL².
                     f"{_dg_res['combined_effect']['V_Nm3_per_m3']:.4f}" if _dg_res['dC_combined_mol_L'] > 0 else "—",
                 ],
             }
-            st.dataframe(pd.DataFrame(_dg_dec), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(_dg_dec), hide_index=True, width='stretch')
 
             # ── Henry constants table ────────────────────────────────────────
             st.markdown("**Henry's Law constants**")
@@ -5978,7 +5978,7 @@ Anti-cavitation trims can operate at σ down to ~0.5 FL².
                     f"{_dg_res['C2_mol_L']:.4e}",
                 ],
             }
-            st.dataframe(pd.DataFrame(_dg_htab), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(_dg_htab), hide_index=True, width='stretch')
 
             if _dg_koh_wt > 0:
                 _dg_c_koh = _dg_res["c_koh1_mol_L"]
@@ -6021,7 +6021,7 @@ Anti-cavitation trims can operate at σ down to ~0.5 FL².
                 margin=dict(t=20, b=40, l=60, r=20),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             )
-            st.plotly_chart(_dg_fig, use_container_width=True)
+            st.plotly_chart(_dg_fig, width='stretch')
 
         except Exception as _dg_err:
             st.error(f"Calculation error: {_dg_err}")
