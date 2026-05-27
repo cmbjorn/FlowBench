@@ -48,7 +48,27 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Requires Python 3.9+. Opens at `http://localhost:8501`.
+Requires **Python 3.10 or 3.11** (recommended). Opens at `http://localhost:8501`.
+
+### Windows notes
+
+CoolProp is a C++ extension. Pre-built wheels exist for Python 3.10 and 3.11 on 64-bit Windows — use one of those Python versions and `pip install` will work without a compiler.
+
+If you see `ImportError: CoolProp` or the app hangs on localhost without showing anything:
+
+```bash
+pip install "CoolProp>=6.4.0"
+```
+
+If pip tries to compile from source (no wheel for your Python version), install
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+with the "Desktop development with C++" workload first, then retry.
+
+If port 8501 is blocked by Windows Firewall, either allow it or run on a different port:
+
+```bash
+streamlit run app.py --server.port 8502
+```
 
 ---
 

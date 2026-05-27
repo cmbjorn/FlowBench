@@ -1,7 +1,18 @@
 # multiphase_engine.py
 import math
 import numpy as np
-import CoolProp.CoolProp as CP
+try:
+    import CoolProp.CoolProp as CP
+    _CP_AVAILABLE = True
+except ImportError as _cp_err:
+    raise ImportError(
+        "\n\nCoolProp is required but could not be imported.\n"
+        "Install a pre-built wheel with:\n"
+        "    pip install 'CoolProp>=6.4.0'\n"
+        "If pip tries to compile from source and fails, install Visual Studio "
+        "Build Tools (Windows) or the Xcode CLI (macOS) first.\n"
+        f"Original error: {_cp_err}"
+    ) from _cp_err
 from fluids.two_phase import (
     Beggs_Brill, two_phase_dP, two_phase_dP_dz_gravitational,
     Taitel_Dukler_regime, Mandhane_Gregory_Aziz_regime,
