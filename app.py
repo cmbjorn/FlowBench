@@ -13,6 +13,7 @@ import psv_engine as psv
 import cv_engine as cv
 import hashlib
 from models import SegmentRow
+from physics.friction import churchill_f
 import json
 from fluids.two_phase import (Taitel_Dukler_regime as _TD_regime,
                                Mandhane_Gregory_Aziz_regime as _MGA_regime)
@@ -6834,16 +6835,6 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
         # ── RIGHT COLUMN — RESULTS ────────────────────────────────────────────
         with _ls_c2:
 
-            def _ls_friction_f(Re, eps_D):
-                """Darcy friction factor — Churchill (1977), valid all Re."""
-                if Re < 1e-9:
-                    return 64.0
-                if Re <= 2300.0:
-                    return 64.0 / Re
-                A = (-2.457 * _ls_math.log((7.0 / Re) ** 0.9 + 0.27 * eps_D)) ** 16
-                B = (37530.0 / Re) ** 16
-                return 8.0 * ((8.0 / Re) ** 12 + (A + B) ** (-1.5)) ** (1.0 / 12.0)
-
             _ls_eps    = engine.MATERIAL_ROUGHNESS.get(_ls_mat, 1.5e-5)
             _ls_Q_m3s  = _ls_Q_m3h / 3600.0
             _ls_dn_i   = _ls_dn_opts.index(_ls_dn_min)
@@ -6862,7 +6853,7 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                 _v   = _ls_Q_m3s / _A
                 _Re  = _ls_rho * _v * _D / max(_ls_mu, 1e-12)
                 _eD  = _ls_eps / _D
-                _f   = _ls_friction_f(_Re, _eD)
+                _f   = churchill_f(_Re, _eD)
                 _dp_pa_m     = _f * (_ls_rho * _v ** 2 / 2.0) / _D
                 _dp_kpa_100m = _dp_pa_m * 100.0 / 1000.0
 

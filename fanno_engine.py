@@ -95,14 +95,12 @@ def solve_Ma(target_4fLD: float, gamma: float, supersonic: bool = False) -> floa
     return 0.5 * (lo + hi)
 
 
+from physics.friction import churchill_f as _churchill_f
+
+
 def churchill_f(Re: float, D: float, roughness: float) -> float:
-    """Churchill (1977) explicit friction factor — valid laminar and turbulent."""
-    if Re < 1.0:
-        return 64.0
-    eps_D = roughness / D
-    A = (-2.457 * math.log((7.0 / Re) ** 0.9 + 0.27 * eps_D)) ** 16
-    B = (37530.0 / Re) ** 16
-    return 8.0 * ((8.0 / Re) ** 12 + (A + B) ** (-1.5)) ** (1.0 / 12.0)
+    """Churchill (1977) friction factor — thin wrapper kept for API compatibility."""
+    return _churchill_f(Re, roughness / D if D > 0 else 0.0)
 
 
 def gas_viscosity(species: str, T_K: float, P_Pa: float) -> float:
