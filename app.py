@@ -1466,13 +1466,17 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         # ── Slug Flow Dynamics ────────────────────────────────────────────────
         if slug_records:
             _sf = pd.DataFrame(slug_records)
-            _worst_sev = max(
-                _sf["Severity"],
-                key=lambda s: {"Low": 0, "Moderate": 1, "Severe": 2, "High": 2}.get(s, 0)
-            )
-            _sev_icon = {"Low": "🟢", "Moderate": "🟡", "Severe": "🔴", "High": "🔴"}.get(_worst_sev, "")
+            if "Severity" in _sf.columns:
+                _worst_sev = max(
+                    _sf["Severity"],
+                    key=lambda s: {"Low": 0, "Moderate": 1, "Severe": 2, "High": 2}.get(s, 0)
+                )
+                _sev_icon = {"Low": "🟢", "Moderate": "🟡", "Severe": "🔴", "High": "🔴"}.get(_worst_sev, "")
+                _sev_title = f"  {_sev_icon} worst: {_worst_sev}"
+            else:
+                _sev_title = ""
             with st.expander(
-                f"Slug Flow Dynamics — {len(slug_records)} slug segment(s)  {_sev_icon} worst: {_worst_sev}",
+                f"Slug Flow Dynamics — {len(slug_records)} slug segment(s){_sev_title}",
                 expanded=False,
             ):
                 # Validity warning
