@@ -1550,7 +1550,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                               "ΔP_pulse (kPa)", "ΔP_design (kPa)",
                               "F_elbow (N)", "F_design (N)"]
                 _avail = [c for c in _disp_cols if c in _sf.columns]
-                _sev_avail = [c for c in _SEV_COLS if c in _sf.columns]
+                _sev_avail = [c for c in _SEV_COLS if c in _avail]
                 _styled = (
                     _sf[_avail]
                     .set_index(_sf["Seg"])
