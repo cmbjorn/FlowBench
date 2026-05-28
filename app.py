@@ -1948,8 +1948,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
             st.caption(
                 f"Background zones computed for inlet conditions: "
-                f"ρ_l = {_p['rho_l']:.1f} kg/m³, ρ_g = {_p['rho_g']:.4f} kg/m³, "
-                f"D = {_D_repr*1000:.1f} mm.  "
+                f"ρ_l = {props['rho_l']:.1f} kg/m³, ρ_g = {props['rho_g']:.4f} kg/m³, "
+                f"D = {_D_repr_rm*1000:.1f} mm.  "
                 "Left: Taitel-Dukler (1976) + Mandhane-Gregory-Aziz (1974).  "
                 "Right: Wallis annular criterion + void-fraction thresholds.  "
                 "● horizontal segment  ◆ vertical segment"
