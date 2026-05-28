@@ -11,7 +11,6 @@ echo "Dependencies OK."
 echo "Stopping any running Streamlit instances..."
 lsof -ti :8501 | xargs kill -9 2>/dev/null || true
 pkill -f "streamlit run app.py" 2>/dev/null || true
-pkill -9 -f kaleido 2>/dev/null || true
 sleep 1
 
 echo "Starting FlowBench..."
