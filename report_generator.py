@@ -243,6 +243,8 @@ def generate_report(
     cumulative_distance,
     fig_sch=None,
     fig_prof=None,
+    fig_regime_h=None,
+    fig_regime_v=None,
     case_label="Case",
     flow_mode=None,            # "liquid_only","gas_only","gas_liquid","vle"
     custom_liquid=None,        # dict (used for KOH concentration)
@@ -778,7 +780,7 @@ def generate_report(
             doc.add_paragraph()
 
     # ── 9. Visualisations ────────────────────────────────────────────────────
-    if fig_sch is not None or fig_prof is not None:
+    if fig_sch is not None or fig_prof is not None or fig_regime_h is not None:
         doc.add_page_break()
         _h1("Visualisations")
 
@@ -816,6 +818,34 @@ def generate_report(
                 doc.add_picture(BytesIO(img), width=Inches(6.2))
             else:
                 doc.add_paragraph("(chart rendering timed out — export without kaleido)")
+
+        if fig_regime_h is not None or fig_regime_v is not None:
+            doc.add_heading("Flow Regime Maps", level=2)
+            _body(
+                "Each map plots superficial gas velocity (V_sg) against superficial liquid "
+                "velocity (V_sl) on a log-log scale. Background zones show the predicted "
+                "flow regime across the full operating envelope; coloured markers show each "
+                "pipe segment's actual operating point. "
+                "Left: horizontal map (Taitel-Dukler 1976 + Mandhane-Gregory-Aziz 1974). "
+                "Right: vertical map (Wallis annular criterion + void-fraction thresholds). "
+                "Regime boundaries are computed at inlet fluid conditions for the first pipe segment."
+            )
+            doc.add_paragraph()
+            if fig_regime_h is not None:
+                doc.add_heading("Horizontal Flow Regime Map", level=3)
+                img_h = _fig_to_png(fig_regime_h, width=800, height=600, scale=2)
+                if img_h:
+                    doc.add_picture(BytesIO(img_h), width=Inches(5.5))
+                else:
+                    doc.add_paragraph("(chart rendering timed out — export without kaleido)")
+                doc.add_paragraph()
+            if fig_regime_v is not None:
+                doc.add_heading("Vertical Flow Regime Map", level=3)
+                img_v = _fig_to_png(fig_regime_v, width=800, height=600, scale=2)
+                if img_v:
+                    doc.add_picture(BytesIO(img_v), width=Inches(5.5))
+                else:
+                    doc.add_paragraph("(chart rendering timed out — export without kaleido)")
 
     # ── Disclaimer ───────────────────────────────────────────────────────────
     doc.add_paragraph()

@@ -1885,6 +1885,34 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
     # ── Flow Regime Map (V_sg vs V_sl, log-log) ─────────────────────────────
     _pipe_recs = [r for r in grid_records if r.get("V_sg (m/s)", 0) > 0 or r.get("V_sl (m/s)", 0) > 0]
 
+    # Pre-compute regime map figures (needed for both tab display and report export)
+    fig_regime_h = None
+    fig_regime_v = None
+    _gas_ok_rm  = bool(_eff_gas_flows) and any(v > 0 for v in (_eff_gas_flows or {}).values())
+    _liq_ok_rm  = (bool(_eff_liquid_flows) and any(v > 0 for v in (_eff_liquid_flows or {}).values())) \
+                  or (_eff_q_lye or 0) > 0
+    if not _is_vle and _gas_ok_rm and _liq_ok_rm and _pipe_recs:
+        _p_rm      = props
+        _D_repr_rm = (_pipe_recs[0]["ID (mm)"] / 1000.0)
+        _ckw = dict(
+            rhol=float(_p_rm["rho_l"]), rhog=float(_p_rm["rho_g"]),
+            mul=float(_p_rm["mu_l"]),   mug=float(_p_rm["mu_g"]),
+            sigma=float(_p_rm.get("sigma") or 0.072),
+            D=float(_D_repr_rm), roughness=4.6e-5,
+        )
+        _td_h, _full_h, _vsl_h, _vsg_h = _compute_regime_grid(**_ckw, use_horiz=True)
+        _td_v, _full_v, _vsl_v, _vsg_v = _compute_regime_grid(**_ckw, use_horiz=False)
+        _horiz_recs_rm = [r for r in _pipe_recs if r.get("Type", "Horizontal") == "Horizontal"]
+        _vert_recs_rm  = [r for r in _pipe_recs if r.get("Type", "Horizontal") != "Horizontal"]
+        fig_regime_h = _build_regime_fig(
+            _td_h, _full_h, _vsl_h, _vsg_h, _horiz_recs_rm,
+            "Horizontal — Taitel-Dukler + Mandhane-Gregory-Aziz",
+        )
+        fig_regime_v = _build_regime_fig(
+            _td_v, _full_v, _vsl_v, _vsg_v, _vert_recs_rm,
+            "Vertical — Wallis / void-fraction",
+        )
+
     st.divider()
     _tab_names = ["Pipeline Schematic", "Pressure Profile", "Flow Regime Map"]
     if _is_vle:
@@ -1910,42 +1938,13 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 f"Single-phase {_sp_phase_rm} flow — the flow regime map applies only to "
                 "two-phase (gas + liquid) flow. No regime boundaries to display."
             )
-        elif _pipe_recs:
-            # ── Compute both regime grids ─────────────────────────────────────
-            _p      = props
-            _D_repr = (_pipe_recs[0]["ID (mm)"] / 1000.0) if _pipe_recs else 0.05
-            _common_kw = dict(
-                rhol=float(_p["rho_l"]),
-                rhog=float(_p["rho_g"]),
-                mul=float(_p["mu_l"]),
-                mug=float(_p["mu_g"]),
-                sigma=float(_p.get("sigma") or 0.072),
-                D=float(_D_repr),
-                roughness=4.6e-5,
-            )
-            _td_h, _full_h, _vsl_h, _vsg_h = _compute_regime_grid(**_common_kw, use_horiz=True)
-            _td_v, _full_v, _vsl_v, _vsg_v = _compute_regime_grid(**_common_kw, use_horiz=False)
-
-            # ── Split operating points by segment orientation ─────────────────
-            _horiz_recs = [r for r in _pipe_recs if r.get("Type", "Horizontal") == "Horizontal"]
-            _vert_recs  = [r for r in _pipe_recs if r.get("Type", "Horizontal") != "Horizontal"]
-
-            # ── Build both figures ────────────────────────────────────────────
-            _fig_h = _build_regime_fig(
-                _td_h, _full_h, _vsl_h, _vsg_h, _horiz_recs,
-                "Horizontal — Taitel-Dukler + Mandhane-Gregory-Aziz",
-            )
-            _fig_v = _build_regime_fig(
-                _td_v, _full_v, _vsl_v, _vsg_v, _vert_recs,
-                "Vertical — Wallis / void-fraction",
-            )
-
-            # ── Side-by-side display ──────────────────────────────────────────
+        elif fig_regime_h is not None:
+            # ── Side-by-side display (figures pre-computed above) ─────────────
             _col_h, _col_v = st.columns(2)
             with _col_h:
-                st.plotly_chart(_fig_h, width='stretch', key=k("fig_regime_h"))
+                st.plotly_chart(fig_regime_h, width='stretch', key=k("fig_regime_h"))
             with _col_v:
-                st.plotly_chart(_fig_v, width='stretch', key=k("fig_regime_v"))
+                st.plotly_chart(fig_regime_v, width='stretch', key=k("fig_regime_v"))
 
             st.caption(
                 f"Background zones computed for inlet conditions: "
@@ -2248,6 +2247,8 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 stream_records=stream_records if stream_records else None,
                 sensitivity_results=_sens_data if not _is_single_phase else None,
                 slug_records=slug_records if slug_records else None,
+                fig_regime_h=fig_regime_h,
+                fig_regime_v=fig_regime_v,
             )
         _wg1, _wg2 = st.columns(2)
         with _wg1:
