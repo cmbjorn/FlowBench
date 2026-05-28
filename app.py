@@ -1408,8 +1408,31 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             if _is_stale and _lc and not _btn_calc:
                 st.warning("Inputs changed — press **Calculate** to update results.", icon="⚠️")
 
-        _run_calc   = _btn_calc or (not _lc)
+        _run_calc    = _btn_calc and _is_stale   # only recalculate when needed
+        _has_results = bool(_lc) or _run_calc
         # ─────────────────────────────────────────────────────────────────────
+
+        if not _has_results:
+            st.info("Configure your pipeline above and press **Calculate** to run the analysis.")
+            _pipe_len = sum(s.get("length", 0.0) for s in st.session_state[k("segments")])
+            return {
+                "P_bara": P_bara, "T_C": T_C,
+                "gas_flows_kgh": gas_flows_kgh, "liquid_type": liquid_type,
+                "q_lye": q_lye, "liquid_flows_kgh": liquid_flows_kgh,
+                "props": props, "grid_records": [], "total_dp_kpa": 0.0,
+                "total_dp_fric_kpa": 0.0, "total_dp_grav_kpa": 0.0,
+                "total_dp_accel_kpa": 0.0,
+                "outlet_pressure_bara": P_bara, "pipe_length_m": _pipe_len,
+                "cumulative_distance": 0.0,
+                "pressure_profile_x": [0.0], "pressure_profile_y": [P_bara],
+                "segments": st.session_state[k("segments")],
+                "correlation": correlation, "voidage_method": voidage_method,
+                "custom_gas": custom_gas, "custom_liquid": custom_liquid,
+                "fig_sch": None, "fig_prof": None,
+                "flow_mode": "vle" if _is_vle else "gas_liquid",
+                "vle_fluid": vle_fluid_id, "vle_x_mass": vle_x,
+                "vle_m_total_kgs": vle_m_kgs, "slug_records": [],
+            }
 
         if _run_calc:
             _calc = compute_pipeline_case(
