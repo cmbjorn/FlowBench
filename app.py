@@ -1394,7 +1394,21 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             json.dumps(_loop_hash_src, sort_keys=True, default=str).encode()
         ).hexdigest()
         _lc         = st.session_state.get(k("loop_cache"), {})
-        _run_calc   = _lc.get("hash") != _loop_hash
+        _is_stale   = _lc.get("hash") != _loop_hash
+
+        _btn_col, _stale_col = st.columns([1, 6])
+        with _btn_col:
+            _btn_calc = st.button(
+                "Calculate",
+                key=k("calc_btn"),
+                type="primary",
+                use_container_width=True,
+            )
+        with _stale_col:
+            if _is_stale and _lc and not _btn_calc:
+                st.warning("Inputs changed — press **Calculate** to update results.", icon="⚠️")
+
+        _run_calc   = _btn_calc or (not _lc)
         # ─────────────────────────────────────────────────────────────────────
 
         if _run_calc:
