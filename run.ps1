@@ -1,8 +1,12 @@
+# Change to the folder containing this script
+Set-Location $PSScriptRoot
+
 # Activate virtual environment
 if (Test-Path ".venv\Scripts\Activate.ps1") {
     & ".venv\Scripts\Activate.ps1"
 } else {
-    Write-Host "No .venv found. Run setup once first:" -ForegroundColor Yellow
+    Write-Host "No .venv found in $PWD" -ForegroundColor Yellow
+    Write-Host "Run setup once first:" -ForegroundColor Yellow
     Write-Host "    python -m venv .venv" -ForegroundColor Yellow
     Write-Host "    .venv\Scripts\Activate.ps1" -ForegroundColor Yellow
     Write-Host "    pip install -r requirements.txt" -ForegroundColor Yellow

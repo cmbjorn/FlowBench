@@ -1,11 +1,15 @@
 @echo off
 setlocal
 
+:: Change to the folder containing this script (handles running from any directory)
+cd /d "%~dp0"
+
 :: Activate virtual environment if it exists
 if exist ".venv\Scripts\activate.bat" (
     call .venv\Scripts\activate.bat
 ) else (
-    echo No .venv found. Run setup once first:
+    echo No .venv found in %CD%
+    echo Run setup once first:
     echo     python -m venv .venv
     echo     .venv\Scripts\activate
     echo     pip install -r requirements.txt
