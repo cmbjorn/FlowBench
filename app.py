@@ -14,6 +14,7 @@ import cv_engine as cv
 import hashlib
 from models import SegmentRow
 from physics.friction import churchill_f
+from workflows.pipeline_case import compute_pipeline_case
 import json
 from fluids.two_phase import (Taitel_Dukler_regime as _TD_regime,
                                Mandhane_Gregory_Aziz_regime as _MGA_regime)
@@ -1225,67 +1226,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 st.error(f"Property calculation failed: {_calc_err}")
                 st.stop()
 
-        # Segment loop
-        current_P          = P_bara * 1e5
-        current_T_C        = T_C if T_C is not None else 25.0  # updated at HX segments
-        grid_records       = []
-        stream_records     = []
-        valve_sizing       = []   # collects ΔP-mode valve results for display
-        cumulative_positions = []
-        cumulative_distance  = 0.0
-        pressure_profile_x   = [0.0]
-        pressure_profile_y   = [P_bara]
-        regime_bands         = []
-        total_dp_fric_kpa    = 0.0
-        total_dp_grav_kpa    = 0.0
-        total_dp_accel_kpa   = 0.0
-
-        def _props_at_current():
-            """Evaluate fluid properties at the current P and T (used for stream snaps and valve/HX)."""
-            if _is_vle:
-                return engine.calculate_vle_properties(
-                    vle_fluid_id, max(1000.0, current_P)/1e5, vle_x, vle_m_kgs,
-                    h_spec=_vle_h_inlet)
-            return engine.calculate_two_phase_properties(
-                max(1000.0, current_P)/1e5, current_T_C,
-                _eff_gas_flows, _eff_liq_type, _eff_q_lye,
-                custom_gas=custom_gas, custom_liquid=_eff_custom_liq,
-                use_coolprop=use_coolprop,
-                liquid_flows_kgh=_eff_liquid_flows)
-
-        def _snap_stream(label, sp):
-            """Append one stream-balance row using pre-computed props dict sp."""
-            _x  = sp.get("x_gas", 0.0)
-            _rg = sp.get("rho_g", 0.0)
-            _rl = sp.get("rho_l", 1000.0)
-            if 0.0 < _x < 1.0:
-                _rh = 1.0 / (_x / max(_rg, 1e-9) + (1.0 - _x) / max(_rl, 1e-9))
-            else:
-                _rh = _rg if _x >= 1.0 else _rl
-            _rec = {
-                "Stream":        label,
-                "P (bara)":      round(max(1e-4, current_P / 1e5), 4),
-                "T (°C)":        round(current_T_C, 1),
-            }
-            if _is_vle:
-                _rec[f"{vle_fluid_id} vapour  kg/h"] = round(sp.get("m_gas_total_kgh", 0.0), 2)
-                _rec[f"{vle_fluid_id} liquid  kg/h"] = round(sp.get("m_liquid_total_kgh", 0.0), 2)
-            else:
-                for _gsp, _gflow in (_eff_gas_flows or {}).items():
-                    _rec[f"gas:{_gsp}"] = round(_gflow, 3)
-                _rec["Ṁ_gas (kg/h)"] = round(sp.get("m_gas_total_kgh", 0.0), 2)
-                for _lsp, _lflow in (_eff_liquid_flows or {}).items():
-                    _rec[f"liq:{_lsp}"] = round(_lflow, 3)
-                _rec["Ṁ_liq (kg/h)"] = round(sp.get("m_liquid_total_kgh", 0.0), 2)
-            _rec.update({
-                "x (−)":         round(_x, 5),
-                "α (−)":         round(sp.get("alpha", 0.0), 4),
-                "ρ_g (kg/m³)":  round(_rg, 3),
-                "ρ_l (kg/m³)":  round(_rl, 3),
-                "ρ_hom (kg/m³)":round(_rh, 2),
-            })
-            stream_records.append(_rec)
-
         # ── Calculate button & segment-loop recompute guard ──────────────────
         _loop_hash_src = {
             "P": P_bara, "T": T_C,
@@ -1317,235 +1257,42 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         _run_calc   = _lc.get("hash") != _loop_hash
         # ─────────────────────────────────────────────────────────────────────
 
-        _snap_stream("S0 — Inlet", props)
-
-        for i, seg in enumerate(st.session_state[k("segments")]):
-            if not _run_calc:
-                break   # skip computation; cache loaded after loop
-            _seg_kind = seg.get("kind", "pipe")
-
-            # ── VALVE ──────────────────────────────────────────────────────────
-            if _seg_kind == "valve":
-                _vp       = _props_at_current()
-                _v_mode   = seg.get("valve_mode", "kv")
-                if _v_mode == "dp":
-                    _vres = engine.calculate_valve_kv(
-                        _vp, seg.get("dp_kpa", 50.0) * 1000.0,
-                        seg.get("opening_pct", 100.0),
-                        seg.get("characteristic", "equal-percentage"))
-                    _v_label = (f"ΔP={seg.get('dp_kpa',50):.1f} kPa → "
-                                f"Kv_req={_vres['Kv_rated']:.2f}  "
-                                f"Kv_eff={_vres['Kv_eff']:.2f}  "
-                                f"{seg.get('opening_pct',100):.0f}% open")
-                    valve_sizing.append({
-                        "seg":       i + 1,
-                        "dn":        seg.get("dn", ""),
-                        "pn":        seg.get("pn", ""),
-                        "dp_kpa":    seg.get("dp_kpa", 50.0),
-                        "opening":   seg.get("opening_pct", 100.0),
-                        "char":      seg.get("characteristic", "equal-percentage"),
-                        "Q_m3h":     _vres["Q_m3h"],
-                        "rho_hom":   _vres["rho_hom"],
-                        "Kv_eff":    _vres["Kv_eff"],
-                        "Kv_rated":  _vres["Kv_rated"],
-                        "Cv_rated":  _vres["Kv_rated"] * 1.156,
-                        "P_in":      current_P / 1e5,
-                    })
-                else:
-                    _vres = engine.calculate_valve_dp(
-                        _vp, seg.get("Kv_m3h", 1.0),
-                        seg.get("opening_pct", 100.0),
-                        seg.get("characteristic", "equal-percentage"))
-                    _v_label = (f"Kv={seg.get('Kv_m3h',1.0):.2g}  "
-                                f"Kv_eff={_vres['Kv_eff']:.3f}  "
-                                f"{seg.get('opening_pct',100):.0f}% open")
-                _v_dP_Pa  = _vres["dP_Pa"]
-                _v_end_P  = current_P - _v_dP_Pa
-                _v_D      = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
-                grid_records.append(SegmentRow(
-                    seg=f"#{i+1}",
-                    type="Valve",
-                    pipe=f"{seg['dn']}/{seg['pn']}",
-                    id_mm=round(_v_D*1000, 1),
-                    l_m=0.0,
-                    l_eq_m=0.0,
-                    fittings=_v_label,
-                    regime=f"Q={_vres['Q_m3h']:.3f} m³/h  ρ_hom={_vres['rho_hom']:.1f} kg/m³",
-                    dp_kPa=round(_v_dP_Pa/1000, 3),
-                    p_in_bara=round(current_P/1e5, 4),
-                    p_out_bara=round(_v_end_P/1e5, 4),
-                    v_m_ms=0.0, v_m_ve=0.0,
-                    v_sg_ms=0.0, v_sl_ms=0.0, v_e_ms=0.0,
-                    dp_fric_kPa=round(_v_dP_Pa/1000, 3),
-                    dp_grav_kPa=0.0, dp_accel_kPa=0.0,
-                    material="—",
-                    rho_g=round(_vp["rho_g"], 4),
-                    l_eff_m=0.0,
-                    alpha_void=round(_vp["alpha"], 4),
-                    dp_dz=0.0,
-                ).to_dict())
-                total_dp_fric_kpa += _v_dP_Pa / 1000.0
-                current_P = max(1000.0, _v_end_P)
-                pressure_profile_x.append(cumulative_distance)
-                pressure_profile_y.append(max(0.1, current_P/1e5))
-                regime_bands.append("Valve")
-                _snap_stream(f"S{i+1} — #{i+1} Valve", _props_at_current())
-                continue
-
-            # ── HEAT EXCHANGER ─────────────────────────────────────────────────
-            if _seg_kind == "hx":
-                _hx_duty = float(seg.get("duty_kw", 0.0))
-                _hx_dP_Pa = float(seg.get("dp_kpa", 0.0)) * 1000.0
-                _hx_D     = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
-                _hx_end_P = current_P - _hx_dP_Pa
-                _delta_T  = 0.0
-                if _hx_duty != 0.0:
-                    _hp = _props_at_current()
-                    _Cp = engine.estimate_mixture_cp(
-                        _hp, current_T_C + 273.15, max(1000.0, current_P))
-                    if _hp["m_total_kgs"] > 0 and _Cp > 0:
-                        _delta_T = (_hx_duty * 1000.0) / (_hp["m_total_kgs"] * _Cp)
-                current_T_C += _delta_T
-                _hx_sign = f"+{_hx_duty:.1f}" if _hx_duty >= 0 else f"{_hx_duty:.1f}"
-                grid_records.append(SegmentRow(
-                    seg=f"#{i+1}",
-                    type="Heat Exchanger",
-                    pipe=f"{seg['dn']}/{seg['pn']}",
-                    id_mm=round(_hx_D*1000, 1),
-                    l_m=0.0,
-                    l_eq_m=0.0,
-                    fittings=f"Q={_hx_sign} kW",
-                    regime=f"ΔT={_delta_T:+.2f}°C  →  T_out={current_T_C:.1f}°C",
-                    dp_kPa=round(_hx_dP_Pa/1000, 3),
-                    p_in_bara=round(current_P/1e5, 4),
-                    p_out_bara=round(_hx_end_P/1e5, 4),
-                    v_m_ms=0.0, v_m_ve=0.0,
-                    v_sg_ms=0.0, v_sl_ms=0.0, v_e_ms=0.0,
-                    dp_fric_kPa=round(_hx_dP_Pa/1000, 3),
-                    dp_grav_kPa=0.0, dp_accel_kPa=0.0,
-                    material="—",
-                    rho_g=0.0,
-                    l_eff_m=0.0,
-                    alpha_void=0.0,
-                    dp_dz=0.0,
-                ).to_dict())
-                total_dp_fric_kpa += _hx_dP_Pa / 1000.0
-                current_P = max(1000.0, _hx_end_P)
-                pressure_profile_x.append(cumulative_distance)
-                pressure_profile_y.append(max(0.1, current_P/1e5))
-                regime_bands.append("Heat Exchanger")
-                _snap_stream(f"S{i+1} — #{i+1} Heat Exch.", _props_at_current())
-                continue
-
-            # ── PIPE SEGMENT ───────────────────────────────────────────────────
-            D_seg   = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
-            _lined  = seg.get("lined",False)
-            _lthk_m = seg.get("liner_thickness_mm",1.0) / 1000.0
-            _lmat   = seg.get("liner_material","FEP")
-            D_eff   = D_seg - 2*_lthk_m if _lined else D_seg
-            rough_seg = (engine.LINER_ROUGHNESS[_lmat] if _lined
-                         else engine.MATERIAL_ROUGHNESS[seg.get("material","SS316L")])
-
-            if _is_vle:
-                props_seg = engine.calculate_vle_properties(
-                    vle_fluid_id, current_P/1e5, vle_x, vle_m_kgs,
-                    h_spec=_vle_h_inlet)
-            else:
-                props_seg = engine.calculate_two_phase_properties(
-                    current_P/1e5, current_T_C, _eff_gas_flows, _eff_liq_type, _eff_q_lye,
-                    custom_gas=custom_gas, custom_liquid=_eff_custom_liq,
-                    use_coolprop=use_coolprop,
-                    liquid_flows_kgh=_eff_liquid_flows)
-
-            angle = {"Horizontal": 0.0,
-                     "Vertical Upflow": np.pi/2.0,
-                     "Vertical Downflow": -np.pi/2.0}[seg["type"]]
-            le_fit = _sum_le_fit(seg, D_eff)
-            L_eff = seg["length"] + le_fit
-
-            seg_result = engine.calculate_segment_pressure_drop(
-                props_seg, D_eff, rough_seg, L_eff, angle,
-                correlation=correlation, voidage_method=voidage_method)
-
-            dP_Pa      = seg_result["dP_Pa"]
-            regime     = seg_result["regime"]
-            dP_per_dz  = seg_result["dP_per_dz"]
-            Vsg        = seg_result["Vsg"]
-            Vsl        = seg_result["Vsl"]
-            alpha_seg  = seg_result["alpha"]
-            dP_fric_Pa = seg_result["dP_fric_Pa"]
-            dP_grav_Pa = seg_result["dP_grav_Pa"]
-            dP_accel_Pa= seg_result["dP_accel_Pa"]
-
-            V_m = Vsg + Vsl
-            V_e, _ = engine.calculate_erosion_velocity(
-                props_seg["rho_g"], props_seg["rho_l"], props_seg["x_gas"])
-            erosion_ratio = V_m / V_e if V_e > 0 else 0.0
-
-            end_P    = current_P - dP_Pa
-            _mat_str = seg.get("material","SS316L")
-            if _lined:
-                _mat_str += f" / {_lmat} {seg.get('liner_thickness_mm',1.0):.1f}mm"
-            grid_records.append(SegmentRow(
-                seg=f"#{i+1}",
-                type=seg["type"],
-                pipe=f"{seg['dn']}/{seg['pn']}",
-                id_mm=round(D_eff*1000, 1),
-                l_m=seg["length"],
-                l_eq_m=round(le_fit, 3),
-                fittings=(", ".join(f"{f['type']} ×{f['qty']}"
-                                    for f in seg.get("fittings_list", [])
-                                    if f.get("qty", 0) > 0)
-                          or "—"),
-                regime=regime,
-                dp_kPa=round(dP_Pa/1000, 3),
-                p_in_bara=round(current_P/1e5, 4),
-                p_out_bara=round(end_P/1e5, 4),
-                v_m_ms=round(V_m, 3),
-                v_m_ve=round(erosion_ratio, 3),
-                v_sg_ms=round(Vsg, 3),
-                v_sl_ms=round(Vsl, 3),
-                v_e_ms=round(V_e, 2),
-                dp_fric_kPa=round(dP_fric_Pa/1000, 3),
-                dp_fric_100m_kPa=round(dP_fric_Pa/1000/max(L_eff,0.001)*100, 2),
-                dp_grav_kPa=round(dP_grav_Pa/1000, 3),
-                dp_accel_kPa=round(dP_accel_Pa/1000, 3),
-                material=_mat_str,
-                rho_g=round(props_seg["rho_g"], 4),
-                l_eff_m=round(L_eff, 2),
-                alpha_void=round(alpha_seg, 4),
-                dp_dz=round(dP_per_dz, 2),
-            ).to_dict())
-            total_dp_fric_kpa  += dP_fric_Pa / 1000.0
-            total_dp_grav_kpa  += dP_grav_Pa / 1000.0
-            total_dp_accel_kpa += dP_accel_Pa / 1000.0
-            current_P = max(1000.0, end_P)  # floor at ~0.01 bara; prevents CoolProp crash on next seg
-            _snap_stream(f"S{i+1} — #{i+1} {seg['type']}", _props_at_current())
-            cumulative_distance += L_eff
-            cumulative_positions.append(cumulative_distance)
-            pressure_profile_x.append(cumulative_distance)
-            pressure_profile_y.append(max(0.1, current_P/1e5))
-            regime_bands.append(regime)
-
-        # ── Cache save / restore ─────────────────────────────────────────────
         if _run_calc:
-            st.session_state[k("loop_cache")] = {
-                "hash":                _loop_hash,
-                "current_P":           current_P,
-                "current_T_C":         current_T_C,
-                "vle_x":               vle_x,
-                "grid_records":        grid_records,
-                "stream_records":      stream_records,
-                "valve_sizing":        valve_sizing,
-                "cumulative_distance": cumulative_distance,
-                "cumulative_positions": cumulative_positions,
-                "pressure_profile_x":  pressure_profile_x,
-                "pressure_profile_y":  pressure_profile_y,
-                "regime_bands":        regime_bands,
-                "total_dp_fric_kpa":   total_dp_fric_kpa,
-                "total_dp_grav_kpa":   total_dp_grav_kpa,
-                "total_dp_accel_kpa":  total_dp_accel_kpa,
-            }
+            _calc = compute_pipeline_case(
+                P_bara=P_bara,
+                T_C=T_C,
+                eff_gas_flows=_eff_gas_flows,
+                eff_liq_type=_eff_liq_type,
+                eff_q_lye=_eff_q_lye,
+                eff_custom_liq=_eff_custom_liq,
+                eff_liquid_flows=_eff_liquid_flows,
+                is_vle=_is_vle,
+                vle_fluid_id=vle_fluid_id,
+                vle_x=vle_x,
+                vle_m_kgs=vle_m_kgs,
+                vle_h_inlet=_vle_h_inlet if _is_vle else None,
+                segments=st.session_state[k("segments")],
+                correlation=correlation,
+                voidage_method=voidage_method,
+                custom_gas=custom_gas,
+                use_coolprop=use_coolprop,
+                props=props,
+            )
+            current_P            = _calc["current_P"]
+            current_T_C          = _calc["current_T_C"]
+            vle_x                = _calc["vle_x"]
+            grid_records         = _calc["grid_records"]
+            stream_records       = _calc["stream_records"]
+            valve_sizing         = _calc["valve_sizing"]
+            cumulative_distance  = _calc["cumulative_distance"]
+            cumulative_positions = _calc["cumulative_positions"]
+            pressure_profile_x   = _calc["pressure_profile_x"]
+            pressure_profile_y   = _calc["pressure_profile_y"]
+            regime_bands         = _calc["regime_bands"]
+            total_dp_fric_kpa    = _calc["total_dp_fric_kpa"]
+            total_dp_grav_kpa    = _calc["total_dp_grav_kpa"]
+            total_dp_accel_kpa   = _calc["total_dp_accel_kpa"]
+            st.session_state[k("loop_cache")] = {"hash": _loop_hash, **_calc}
         elif _lc:
             current_P            = _lc["current_P"]
             current_T_C          = _lc["current_T_C"]
