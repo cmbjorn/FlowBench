@@ -15,6 +15,7 @@ import hashlib
 from models import SegmentRow
 from physics.friction import churchill_f
 from workflows.pipeline_case import compute_pipeline_case
+from workflows.pump_case import compute_pump_case
 import json
 from fluids.two_phase import (Taitel_Dukler_regime as _TD_regime,
                                Mandhane_Gregory_Aziz_regime as _MGA_regime)
@@ -6198,85 +6199,73 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
         # ── RIGHT COLUMN — RESULTS ────────────────────────────────────────────
         with _pu_c2:
 
-            # ── Compute design pressure ───────────────────────────────────────
+            # ── Pump computation (pure Python, no Streamlit) ──────────────────
+            _pu_Qbep_used = (
+                _pu_Qbep
+                if (not _pu_is_pd and _pu_hq_mode == "3-point parametric")
+                else (pe.hq_max_flow(_pu_hq_coeffs) * 0.65
+                      if (not _pu_is_pd and _pu_hq_coeffs) else 0.0)
+            )
             try:
-                if _pu_is_pd:
-                    _pu_dp_res = pe.pd_pump_design_pressure(
-                        _pu_PSV_set, _pu_pd_acc_pct)
-                else:
-                    if _pu_hq_coeffs is None:
-                        st.warning("Fix H-Q curve inputs to see results.")
-                        st.stop()
-                    _pu_H0_max = pe.hq_shutoff(
-                        pe.scale_hq_to_speed(_pu_hq_coeffs, _pu_n_ratio))
-                    _pu_dp_res = pe.centrifugal_design_pressure(
-                        method          = _pu_dp_method,
-                        P_suction_bara  = _pu_P_suc_max if _pu_dp_method <= 3 else _pu_P_bara,
-                        H_shutoff_rated_m = pe.hq_shutoff(_pu_hq_coeffs),
-                        rho_kgm3        = _pu_rho,
-                        n_max_ratio     = _pu_n_ratio,
-                        PSV_set_barg    = _pu_PSV_set,
-                    )
+                _pu = compute_pump_case(
+                    is_pd      = _pu_is_pd,
+                    rho        = _pu_rho,
+                    Pv         = _pu_Pv,
+                    P_bara     = _pu_P_bara,
+                    hq_coeffs  = _pu_hq_coeffs  if not _pu_is_pd else None,
+                    eta_params = _pu_eta_params  if (not _pu_is_pd and _pu_hq_coeffs) else None,
+                    n_ratio    = _pu_n_ratio     if not _pu_is_pd else 1.0,
+                    Qbep_used  = _pu_Qbep_used,
+                    H_static   = _pu_H_static,
+                    k_fric     = _pu_k_fric,
+                    eta_motor  = _pu_eta_motor   if not _pu_is_pd else 93.0,
+                    z_suc      = _pu_z_suc       if not _pu_is_pd else 0.0,
+                    h_suc_loss = _pu_h_suc_loss  if not _pu_is_pd else 0.0,
+                    NPSH_R     = _pu_NPSH_R      if not _pu_is_pd else 0.0,
+                    dp_method  = _pu_dp_method   if not _pu_is_pd else 1,
+                    P_suc_max  = _pu_P_suc_max   if not _pu_is_pd else _pu_P_bara,
+                    PSV_set    = _pu_PSV_set,
+                    mat_group  = _pu_mat_group,
+                    pd_acc_pct = _pu_pd_acc_pct  if _pu_is_pd else 10.0,
+                )
+            except ValueError as _pu_e:
+                st.warning(str(_pu_e))
+                st.stop()
             except Exception as _pu_e:
-                st.error(f"Design pressure calculation error: {_pu_e}")
+                st.error(f"Pump calculation error: {_pu_e}")
                 st.stop()
 
-            _pu_P_design_barg = _pu_dp_res["P_design_barg"]
-            _pu_ansi = pe.ansi_class_lookup(_pu_P_design_barg, _pu_mat_group)
-
-            # ── Operating point (centrifugal) ─────────────────────────────────
-            if not _pu_is_pd:
-                try:
-                    _pu_Q_max = pe.hq_max_flow(_pu_hq_coeffs)
-                    _pu_Qop, _pu_Hop = pe.find_operating_point(
-                        _pu_hq_coeffs, _pu_H_static, _pu_k_fric, _pu_Q_max * 1.05)
-                    _pu_eta_op  = pe.eval_eta(_pu_eta_params, _pu_Qop)
-                    _pu_P_shaft = pe.shaft_power_kw(_pu_rho, _pu_Qop, _pu_Hop, max(_pu_eta_op, 1.0))
-                    _pu_P_motor = pe.motor_power_kw(_pu_P_shaft, _pu_eta_motor)
-                    _pu_P_frame = pe.next_motor_frame_kw(_pu_P_motor)
-                    _pu_NPSH_A  = pe.npsh_available(
-                        _pu_P_bara, _pu_Pv, _pu_rho, _pu_z_suc, _pu_h_suc_loss)
-                    _pu_npsh_margin, _pu_npsh_status, _pu_npsh_color = pe.npsh_margin_status(
-                        _pu_NPSH_A, _pu_NPSH_R)
-                    _pu_op_ok = True
-                except Exception as _pu_oe:
-                    _pu_op_ok = False
-                    st.error(f"Operating point error: {_pu_oe}")
-
             # ── KPIs ──────────────────────────────────────────────────────────
-            if not _pu_is_pd and _pu_op_ok:
+            if not _pu_is_pd and _pu["op_ok"]:
                 st.markdown("**OPERATING POINT**")
-                _pu_Hop_bar = pe.head_to_bar(_pu_Hop, _pu_rho)
                 _k1, _k2, _k3, _k4 = st.columns(4)
-                _k1.metric("Flow", f"{_pu_Qop:.1f} m³/h")
-                _k2.metric("Head", f"{_pu_Hop:.1f} m",
-                           delta=f"{_pu_Hop_bar:.2f} bar", delta_color="off")
-                _k3.metric("η pump", f"{_pu_eta_op:.1f} %")
-                _k4.metric("P shaft", f"{_pu_P_shaft:.1f} kW")
+                _k1.metric("Flow", f"{_pu['Q_op']:.1f} m³/h")
+                _k2.metric("Head", f"{_pu['H_op']:.1f} m",
+                           delta=f"{_pu['Hop_bar']:.2f} bar", delta_color="off")
+                _k3.metric("η pump", f"{_pu['eta_op']:.1f} %")
+                _k4.metric("P shaft", f"{_pu['P_shaft']:.1f} kW")
 
                 _k5, _k6, _k7, _k8 = st.columns(4)
-                _k5.metric("P motor (input)", f"{_pu_P_motor:.1f} kW",
-                           help=f"Next IEC frame: {_pu_P_frame:.0f} kW")
-                _k6.metric("NPSH available", f"{_pu_NPSH_A:.2f} m")
+                _k5.metric("P motor (input)", f"{_pu['P_motor']:.1f} kW",
+                           help=f"Next IEC frame: {_pu['P_frame']:.0f} kW")
+                _k6.metric("NPSH available", f"{_pu['NPSH_A']:.2f} m")
                 _k7.metric("NPSH required", f"{_pu_NPSH_R:.2f} m")
-                _npsh_delta = f"{_pu_npsh_margin:+.2f} m  ({_pu_npsh_status})"
-                _k8.metric("NPSH margin", f"{_pu_npsh_margin:.2f} m",
+                _npsh_delta = f"{_pu['npsh_margin']:+.2f} m  ({_pu['npsh_status']})"
+                _k8.metric("NPSH margin", f"{_pu['npsh_margin']:.2f} m",
                            delta=_npsh_delta,
-                           delta_color="normal" if _pu_npsh_color == "green"
-                                       else ("off" if _pu_npsh_color == "orange" else "inverse"))
+                           delta_color="normal" if _pu["npsh_color"] == "green"
+                                       else ("off" if _pu["npsh_color"] == "orange" else "inverse"))
 
                 # BEP deviation warning
-                _pu_Qbep_used = (_pu_Qbep if _pu_hq_mode == "3-point parametric"
-                                 else _pu_Q_max * 0.65)
-                if _pu_Qop < 0.70 * _pu_Qbep_used:
+                if _pu["Q_op"] < 0.70 * _pu_Qbep_used:
                     st.warning(
-                        f"Operating flow ({_pu_Qop:.1f} m³/h) is below 70 % of BEP "
+                        f"Operating flow ({_pu['Q_op']:.1f} m³/h) is below 70 % of BEP "
                         f"({_pu_Qbep_used:.1f} m³/h). Risk of internal recirculation, "
                         "vibration, and premature seal/bearing wear."
                     )
-                elif _pu_Qop > 1.10 * _pu_Qbep_used:
+                elif _pu["Q_op"] > 1.10 * _pu_Qbep_used:
                     st.warning(
-                        f"Operating flow ({_pu_Qop:.1f} m³/h) exceeds 110 % of BEP. "
+                        f"Operating flow ({_pu['Q_op']:.1f} m³/h) exceeds 110 % of BEP. "
                         "Risk of cavitation, motor overload, and reduced seal life."
                     )
 
@@ -6284,29 +6273,22 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
 
                 # ── H-Q + System curve chart ──────────────────────────────────
                 st.markdown("**PUMP & SYSTEM CURVES**")
-                _pu_Q_plot = np.linspace(0, _pu_Q_max * 1.05, 200)
-                _pu_H_plot = [pe.eval_hq(_pu_hq_coeffs, q) for q in _pu_Q_plot]
-                _pu_Hs_plot = [pe.system_head(q, _pu_H_static, _pu_k_fric) for q in _pu_Q_plot]
-                _pu_eta_plot = [pe.eval_eta(_pu_eta_params, q) for q in _pu_Q_plot]
-
                 _fig_hq = go.Figure()
                 _fig_hq.add_trace(go.Scatter(
-                    x=list(_pu_Q_plot), y=_pu_H_plot,
+                    x=_pu["Q_plot"], y=_pu["H_plot"],
                     name="Pump H-Q", line=dict(color="#2563EB", width=2.5),
                 ))
                 _fig_hq.add_trace(go.Scatter(
-                    x=list(_pu_Q_plot), y=_pu_Hs_plot,
+                    x=_pu["Q_plot"], y=_pu["Hs_plot"],
                     name="System curve", line=dict(color="#D97706", width=2.5, dash="dash"),
                 ))
-                # Operating point marker
                 _fig_hq.add_trace(go.Scatter(
-                    x=[_pu_Qop], y=[_pu_Hop],
+                    x=[_pu["Q_op"]], y=[_pu["H_op"]],
                     name="Operating point",
                     mode="markers",
                     marker=dict(size=12, color="#16A34A", symbol="circle",
                                 line=dict(color="white", width=2)),
                 ))
-                # BEP marker (on pump curve)
                 _pu_Hbep_on_curve = pe.eval_hq(_pu_hq_coeffs, _pu_Qbep_used)
                 _fig_hq.add_trace(go.Scatter(
                     x=[_pu_Qbep_used], y=[_pu_Hbep_on_curve],
@@ -6322,15 +6304,15 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                 )
                 st.plotly_chart(_fig_hq, use_container_width=True)
 
-                # ── η-Q chart ─────────────────────────────────────────────────
+                # η-Q chart
                 _fig_eta = go.Figure()
                 _fig_eta.add_trace(go.Scatter(
-                    x=list(_pu_Q_plot), y=_pu_eta_plot,
+                    x=_pu["Q_plot"], y=_pu["eta_plot"],
                     name="Efficiency", line=dict(color="#7C3AED", width=2.5),
                     fill="tozeroy", fillcolor="rgba(124,58,237,0.08)",
                 ))
-                _fig_eta.add_vline(x=_pu_Qop, line=dict(color="#16A34A", dash="dot", width=1.5),
-                                   annotation_text=f"Q_op={_pu_Qop:.1f}", annotation_position="top right")
+                _fig_eta.add_vline(x=_pu["Q_op"], line=dict(color="#16A34A", dash="dot", width=1.5),
+                                   annotation_text=f"Q_op={_pu['Q_op']:.1f}", annotation_position="top right")
                 _fig_eta.update_layout(
                     xaxis_title="Flow (m³/h)", yaxis_title="Efficiency (%)",
                     yaxis_range=[0, 100],
@@ -6344,32 +6326,30 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
             # ── Design pressure results ───────────────────────────────────────
             st.markdown("**DESIGN PRESSURE — DOWNSTREAM PIPING**")
             if not _pu_is_pd and _pu_hq_coeffs:
-                _pu_H0_disp = pe.hq_shutoff(pe.scale_hq_to_speed(_pu_hq_coeffs, _pu_n_ratio))
-                _pu_H0_bar  = pe.head_to_bar(_pu_H0_disp, _pu_rho)
                 st.caption(
                     f"Shut-off head (at {'max VSD' if _pu_vsd else 'rated'} speed): "
-                    f"**{_pu_H0_disp:.1f} m**  =  **{_pu_H0_bar:.2f} bar**  "
+                    f"**{_pu['H0_max']:.1f} m**  =  **{_pu['H0_bar']:.2f} bar**  "
                     f"(ρ = {_pu_rho:.0f} kg/m³)"
                 )
             _dp1, _dp2, _dp3 = st.columns(3)
-            _dp1.metric("P design", f"{_pu_dp_res['P_design_bara']:.2f} bara")
-            _dp2.metric("P design", f"{_pu_P_design_barg:.2f} barg")
-            _dp3.metric("ANSI class", _pu_ansi["class_label"],
-                        delta=f"Rated {_pu_ansi['rated_barg']:.1f} barg",
-                        delta_color="normal" if _pu_ansi["adequate"] else "inverse")
+            _dp1.metric("P design", f"{_pu['P_design_bara']:.2f} bara")
+            _dp2.metric("P design", f"{_pu['P_design_barg']:.2f} barg")
+            _dp3.metric("ANSI class", _pu["ansi"]["class_label"],
+                        delta=f"Rated {_pu['ansi']['rated_barg']:.1f} barg",
+                        delta_color="normal" if _pu["ansi"]["adequate"] else "inverse")
 
-            if not _pu_ansi["adequate"]:
+            if not _pu["ansi"]["adequate"]:
                 st.error(
-                    f"Design pressure ({_pu_P_design_barg:.2f} barg) exceeds the maximum "
-                    f"ANSI 2500 rating ({_pu_ansi['rated_barg']:.1f} barg) for the selected "
+                    f"Design pressure ({_pu['P_design_barg']:.2f} barg) exceeds the maximum "
+                    f"ANSI 2500 rating ({_pu['ansi']['rated_barg']:.1f} barg) for the selected "
                     "material group. Review design basis or use a higher-pressure standard."
                 )
 
-            st.caption(_pu_dp_res["notes"])
+            st.caption(_pu["dp_res"]["notes"])
 
             # ── ANSI class table ──────────────────────────────────────────────
             with st.expander("ANSI B16.5 pressure class ratings — all classes"):
-                _ansi_df = pd.DataFrame(_pu_ansi["all_classes"])
+                _ansi_df = pd.DataFrame(_pu["ansi"]["all_classes"])
                 st.dataframe(_ansi_df, hide_index=True, use_container_width=True)
 
             # ── Design pressure method comparison table ────────────────────────
@@ -6380,43 +6360,20 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                         "Methods 4–6 require a PSV on the pump discharge."
                     )
                     _cmp_rows = []
-                    _H0_rated = pe.hq_shutoff(_pu_hq_coeffs)
-                    _H0_max   = _H0_rated * (_pu_n_ratio ** 2)
-
-                    # Build rows for each method
-                    _pset_barg = _pu_PSV_set if _pu_PSV_set is not None else 0.0
-                    for _m in range(1, 7):
-                        try:
-                            _mr = pe.centrifugal_design_pressure(
-                                method            = _m,
-                                P_suction_bara    = _pu_P_suc_max if _m <= 3 else _pu_P_bara,
-                                H_shutoff_rated_m = _H0_rated,
-                                rho_kgm3          = _pu_rho,
-                                n_max_ratio       = _pu_n_ratio,
-                                PSV_set_barg      = _pset_barg if _m >= 4 else None,
-                            )
-                            _pu_ansi_m = pe.ansi_class_lookup(_mr["P_design_barg"], _pu_mat_group)
-                            _selected_marker = " ◀ selected" if _m == _pu_dp_method else ""
-                            _cmp_rows.append({
-                                "#":              _m,
-                                "Method":         pe.DESIGN_PRESSURE_METHODS[_m].split("(")[0].strip(),
-                                "P design (barg)": _mr["P_design_barg"],
-                                "ANSI class":     _pu_ansi_m["class_label"] + _selected_marker,
-                            })
-                        except Exception:
-                            _cmp_rows.append({
-                                "#":              _m,
-                                "Method":         pe.DESIGN_PRESSURE_METHODS[_m].split("(")[0].strip(),
-                                "P design (barg)": "—  (PSV set required)",
-                                "ANSI class":     "—",
-                            })
-
+                    for _row in _pu["method_comparison"]:
+                        _sel = " ◄ selected" if _row["#"] == _pu_dp_method else ""
+                        _p_val = _row["P_design_barg"]
+                        _cmp_rows.append({
+                            "#":               _row["#"],
+                            "Method":          _row["method_label"],
+                            "P design (barg)": _p_val if _p_val is not None else "—  (PSV set required)",
+                            "ANSI class":      (_row["ansi_label"] + _sel) if _p_val is not None else "—",
+                        })
                     st.dataframe(
                         pd.DataFrame(_cmp_rows),
                         hide_index=True, use_container_width=True,
                         column_config={"P design (barg)": st.column_config.NumberColumn(format="%.2f")},
                     )
-
     # =========================================================================
     # Tab: Line Size
     # =========================================================================
