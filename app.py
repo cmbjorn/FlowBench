@@ -3602,6 +3602,10 @@ if _group != "Engineering Tools":
 
         ra, rb = results_a, results_b
 
+        if not ra.get("grid_records") or not rb.get("grid_records"):
+            st.info("Run **Calculate** on both Case A and Case B to see the comparison.")
+            st.stop()
+
         # ── Side-by-side headline metrics ─────────────────────────────────────────
         with st.container(border=True):
             _cl, _cm, _cr = st.columns([2, 2, 2])
@@ -4121,12 +4125,18 @@ if _group != "Engineering Tools":
         _ta, _tb = st.columns(2)
         with _ta:
             st.markdown(f"**{_la}**")
-            st.dataframe(pd.DataFrame(ra["grid_records"])[_cmp_cols],
-                         column_config=_col_cfg, hide_index=True, width='stretch')
+            if ra.get("grid_records"):
+                st.dataframe(pd.DataFrame(ra["grid_records"])[_cmp_cols],
+                             column_config=_col_cfg, hide_index=True, width='stretch')
+            else:
+                st.info("Run Case A first.")
         with _tb:
             st.markdown(f"**{_lb}**")
-            st.dataframe(pd.DataFrame(rb["grid_records"])[_cmp_cols],
-                         column_config=_col_cfg, hide_index=True, width='stretch')
+            if rb.get("grid_records"):
+                st.dataframe(pd.DataFrame(rb["grid_records"])[_cmp_cols],
+                             column_config=_col_cfg, hide_index=True, width='stretch')
+            else:
+                st.info("Run Case B first.")
 
 
     # ============================================================================
@@ -4139,6 +4149,10 @@ if _group != "Engineering Tools":
         _ld = f"{_lb} Header"
 
         st.subheader("Goal Seek")
+
+        if not results_a.get("grid_records") or not results_b.get("grid_records"):
+            st.info("Run **Calculate** on both Case A and Case B to use Goal Seek.")
+            st.stop()
 
         _gs_direction = st.radio(
             "Mode",
