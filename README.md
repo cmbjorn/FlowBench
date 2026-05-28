@@ -78,13 +78,29 @@ Requires **Python 3.10–3.12**. Opens at `http://localhost:8501`.
 
 ### Windows notes
 
-CoolProp is a C++ extension. Pre-built wheels exist for Python 3.10–3.12 on 64-bit Windows — `pip install` will work without a compiler if you use one of those versions.
+**Starting the app** — double-click `run.bat` (Command Prompt) or right-click `run.ps1` → *Run with PowerShell*. Both scripts automatically activate the `.venv` virtual environment if it exists. If the browser does not open on its own, navigate manually to `http://localhost:8501`.
 
-If pip tries to compile from source (no wheel for your Python version), install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload first.
+**First-time setup** — create the virtual environment once before running the scripts:
 
-If port 8501 is blocked by Windows Firewall, run on a different port:
+```bat
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-```bash
+After that, `run.bat` / `run.ps1` handle activation automatically on every subsequent launch.
+
+**PowerShell execution policy** — if Windows blocks `run.ps1`, run this once in PowerShell (admin not required):
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+**CoolProp** — pre-built wheels exist for Python 3.10–3.12 on 64-bit Windows; `pip install` works without a compiler. If pip tries to compile from source (wrong Python version or 32-bit), install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload first.
+
+**Windows Firewall** — the app binds to `localhost` (127.0.0.1) so Windows Firewall should not block it. If it does prompt, allow access. Alternatively run on a different port:
+
+```bat
 streamlit run app.py --server.port 8502
 ```
 
