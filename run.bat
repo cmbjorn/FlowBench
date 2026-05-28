@@ -1,21 +1,32 @@
 @echo off
 setlocal
 
-:: Change to the folder containing this script (handles running from any directory)
+:: Change to the folder containing this script
 cd /d "%~dp0"
 
-:: Activate virtual environment if it exists
-if exist ".venv\Scripts\activate.bat" (
-    call .venv\Scripts\activate.bat
-) else (
-    echo No .venv found in %CD%
-    echo Run setup once first:
-    echo     python -m venv .venv
-    echo     .venv\Scripts\activate
-    echo     pip install -r requirements.txt
+:: First-time setup: create venv and install dependencies if not present
+if not exist ".venv\Scripts\activate.bat" (
+    echo No virtual environment found. Running first-time setup...
     echo.
-    pause
-    exit /b 1
+    python -m venv .venv
+    if errorlevel 1 (
+        echo ERROR: Could not create virtual environment.
+        echo Make sure Python 3.10-3.12 is installed and on your PATH.
+        pause
+        exit /b 1
+    )
+    call .venv\Scripts\activate.bat
+    echo Installing dependencies ^(this takes a minute the first time^)...
+    pip install -r requirements.txt
+    if errorlevel 1 (
+        echo ERROR: pip install failed. See messages above.
+        pause
+        exit /b 1
+    )
+    echo Setup complete.
+    echo.
+) else (
+    call .venv\Scripts\activate.bat
 )
 
 echo Stopping any existing FlowBench on port 8501...

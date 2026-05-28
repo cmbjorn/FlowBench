@@ -1,17 +1,29 @@
 # Change to the folder containing this script
 Set-Location $PSScriptRoot
 
-# Activate virtual environment
-if (Test-Path ".venv\Scripts\Activate.ps1") {
+# First-time setup: create venv and install dependencies if not present
+if (-not (Test-Path ".venv\Scripts\Activate.ps1")) {
+    Write-Host "No virtual environment found. Running first-time setup..." -ForegroundColor Yellow
+    Write-Host ""
+    python -m venv .venv
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Could not create virtual environment." -ForegroundColor Red
+        Write-Host "Make sure Python 3.10-3.12 is installed and on your PATH." -ForegroundColor Red
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
     & ".venv\Scripts\Activate.ps1"
+    Write-Host "Installing dependencies (this takes a minute the first time)..."
+    pip install -r requirements.txt
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: pip install failed. See messages above." -ForegroundColor Red
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
+    Write-Host "Setup complete." -ForegroundColor Green
+    Write-Host ""
 } else {
-    Write-Host "No .venv found in $PWD" -ForegroundColor Yellow
-    Write-Host "Run setup once first:" -ForegroundColor Yellow
-    Write-Host "    python -m venv .venv" -ForegroundColor Yellow
-    Write-Host "    .venv\Scripts\Activate.ps1" -ForegroundColor Yellow
-    Write-Host "    pip install -r requirements.txt" -ForegroundColor Yellow
-    Read-Host "Press Enter to exit"
-    exit 1
+    & ".venv\Scripts\Activate.ps1"
 }
 
 Write-Host "Stopping any existing FlowBench on port 8501..."
