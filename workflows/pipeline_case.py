@@ -91,6 +91,7 @@ def compute_pipeline_case(
     grid_records         = []
     stream_records       = []
     valve_sizing         = []
+    slug_records         = []
     cumulative_positions = []
     cumulative_distance  = 0.0
     pressure_profile_x   = [0.0]
@@ -339,6 +340,25 @@ def compute_pipeline_case(
             dp_dz=round(dP_per_dz, 2),
         ).to_dict())
 
+        _slug = seg_result.get("slug_info")
+        if _slug is not None:
+            slug_records.append({
+                "Seg":                f"#{i+1}",
+                "DN":                 seg["dn"],
+                "Regime":             regime,
+                "f_slug (Hz)":        round(_slug["slug_freq_hz"],      3),
+                "f_slug (slugs/min)": round(_slug["slug_freq_per_min"], 1),
+                "V_slug (m/s)":       round(_slug["V_slug_ms"],         2),
+                "H_Ls":               round(_slug["H_Ls"],              3),
+                "L_slug (m)":         round(_slug["L_slug_m"],          2),
+                "L_slug (×D)":        "30",
+                "ΔP_pulse (kPa)":     round(_slug["dP_pulse_kPa"],      2),
+                "ΔP_design (kPa)":    round(_slug["dP_design_kPa"],     2),
+                "F_elbow (N)":        round(_slug["F_elbow_N"],         1),
+                "F_design (N)":       round(_slug["F_design_N"],        1),
+                "q_dyn (kPa)":        round(_slug["q_dyn_kPa"],         2),
+            })
+
         total_dp_fric_kpa  += dP_fric_Pa / 1000.0
         total_dp_grav_kpa  += dP_grav_Pa / 1000.0
         total_dp_accel_kpa += dP_accel_Pa / 1000.0
@@ -354,6 +374,7 @@ def compute_pipeline_case(
         "current_P":            current_P,
         "current_T_C":          current_T_C,
         "vle_x":                vle_x,
+        "slug_records":         slug_records,
         "grid_records":         grid_records,
         "stream_records":       stream_records,
         "valve_sizing":         valve_sizing,

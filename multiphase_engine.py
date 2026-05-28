@@ -1201,7 +1201,7 @@ def calculate_segment_pressure_drop(
     _err_result = lambda msg: {
         "dP_Pa": 0.0, "dP_fric_Pa": 0.0, "dP_grav_Pa": 0.0, "dP_accel_Pa": 0.0,
         "regime": msg, "dP_per_dz": 0.0, "Vsg": 0.0, "Vsl": 0.0,
-        "alpha": props.get("alpha", 0.0),
+        "alpha": props.get("alpha", 0.0), "slug_info": None,
     }
     try:
         m     = props["m_total_kgs"]
@@ -1279,6 +1279,10 @@ def calculate_segment_pressure_drop(
             angle_deg=angle_deg,
         )
 
+        _slug_info = None
+        if "slug" in regime or "intermittent" in regime:
+            _slug_info = slug_dynamics(Vsl, Vsg, D_inner, rhol, angle_rad)
+
         return {
             "dP_Pa":       dP_total,
             "dP_fric_Pa":  dP_fric_Pa,
@@ -1289,6 +1293,7 @@ def calculate_segment_pressure_drop(
             "Vsg":         Vsg,
             "Vsl":         Vsl,
             "alpha":       alpha,
+            "slug_info":   _slug_info,
         }
 
     except Exception as e:
@@ -1298,7 +1303,69 @@ def calculate_segment_pressure_drop(
 
 
 # ============================================================================
-# 5A. SENSITIVITY ANALYSIS — all correlation × void-fraction combinations
+# 5A. SLUG FLOW DYNAMICS
+# ============================================================================
+
+def slug_dynamics(Vsl: float, Vsg: float, D: float, rho_l: float, theta_rad: float):
+    """
+    Slug flow characterisation for one pipe segment.
+
+    Correlations:
+      Frequency  : Gregory-Scott (1969) — horizontal empirical
+      Velocity   : Bendiksen (1984) — generalised for inclination
+      Holdup     : Gregory et al. (1978) — slug body liquid holdup
+      Length     : Brill & Mukherjee 30D rule-of-thumb
+      Pulse/force: Momentum balance at 90° elbow, DLF=2 per ASME B31.3
+
+    Returns dict of slug properties, or None if inputs are non-physical.
+    """
+    import math
+    g  = 9.81
+    Vm = Vsl + Vsg
+    if Vm <= 0.0 or D <= 0.0 or rho_l <= 0.0 or Vsl <= 0.0:
+        return None
+
+    # Slug frequency — Gregory-Scott (1969)
+    slug_freq_hz = 0.0226 * (Vm / D) * (Vsl / math.sqrt(g * D)) ** 1.2
+
+    # Slug translational velocity — Bendiksen (1984)
+    Vd     = (0.54 * math.cos(theta_rad) + 0.35 * math.sin(theta_rad)) * math.sqrt(g * D)
+    V_slug = 1.2 * Vm + Vd
+
+    # Liquid holdup in slug body — Gregory et al. (1978)
+    H_Ls = 1.0 / (1.0 + (Vm / 8.66) ** 1.39)
+
+    # Slug length — Brill & Mukherjee 30D
+    L_slug_m = 30.0 * D
+
+    # Pressure pulse at 90° elbow — momentum balance (Pa)
+    dP_pulse_Pa  = math.sqrt(2.0) * rho_l * H_Ls * V_slug ** 2
+    dP_design_Pa = 2.0 * dP_pulse_Pa          # DLF = 2.0
+
+    # Force on 90° elbow (N)
+    A_pipe     = math.pi / 4.0 * D ** 2
+    F_elbow_N  = dP_pulse_Pa  * A_pipe
+    F_design_N = dP_design_Pa * A_pipe
+
+    # Dynamic pressure reference (lower bound)
+    q_Pa = 0.5 * rho_l * V_slug ** 2
+
+    return {
+        "slug_freq_hz":      slug_freq_hz,
+        "slug_freq_per_min": slug_freq_hz * 60.0,
+        "V_slug_ms":         V_slug,
+        "H_Ls":              H_Ls,
+        "L_slug_m":          L_slug_m,
+        "dP_pulse_kPa":      dP_pulse_Pa  / 1000.0,
+        "dP_design_kPa":     dP_design_Pa / 1000.0,
+        "F_elbow_N":         F_elbow_N,
+        "F_design_N":        F_design_N,
+        "q_dyn_kPa":         q_Pa / 1000.0,
+    }
+
+
+# ============================================================================
+# 5B. SENSITIVITY ANALYSIS — all correlation × void-fraction combinations
 # ============================================================================
 
 def run_sensitivity(

@@ -1424,6 +1424,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             grid_records         = _calc["grid_records"]
             stream_records       = _calc["stream_records"]
             valve_sizing         = _calc["valve_sizing"]
+            slug_records         = _calc["slug_records"]
             cumulative_distance  = _calc["cumulative_distance"]
             cumulative_positions = _calc["cumulative_positions"]
             pressure_profile_x   = _calc["pressure_profile_x"]
@@ -1440,6 +1441,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             grid_records         = _lc["grid_records"]
             stream_records       = _lc["stream_records"]
             valve_sizing         = _lc["valve_sizing"]
+            slug_records         = _lc.get("slug_records", [])
             cumulative_distance  = _lc["cumulative_distance"]
             cumulative_positions = _lc["cumulative_positions"]
             pressure_profile_x   = _lc["pressure_profile_x"]
@@ -1460,6 +1462,46 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         elif _max_ratio >= 0.8:
             st.warning(f"**Approaching erosion limit** — Segment {_worst_seg}: "
                        f"V_m/V_e = **{_max_ratio:.2f}** (API RP 14E, limit = 1.0).")
+
+        # ── Slug Flow Dynamics ────────────────────────────────────────────────
+        if slug_records:
+            with st.expander(
+                f"Slug Flow Dynamics — {len(slug_records)} slug segment(s) detected",
+                expanded=False,
+            ):
+                _sf = pd.DataFrame(slug_records)
+                st.dataframe(_sf.set_index("Seg"), use_container_width=True)
+                st.divider()
+                _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+                _sc1.metric(
+                    "Max slug frequency",
+                    f"{_sf['f_slug (Hz)'].max():.3f} Hz",
+                    f"{_sf['f_slug (slugs/min)'].max():.1f} slugs/min",
+                )
+                _sc2.metric(
+                    "Max slug velocity",
+                    f"{_sf['V_slug (m/s)'].max():.2f} m/s",
+                )
+                _sc3.metric(
+                    "Max ΔP pulse (90° elbow)",
+                    f"{_sf['ΔP_pulse (kPa)'].max():.1f} kPa",
+                    f"Design (DLF 2): {_sf['ΔP_design (kPa)'].max():.1f} kPa",
+                )
+                _sc4.metric(
+                    "Max elbow force",
+                    f"{_sf['F_elbow (N)'].max():.0f} N",
+                    f"Design: {_sf['F_design (N)'].max():.0f} N",
+                )
+                st.caption(
+                    "**Slug frequency:** Gregory-Scott (1969) — horizontal empirical correlation. "
+                    "**Slug velocity:** Bendiksen (1984) — generalised for pipe inclination. "
+                    "**Liquid holdup in slug body:** Gregory et al. (1978). "
+                    "**Slug length:** Brill & Mukherjee 30D rule-of-thumb (literature range 16D–60D; "
+                    "use for indicative pipe-support spacing only). "
+                    "**ΔP pulse / elbow force:** momentum balance at 90° bend; design values apply "
+                    "Dynamic Load Factor 2.0 per ASME B31.3 occasional-load provisions. "
+                    "Frequency correlation developed for horizontal flow — treat inclined results as indicative."
+                )
 
         # ── Valve Sizing Results ──────────────────────────────────────────────
         if valve_sizing:
