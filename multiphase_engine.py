@@ -29,6 +29,26 @@ except ImportError:
 
 _g = 9.80665
 
+# ── CoolProp AbstractState cache ────────────────────────────────────────────
+# Reusing AbstractState objects is ~75× faster than repeated PropsSI() calls
+# because PropsSI rebuilds the EOS state from scratch every time.
+# Keyed by fluid_id string; one object per pure-fluid identifier.
+_AS_CACHE: dict[str, "CP.AbstractState"] = {}
+
+
+def _get_as(fluid_id: str) -> "CP.AbstractState":
+    """Return (or lazily create) a cached AbstractState for *fluid_id*."""
+    if fluid_id not in _AS_CACHE:
+        _AS_CACHE[fluid_id] = CP.AbstractState("HEOS", fluid_id)
+    return _AS_CACHE[fluid_id]
+
+
+# ── FlashVL construction cache ───────────────────────────────────────────────
+# ChemicalConstantsPackage + FlashVL construction costs ~6 ms per call.
+# Cache by sorted tuple of thermo IDs — the flasher only depends on species,
+# not on T or P.
+_FLASH_CACHE: dict[tuple, object] = {}
+
 # ============================================================================
 # 1. INDUSTRIAL STANDARDS DATABASE
 # ============================================================================
@@ -400,17 +420,20 @@ def flash_pt(gas_flows_kgh: dict, liquid_type: str, q_lye_m3h: float,
     zs = [mol_flows[sp] / n_total for sp in species]
 
     try:
-        constants, props = ChemicalConstantsPackage.from_IDs(thermo_ids)
-        kijs = [[0.0] * len(species) for _ in species]
-        eos_kw = dict(Tcs=constants.Tcs, Pcs=constants.Pcs,
-                      omegas=constants.omegas, kijs=kijs)
-        flasher = FlashVL(
-            constants, props,
-            liquid=CEOSLiquid(PRMIX, eos_kwargs=eos_kw,
-                              HeatCapacityGases=props.HeatCapacityGases),
-            gas=CEOSGas(PRMIX, eos_kwargs=eos_kw,
-                        HeatCapacityGases=props.HeatCapacityGases),
-        )
+        _flash_key = tuple(sorted(zip(thermo_ids, species)))
+        if _flash_key not in _FLASH_CACHE:
+            constants, _fprops = ChemicalConstantsPackage.from_IDs(thermo_ids)
+            kijs = [[0.0] * len(species) for _ in species]
+            eos_kw = dict(Tcs=constants.Tcs, Pcs=constants.Pcs,
+                          omegas=constants.omegas, kijs=kijs)
+            _FLASH_CACHE[_flash_key] = FlashVL(
+                constants, _fprops,
+                liquid=CEOSLiquid(PRMIX, eos_kwargs=eos_kw,
+                                  HeatCapacityGases=_fprops.HeatCapacityGases),
+                gas=CEOSGas(PRMIX, eos_kwargs=eos_kw,
+                            HeatCapacityGases=_fprops.HeatCapacityGases),
+            )
+        flasher = _FLASH_CACHE[_flash_key]
         res = flasher.flash(T=T_C + 273.15, P=P_bara * 1e5, zs=zs)
     except Exception as exc:
         return {"feasible": False,
@@ -473,11 +496,14 @@ def liquid_mixture_props(liquid_phase_kgh: dict, T_K: float, P_pa: float):
             sigma_sum += w * 0.072
             continue
         try:
-            rho_i   = CP.PropsSI("D", "T", T_K, "P", P_pa, cp_id)
-            mu_i    = CP.PropsSI("V", "T", T_K, "P", P_pa, cp_id)
-            sig_fb  = LIQUID_SIGMA_FALLBACK.get(sp, 0.020)
+            _as = _get_as(cp_id)
+            _as.update(CP.PT_INPUTS, P_pa, T_K)
+            rho_i = _as.rhomass()
+            mu_i  = _as.viscosity()
+            sig_fb = LIQUID_SIGMA_FALLBACK.get(sp, 0.020)
             try:
-                sigma_i = CP.PropsSI("I", "T", T_K, "Q", 0, cp_id)
+                _as.update(CP.QT_INPUTS, 0.0, T_K)
+                sigma_i = _as.surface_tension()
             except Exception:
                 sigma_i = sig_fb
             rho_sum     += w * rho_i
@@ -506,13 +532,17 @@ def _coolprop_liquid_by_id(fluid_id, T_K, P_pa, sigma_fallback=0.020):
     (acceptable engineering approximation for subcooled liquids).
     """
     try:
-        rho = CP.PropsSI('D', 'T', T_K, 'P', P_pa, fluid_id)
-        mu  = CP.PropsSI('V', 'T', T_K, 'P', P_pa, fluid_id)
+        _as = _get_as(fluid_id)
+        _as.update(CP.PT_INPUTS, P_pa, T_K)
+        rho = _as.rhomass()
+        mu  = _as.viscosity()
     except Exception:
         rho = 800.0
         mu  = 1e-3
     try:
-        sigma = CP.PropsSI('surface_tension', 'T', T_K, 'Q', 0, fluid_id)
+        _as = _get_as(fluid_id)
+        _as.update(CP.QT_INPUTS, 0.0, T_K)
+        sigma = _as.surface_tension()
     except Exception:
         sigma = sigma_fallback
     return rho, mu, sigma
@@ -552,7 +582,9 @@ def _get_species_viscosity(species, T_K, P_pa):
         cid = info.get("coolprop_id")
         if cid:
             try:
-                return CP.PropsSI('V', 'T', T_K, 'P', P_pa, cid)
+                _as = _get_as(cid)
+                _as.update(CP.PT_INPUTS, P_pa, T_K)
+                return _as.viscosity()
             except Exception:
                 pass
         return info.get("mu_ref") or 1e-5
@@ -560,7 +592,9 @@ def _get_species_viscosity(species, T_K, P_pa):
     cp_id = LIQUID_COOLPROP_ID.get(species)
     if cp_id:
         try:
-            return CP.PropsSI('V', 'T', T_K, 'P', P_pa, cp_id)
+            _as = _get_as(cp_id)
+            _as.update(CP.PT_INPUTS, P_pa, T_K)
+            return _as.viscosity()
         except Exception:
             pass
     return 1e-5  # last-resort default
@@ -726,7 +760,9 @@ def calculate_two_phase_properties(
     n_H2O            = 0.0
     if aqueous:
         try:
-            P_sat_H2O = CP.PropsSI('P', 'T', T_K, 'Q', 1, 'Water')
+            _as_w = _get_as('Water')
+            _as_w.update(CP.QT_INPUTS, 1.0, T_K)
+            P_sat_H2O = _as_w.p()
         except Exception:
             P_sat_H2O = 0.1 * P_pa
         if P_sat_H2O >= P_pa:
@@ -869,7 +905,9 @@ def validate_input_bounds(P_bara, T_C, gas_flows_kgh, liquid_type, q_lye_m3h,
 
     if is_aqueous:
         try:
-            P_sat = CP.PropsSI('P', 'T', T_C + 273.15, 'Q', 1, 'Water')
+            _as_w = _get_as('Water')
+            _as_w.update(CP.QT_INPUTS, 1.0, T_C + 273.15)
+            P_sat = _as_w.p()
             if P_sat > P_bara * 1e5:
                 warnings.append("⚠️ Water saturation pressure exceeds system pressure; flashing likely")
         except Exception:
@@ -917,15 +955,21 @@ VLE_FLUID_DISPLAY = {
 def vle_inlet_enthalpy(fluid_id: str, P_bara: float, x_mass: float) -> float:
     """Specific enthalpy (J/kg) of a pure saturated mixture at inlet conditions."""
     P_pa = P_bara * 1e5
-    h_l  = CP.PropsSI('H', 'P', P_pa, 'Q', 0, fluid_id)
-    h_v  = CP.PropsSI('H', 'P', P_pa, 'Q', 1, fluid_id)
+    _as = _get_as(fluid_id)
+    _as.update(CP.PQ_INPUTS, P_pa, 0.0)
+    h_l = _as.hmass()
+    _as.update(CP.PQ_INPUTS, P_pa, 1.0)
+    h_v = _as.hmass()
     return h_l + max(0.0, min(1.0, x_mass)) * (h_v - h_l)
 
 
 def _vle_quality_from_enthalpy(fluid_id: str, P_pa: float, h_spec: float) -> float:
     """Mass quality at pressure P_pa given constant specific enthalpy h_spec (isenthalpic flash)."""
-    h_l = CP.PropsSI('H', 'P', P_pa, 'Q', 0, fluid_id)
-    h_v = CP.PropsSI('H', 'P', P_pa, 'Q', 1, fluid_id)
+    _as = _get_as(fluid_id)
+    _as.update(CP.PQ_INPUTS, P_pa, 0.0)
+    h_l = _as.hmass()
+    _as.update(CP.PQ_INPUTS, P_pa, 1.0)
+    h_v = _as.hmass()
     if h_spec <= h_l:
         return 0.0   # fully condensed — subcooled liquid
     if h_spec >= h_v:
@@ -958,16 +1002,19 @@ def calculate_vle_properties(fluid_id, P_bara, x_mass, m_total_kgs, h_spec=None)
         x_mass = max(0.0, min(1.0, x_mass))
 
     try:
-        T_sat = CP.PropsSI('T',  'P', P_pa, 'Q', 0.5, fluid_id)
-        rho_l = CP.PropsSI('D',  'P', P_pa, 'Q', 0,   fluid_id)
-        rho_g = CP.PropsSI('D',  'P', P_pa, 'Q', 1,   fluid_id)
-        mu_l  = CP.PropsSI('V',  'P', P_pa, 'Q', 0,   fluid_id)
-        mu_g  = CP.PropsSI('V',  'P', P_pa, 'Q', 1,   fluid_id)
-        MW    = CP.PropsSI('M',  'P', P_pa, 'Q', 1,   fluid_id)   # kg/mol
+        _as = _get_as(fluid_id)
+        _as.update(CP.PQ_INPUTS, P_pa, 0.0)    # saturated liquid
+        T_sat = _as.T()
+        rho_l = _as.rhomass()
+        mu_l  = _as.viscosity()
         try:
-            sigma = CP.PropsSI('surface_tension', 'T', T_sat, 'Q', 0, fluid_id)
+            sigma = _as.surface_tension()
         except Exception:
-            sigma = 0.020  # generic fallback
+            sigma = 0.020
+        _as.update(CP.PQ_INPUTS, P_pa, 1.0)    # saturated vapour
+        rho_g = _as.rhomass()
+        mu_g  = _as.viscosity()
+        MW    = _as.molar_mass()
     except Exception as exc:
         raise ValueError(
             f"CoolProp VLE lookup failed for '{fluid_id}' at {P_bara:.2f} bara: {exc}"

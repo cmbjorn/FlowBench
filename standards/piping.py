@@ -156,3 +156,25 @@ def min_flange_class(P_bara: float) -> int:
         if P_bara <= limit:
             return cls
     return 2500
+
+
+def sum_le_fit(seg: dict, D_eff: float) -> float:
+    """Total equivalent pipe length (m) contributed by fittings in one segment.
+
+    Accepts both the current format (``fittings_list`` list-of-dicts) and the
+    legacy format (``fittings`` string + ``fitting_count`` int).
+    """
+    fl = seg.get("fittings_list")
+    if fl is not None:
+        total = 0.0
+        for fit in fl:
+            t = fit.get("type", "")
+            q = fit.get("qty", 0)
+            if t in FITTING_Le_over_D and q > 0:
+                total += FITTING_Le_over_D[t] * D_eff * q
+        return total
+    f = seg.get("fittings", "None")
+    c = seg.get("fitting_count", 0)
+    if f in FITTING_Le_over_D and c > 0:
+        return FITTING_Le_over_D[f] * D_eff * c
+    return 0.0

@@ -12,10 +12,10 @@ import ro_engine as ro
 import psv_engine as psv
 import cv_engine as cv
 import hashlib
-from models import SegmentRow
 from physics.friction import churchill_f
 from workflows.pipeline_case import compute_pipeline_case
 from workflows.pump_case import compute_pump_case
+from standards.piping import sum_le_fit
 import json
 from fluids.two_phase import (Taitel_Dukler_regime as _TD_regime,
                                Mandhane_Gregory_Aziz_regime as _MGA_regime)
@@ -180,43 +180,55 @@ with st.sidebar:
     st.header("FlowBench")
     with st.expander("About & Capabilities", expanded=False):
         st.markdown("""
-        Steady-state pipe hydraulics workbench — pressure drop, flow regime, and
-        velocity analysis for single-phase and two-phase flows.
+        Engineering workbench for steady-state flow calculations — pipe hydraulics,
+        equipment sizing, and fluid thermodynamics in a single browser-based tool.
 
-        **Flow modes**
-        - **Single-phase liquid** — incompressible Darcy-Weisbach; CoolProp physical
-          properties (ρ, μ, σ). KOH solution available as a built-in empirical model
-          (concentration 20–40 wt%, no CoolProp required).
-        - **Single-phase gas** — isothermal compressible Darcy-Weisbach; ideal-gas
-          density re-evaluated at each segment from the marched pressure.
-          Choking / Fanno-flow not modelled.
-        - **Gas + liquid (two-phase)** — six industry correlations (Beggs-Brill,
-          Friedel, Lockhart-Martinelli, Müller-Steinhagen & Heck, Chisholm,
-          Kim-Mudawar) × two void-fraction models (Homogeneous, Rouhani-1), with
-          full pressure marching and ΔP decomposed into frictional, gravitational,
-          and accelerational components.
-        - **Saturated / VLE** — single-component pure fluid on its own saturation
-          curve. Inlet quality and mass flow are specified; quality evolves
-          isenthalpically (constant total enthalpy) as pressure falls. CoolProp
-          provides all phase properties at each segment. Phase distribution is
-          reported at each stream boundary.
+        ---
+        **Pipeline Hydraulics** (tabs A / B, Header A / B, Compare, Goal Seek)
 
-        **Workflow:** tabs **A / B** for individual lines, **Header A / B** for
-        collecting manifolds, **Compare** for side-by-side overlay and method
-        uncertainty sweep (12 correlation × void-fraction combinations).
-        Per-case method sensitivity is shown in each case tab.
-        Export Word or Excel from any case tab.
+        Segment-by-segment pressure marching; fluid properties re-evaluated at each
+        segment from the current pressure.
 
-        **Pipe library** — DN20–DN250, PN20/25/40, 5 materials, optional
-        fluoropolymer liner (PTFE, FEP, PFA, PVDF). 17 fitting types (Crane TP-410).
-        Inline components: valves (Kv or ΔP mode), heat exchangers, and custom orifices.
+        | Flow mode | Approach |
+        |---|---|
+        | Single-phase liquid | Darcy-Weisbach, Churchill friction, CoolProp ρ/μ/σ; KOH empirical model (20–40 wt%) |
+        | Single-phase gas | Isothermal compressible Darcy-Weisbach; ideal-gas density marched with pressure |
+        | Gas + liquid (two-phase) | 6 ΔP correlations × 2 void-fraction models; ΔP split into frictional, gravitational, accelerational |
+        | Saturated / VLE | Single-component pure fluid; quality evolves isenthalpically; CoolProp saturation tables |
 
-        **Accuracy** — two-phase correlations: ±20–30 % typical. Single-phase
-        Darcy-Weisbach: ±5–10 % for turbulent flow with well-characterised roughness.
-        VLE saturation properties from CoolProp: ±1–5 %. Validate all results against
-        commissioning data before safety-critical design decisions.
+        Two-phase correlations: Beggs-Brill, Friedel, Lockhart-Martinelli,
+        Müller-Steinhagen & Heck, Chisholm, Kim-Mudawar.
+        Void-fraction: Homogeneous, Rouhani-1 drift-flux.
+
+        Outputs: segment ΔP table · pipeline schematic · pressure profile ·
+        horizontal and vertical flow regime maps with operating points ·
+        phase distribution (VLE) · method sensitivity sweep · API RP 14E erosion
+        check · valve Kv sizing · export to Word or Excel.
+
+        **Header cases** compute the governing-arm pressure drop and goal-seek to a
+        target separator pressure. **Compare** overlays Cases A and B across all
+        12 method combinations. **Goal Seek** back-calculates inlet or separator
+        pressure for both systems simultaneously.
+
+        **Pipe library** — DN20–DN250, PN20/25/40, 5 materials (SS316L, Duplex,
+        Carbon Steel, Hastelloy C-276, Titanium Gr. 2), optional fluoropolymer liner
+        (PTFE, FEP, PFA, PVDF). 17 fitting types (Crane TP-410). Inline components:
+        control valves (Kv or ΔP mode), heat exchangers.
+
+        ---
+        **Engineering Calculators**
+
+        | Tool | Description |
+        |---|---|
+        | **Fanno Flow** | Adiabatic compressible duct flow — inlet Mach from conditions, friction → exit Mach, static and stagnation properties, choking margin |
+        | **RO (Restriction Orifice)** | ISO 5167 orifice sizing for gas and liquid; single-stage and multistage arrays; Reader-Harris/Gallagher Cd |
+        | **PSV (Pressure Safety Valve)** | API 520 / 526 area sizing for gas, steam, liquid relief; back-pressure correction; standard orifice letter selection |
+        | **Control Valve** | IEC 60534 Kv/Cv for liquid (cavitation and flashing checks), gas, and steam; suggested body size at target opening |
+        | **Dissolved Gas Flash** | Henry's law dissolution (H₂, O₂, CO₂, N₂, CH₄) in water and KOH; flash calculation on depressurisation |
+        | **Pump** | H-Q curve fit (3-point or tabular), system curve, operating point, speed-scaling (affinity laws), NPSH check, shaft and motor power; PD pump design pressure |
+        | **Line Size** | DN selection meeting velocity and ΔP/100 m criteria; service presets for process liquid, pump suction/discharge, gas, steam, slurry |
         """)
-    with st.expander("Model details", expanded=False):
+    with st.expander("Model details — Pipeline Hydraulics", expanded=False):
         st.markdown("""
         **Assumptions**
         1. Gas density: ideal-gas law (ρ = PM/RT); viscosity from CoolProp
@@ -231,7 +243,8 @@ with st.sidebar:
         8. Steady-state only — no transient, surge, or waterhammer
         9. Two-phase void fraction: homogeneous α = (x/ρg) / (x/ρg + (1−x)/ρl),
            or Rouhani-1 drift-flux model
-        10. Single-phase gas: isothermal compressible — no Fanno-flow or choking check
+        10. Single-phase gas pipeline: isothermal compressible Darcy-Weisbach
+            (for adiabatic compressible duct flow use the Fanno Flow calculator)
 
         **Flow regime classification (two-phase)**
         - Horizontal (|θ| ≤ 15°): Taitel-Dukler (1976) + Mandhane-Gregory-Aziz (1974)
@@ -346,6 +359,16 @@ with st.sidebar:
         except Exception as _e:
             st.error(f"Could not load session: {_e}")
 
+    st.divider()
+    st.caption(
+        "**Disclaimer** — FlowBench is provided for general reference only. "
+        "No warranty is given for accuracy, completeness, or fitness for any "
+        "particular purpose. The authors accept no liability for errors, "
+        "omissions, bugs, or misuse of this tool. "
+        "Validate all results independently before use in any design, "
+        "procurement, or safety-critical application."
+    )
+
 # ============================================================================
 # PRESETS  (shared across both cases)
 # ============================================================================
@@ -430,7 +453,7 @@ def _compute_regime_grid(
     Returns (td_grid, full_grid, vsl_list, vsg_list) — all plain Python
     lists so Streamlit can cache and serialise them cleanly.
     """
-    N = 120
+    N = 80
     _g = 9.80665
     vsl_arr = np.logspace(-3, 1, N)   # V_sl: 0.001 → 10 m/s
     vsg_arr = np.logspace(-3, 2, N)   # V_sg: 0.001 → 100 m/s
@@ -487,27 +510,143 @@ def _compute_regime_grid(
     return td_grid, full_grid, vsl_arr.tolist(), vsg_arr.tolist()
 
 
+def _build_regime_fig(
+    td_grid, full_grid, vsl_arr, vsg_arr,
+    op_recs: list,
+    title: str,
+) -> "go.Figure":
+    """Build a single flow-regime map figure.
+
+    Args:
+        td_grid / full_grid : 2-D lists from _compute_regime_grid
+        vsl_arr / vsg_arr   : velocity grids (linear values)
+        op_recs             : segment records whose operating points to overlay
+        title               : chart title string
+    """
+    _log_vsl = np.log10(vsl_arr)
+    _log_vsg = np.log10(vsg_arr)
+
+    _all_regs   = sorted(set(r for row in td_grid for r in row if r))
+    _reg_to_idx = {r: i for i, r in enumerate(_all_regs)}
+    _idx_to_col = [_regime_color(r, _REGIME_LINE_KW, "#94A3B8") for r in _all_regs]
+    _n_reg      = len(_all_regs)
+
+    _z = [[_reg_to_idx.get(td_grid[i][j], 0) for j in range(len(vsl_arr))]
+          for i in range(len(vsg_arr))]
+
+    _cs = []
+    for _ci, _cc in enumerate(_idx_to_col):
+        _cs.extend([[_ci / _n_reg, _cc], [(_ci + 1) / _n_reg, _cc]])
+
+    fig = go.Figure()
+    fig.add_trace(go.Heatmap(
+        x=list(_log_vsl), y=list(_log_vsg), z=_z,
+        text=full_grid,
+        colorscale=_cs,
+        zmin=0, zmax=_n_reg,
+        showscale=False,
+        opacity=0.30,
+        hovertemplate="Regime: %{text}<extra></extra>",
+    ))
+
+    # Zone labels at each regime's log-space centroid
+    _zone_acc: dict = {}
+    for _gi, _row in enumerate(td_grid):
+        for _gj, _reg in enumerate(_row):
+            if not _reg:
+                continue
+            if _reg not in _zone_acc:
+                _zone_acc[_reg] = [0.0, 0.0, 0]
+            _zone_acc[_reg][0] += float(_log_vsl[_gj])
+            _zone_acc[_reg][1] += float(_log_vsg[_gi])
+            _zone_acc[_reg][2] += 1
+
+    for _zreg, (_svsl, _svsg, _cnt) in _zone_acc.items():
+        if _cnt == 0:
+            continue
+        fig.add_annotation(
+            x=_svsl / _cnt, y=_svsg / _cnt,
+            xref="x", yref="y",
+            text=f"<b>{_zreg}</b>",
+            showarrow=False,
+            font=dict(size=9, color="#1E293B"),
+            bgcolor="rgba(255,255,255,0.55)",
+            borderpad=2,
+        )
+
+    # Operating points — cluster identical (V_sl, V_sg) positions
+    _op_clusters: dict = {}
+    for _r in op_recs:
+        _vsg_r = max(_r["V_sg (m/s)"], 1e-4)
+        _vsl_r = max(_r["V_sl (m/s)"], 1e-4)
+        _ck = (round(np.log10(_vsl_r), 2), round(np.log10(_vsg_r), 2))
+        _op_clusters.setdefault(_ck, []).append(_r)
+
+    _seen_reg_map: set = set()
+    for _cgroup in _op_clusters.values():
+        _vsl_c = float(np.mean([max(r["V_sl (m/s)"], 1e-4) for r in _cgroup]))
+        _vsg_c = float(np.mean([max(r["V_sg (m/s)"], 1e-4) for r in _cgroup]))
+        _reg_list = [r["Regime"] for r in _cgroup]
+        _reg  = max(set(_reg_list), key=_reg_list.count)
+        _col  = _regime_color(_reg, _REGIME_LINE_KW, "#64748B")
+        _types = {r.get("Type", "Horizontal") for r in _cgroup}
+        _sym  = ("circle"   if _types == {"Horizontal"} else
+                 "diamond"  if "Horizontal" not in _types else
+                 "diamond-wide")
+        _n_c  = len(_cgroup)
+        _lbl  = ", ".join(r["Seg"] for r in _cgroup)
+        _fsz  = max(6, 9 - (_n_c - 1) * 2)
+        _msz  = 16 + (_n_c - 1) * 4
+        _show_leg = _reg not in _seen_reg_map
+        _seen_reg_map.add(_reg)
+        _hover_lines = "<br>".join(
+            f"<b>{r['Seg']}</b> {r['Pipe']}  {r.get('Type','—')}"
+            f"  |  {r['Regime']}"
+            f"  |  ΔP {r['ΔP (kPa)']:.3f} kPa"
+            for r in _cgroup
+        )
+        fig.add_trace(go.Scatter(
+            x=[float(np.log10(_vsl_c))], y=[float(np.log10(_vsg_c))],
+            mode="markers+text",
+            marker=dict(size=_msz, color=_col, symbol=_sym,
+                        line=dict(color="white", width=1.5)),
+            text=[_lbl], textposition="middle center",
+            textfont=dict(size=_fsz, color="white"),
+            name=_reg, legendgroup=_reg, showlegend=_show_leg,
+            hovertemplate=(
+                f"{_hover_lines}<br>"
+                f"V_sl = {_vsl_c:.4f} m/s<br>"
+                f"V_sg = {_vsg_c:.4f} m/s"
+                "<extra></extra>"
+            ),
+        ))
+
+    _xtv = [-3, -2, -1, 0, 1]
+    _xtx = ["0.001", "0.01", "0.1", "1", "10"]
+    _ytv = [-3, -2, -1, 0, 1, 2]
+    _ytx = ["0.001", "0.01", "0.1", "1", "10", "100"]
+    fig.update_layout(
+        template="plotly_white", height=470,
+        margin=dict(l=70, r=20, t=40, b=70),
+        xaxis=dict(title="V_sl  superficial liquid velocity (m/s)",
+                   type="linear", range=[-3, 1],
+                   tickvals=_xtv, ticktext=_xtx,
+                   gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+        yaxis=dict(title="V_sg  superficial gas velocity (m/s)",
+                   type="linear", range=[-3, 2],
+                   tickvals=_ytv, ticktext=_ytx,
+                   gridcolor="#F1F5F9", linecolor="#E2E8F0"),
+        legend=dict(title="Computed regime", bgcolor="rgba(255,255,255,0.9)",
+                    bordercolor="#E2E8F0", borderwidth=1, font=dict(size=11)),
+        font=dict(size=12, color="#374151"),
+        title=dict(text=title, font=dict(size=13), x=0),
+    )
+    return fig
+
+
 # ============================================================================
 # CASE RUNNER  — renders one full case and returns results for Compare tab
 # ============================================================================
-def _sum_le_fit(seg, D_eff):
-    """Sum equivalent pipe length from all fittings. Handles old and new segment format."""
-    fl = seg.get("fittings_list")
-    if fl is not None:
-        total = 0.0
-        for fit in fl:
-            t = fit.get("type", "")
-            q = fit.get("qty", 0)
-            if t in engine.FITTING_Le_over_D and q > 0:
-                total += engine.FITTING_Le_over_D[t] * D_eff * q
-        return total
-    f = seg.get("fittings", "None")
-    c = seg.get("fitting_count", 0)
-    if f in engine.FITTING_Le_over_D and c > 0:
-        return engine.FITTING_Le_over_D[f] * D_eff * c
-    return 0.0
-
-
 def run_case(cid: str, accent: str, default_segments=None) -> dict:
     """
     Render inputs + outputs for one case.
@@ -1614,20 +1753,10 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 "two-phase (gas + liquid) flow. No regime boundaries to display."
             )
         elif _pipe_recs:
-            _n_vert = sum(1 for r in _pipe_recs if r.get("Type", "Horizontal") != "Horizontal")
-            _map_choice = st.radio(
-                "Reference map:",
-                ["Horizontal – Taitel-Dukler + Mandhane-Gregory-Aziz",
-                 "Vertical upflow – Wallis / void-fraction"],
-                index=1 if _n_vert > len(_pipe_recs) / 2 else 0,
-                horizontal=True, key=k("rmap_orient"),
-            )
-            _use_horiz = "Horizontal" in _map_choice
-
-            # ── Compute regime grid using engine correlations ─────────────────
-            _p      = props          # inlet flash result, in scope from run_case
+            # ── Compute both regime grids ─────────────────────────────────────
+            _p      = props
             _D_repr = (_pipe_recs[0]["ID (mm)"] / 1000.0) if _pipe_recs else 0.05
-            _td_grid, _full_grid, _vsl_arr, _vsg_arr = _compute_regime_grid(
+            _common_kw = dict(
                 rhol=float(_p["rho_l"]),
                 rhog=float(_p["rho_g"]),
                 mul=float(_p["mu_l"]),
@@ -1635,147 +1764,38 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 sigma=float(_p.get("sigma") or 0.072),
                 D=float(_D_repr),
                 roughness=4.6e-5,
-                use_horiz=_use_horiz,
+            )
+            _td_h, _full_h, _vsl_h, _vsg_h = _compute_regime_grid(**_common_kw, use_horiz=True)
+            _td_v, _full_v, _vsl_v, _vsg_v = _compute_regime_grid(**_common_kw, use_horiz=False)
+
+            # ── Split operating points by segment orientation ─────────────────
+            _horiz_recs = [r for r in _pipe_recs if r.get("Type", "Horizontal") == "Horizontal"]
+            _vert_recs  = [r for r in _pipe_recs if r.get("Type", "Horizontal") != "Horizontal"]
+
+            # ── Build both figures ────────────────────────────────────────────
+            _fig_h = _build_regime_fig(
+                _td_h, _full_h, _vsl_h, _vsg_h, _horiz_recs,
+                "Horizontal — Taitel-Dukler + Mandhane-Gregory-Aziz",
+            )
+            _fig_v = _build_regime_fig(
+                _td_v, _full_v, _vsl_v, _vsg_v, _vert_recs,
+                "Vertical — Wallis / void-fraction",
             )
 
-            # ── Map regime strings → integer z-values & colours ───────────────
-            _all_regs = sorted(set(r for row in _td_grid for r in row if r))
-            _reg_to_idx = {r: i for i, r in enumerate(_all_regs)}
-            _idx_to_col = [_regime_color(r, _REGIME_LINE_KW, "#94A3B8") for r in _all_regs]
-            _n_reg = len(_all_regs)
+            # ── Side-by-side display ──────────────────────────────────────────
+            _col_h, _col_v = st.columns(2)
+            with _col_h:
+                st.plotly_chart(_fig_h, width='stretch', key=k("fig_regime_h"))
+            with _col_v:
+                st.plotly_chart(_fig_v, width='stretch', key=k("fig_regime_v"))
 
-            _z = [[_reg_to_idx.get(_td_grid[i][j], 0) for j in range(len(_vsl_arr))]
-                  for i in range(len(_vsg_arr))]
-
-            # Discrete colorscale: each regime gets a flat band
-            _cs = []
-            for _ci, _cc in enumerate(_idx_to_col):
-                _cs.extend([[_ci / _n_reg, _cc], [(_ci + 1) / _n_reg, _cc]])
-
-            # ── Build figure ──────────────────────────────────────────────────
-            fig_regime = go.Figure()
-
-            # Background heatmap — axes are linear with log10(velocity) values
-            # (go.Heatmap doesn't render reliably on log-scale axes, so we keep
-            # the axis type="linear" and pass log10 of the grid coordinates.)
-            _log_vsl = np.log10(_vsl_arr)
-            _log_vsg = np.log10(_vsg_arr)
-            fig_regime.add_trace(go.Heatmap(
-                x=list(_log_vsl), y=list(_log_vsg), z=_z,
-                text=_full_grid,
-                colorscale=_cs,
-                zmin=0, zmax=_n_reg,
-                showscale=False,
-                opacity=0.30,
-                hovertemplate=(
-                    "Regime: %{text}<extra></extra>"
-                ),
-            ))
-
-            # Zone labels at each regime's log-space centroid
-            _zone_acc = {}   # regime → [Σlog_vsl, Σlog_vsg, count]
-            for _gi, _row in enumerate(_td_grid):
-                for _gj, _reg in enumerate(_row):
-                    if not _reg:
-                        continue
-                    if _reg not in _zone_acc:
-                        _zone_acc[_reg] = [0.0, 0.0, 0]
-                    _zone_acc[_reg][0] += float(_log_vsl[_gj])
-                    _zone_acc[_reg][1] += float(_log_vsg[_gi])
-                    _zone_acc[_reg][2] += 1
-
-            for _zreg, (_svsl, _svsg, _cnt) in _zone_acc.items():
-                if _cnt == 0:
-                    continue
-                fig_regime.add_annotation(
-                    x=_svsl / _cnt, y=_svsg / _cnt,   # already log10 values
-                    xref="x", yref="y",
-                    text=f"<b>{_zreg}</b>",
-                    showarrow=False,
-                    font=dict(size=9, color="#1E293B"),
-                    bgcolor="rgba(255,255,255,0.55)",
-                    borderpad=2,
-                )
-
-            # ── Operating points — cluster identical (V_sl, V_sg) positions ──────
-            # Segments with the same pipe DN have the same superficial velocities
-            # and would otherwise stack invisibly.  Group them into one marker.
-            _op_clusters: dict = {}
-            for _r in _pipe_recs:
-                _vsg_r = max(_r["V_sg (m/s)"], 1e-4)
-                _vsl_r = max(_r["V_sl (m/s)"], 1e-4)
-                # Cluster key: round log10 to 2 dp (≈4.5% tolerance)
-                _ck = (round(np.log10(_vsl_r), 2), round(np.log10(_vsg_r), 2))
-                _op_clusters.setdefault(_ck, []).append(_r)
-
-            _seen_reg_map = set()
-            for _cgroup in _op_clusters.values():
-                _vsl_c = float(np.mean([max(r["V_sl (m/s)"], 1e-4) for r in _cgroup]))
-                _vsg_c = float(np.mean([max(r["V_sg (m/s)"], 1e-4) for r in _cgroup]))
-                _reg_list = [r["Regime"] for r in _cgroup]
-                _reg = max(set(_reg_list), key=_reg_list.count)
-                _col = _regime_color(_reg, _REGIME_LINE_KW, "#64748B")
-                _types = {r.get("Type", "Horizontal") for r in _cgroup}
-                _sym = ("circle"       if _types == {"Horizontal"} else
-                        "diamond"      if "Horizontal" not in _types else
-                        "diamond-wide")        # mixed: wide diamond
-                _n_c = len(_cgroup)
-                _lbl = ", ".join(r["Seg"] for r in _cgroup)
-                _fsz = max(6, 9 - (_n_c - 1) * 2)   # shrink font for big clusters
-                _msz = 16 + (_n_c - 1) * 4           # grow marker for big clusters
-                _show_leg = _reg not in _seen_reg_map; _seen_reg_map.add(_reg)
-                _hover_lines = "<br>".join(
-                    f"<b>{r['Seg']}</b> {r['Pipe']}  {r.get('Type','—')}"
-                    f"  |  {r['Regime']}"
-                    f"  |  ΔP {r['ΔP (kPa)']:.3f} kPa"
-                    for r in _cgroup
-                )
-                fig_regime.add_trace(go.Scatter(
-                    x=[float(np.log10(_vsl_c))], y=[float(np.log10(_vsg_c))],
-                    mode="markers+text",
-                    marker=dict(size=_msz, color=_col, symbol=_sym,
-                                line=dict(color="white", width=1.5)),
-                    text=[_lbl], textposition="middle center",
-                    textfont=dict(size=_fsz, color="white"),
-                    name=_reg, legendgroup=_reg, showlegend=_show_leg,
-                    hovertemplate=(
-                        f"{_hover_lines}<br>"
-                        f"V_sl = {_vsl_c:.4f} m/s<br>"
-                        f"V_sg = {_vsg_c:.4f} m/s"
-                        "<extra></extra>"
-                    ),
-                ))
-
-            # Log tick helpers (axis is linear with log10 values)
-            _xtv = [-3, -2, -1, 0, 1]
-            _xtx = ["0.001", "0.01", "0.1", "1", "10"]
-            _ytv = [-3, -2, -1, 0, 1, 2]
-            _ytx = ["0.001", "0.01", "0.1", "1", "10", "100"]
-            fig_regime.update_layout(
-                template="plotly_white", height=470,
-                margin=dict(l=70, r=20, t=40, b=70),
-                xaxis=dict(title="V_sl  superficial liquid velocity (m/s)",
-                           type="linear", range=[-3, 1],
-                           tickvals=_xtv, ticktext=_xtx,
-                           gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-                yaxis=dict(title="V_sg  superficial gas velocity (m/s)",
-                           type="linear", range=[-3, 2],
-                           tickvals=_ytv, ticktext=_ytx,
-                           gridcolor="#F1F5F9", linecolor="#E2E8F0"),
-                legend=dict(title="Computed regime", bgcolor="rgba(255,255,255,0.9)",
-                            bordercolor="#E2E8F0", borderwidth=1, font=dict(size=11)),
-                font=dict(size=12, color="#374151"),
-                title=dict(text="Flow Regime Map — operating points per segment",
-                           font=dict(size=13), x=0),
-            )
-            st.plotly_chart(fig_regime, width='stretch', key=k("fig_regime"))
-            _corr_note = ("Taitel-Dukler (1976) + Mandhane-Gregory-Aziz (1974)"
-                          if _use_horiz else "Wallis annular criterion + void-fraction thresholds")
             st.caption(
                 f"Background zones computed for inlet conditions: "
                 f"ρ_l = {_p['rho_l']:.1f} kg/m³, ρ_g = {_p['rho_g']:.4f} kg/m³, "
-                f"D = {_D_repr*1000:.1f} mm  —  {_corr_note}.  "
-                "● horizontal  ◆ vertical segment"
+                f"D = {_D_repr*1000:.1f} mm.  "
+                "Left: Taitel-Dukler (1976) + Mandhane-Gregory-Aziz (1974).  "
+                "Right: Wallis annular criterion + void-fraction thresholds.  "
+                "● horizontal segment  ◆ vertical segment"
             )
         else:
             st.info("No pipe segments with velocity data to plot.")
@@ -2327,7 +2347,7 @@ def _calc_dp_at_p(res, P_bara_override):
         props  = _get_props()
         angle  = {"Horizontal": 0.0, "Vertical Upflow": np.pi / 2.0,
                   "Vertical Downflow": -np.pi / 2.0}[seg["type"]]
-        le_fit = _sum_le_fit(seg, D_eff)
+        le_fit = sum_le_fit(seg, D_eff)
         seg_res = engine.calculate_segment_pressure_drop(
             props, D_eff, rough, seg["length"] + le_fit, angle,
             correlation=corr, voidage_method=void)
@@ -2413,7 +2433,7 @@ def _calc_regimes_at_p(res, P_bara_override):
                 liquid_flows_kgh=res.get("liquid_flows_kgh"))
         angle  = {"Horizontal": 0.0, "Vertical Upflow": np.pi / 2.0,
                   "Vertical Downflow": -np.pi / 2.0}[seg["type"]]
-        le_fit = _sum_le_fit(seg, D_eff)
+        le_fit = sum_le_fit(seg, D_eff)
         seg_res = engine.calculate_segment_pressure_drop(
             props, D_eff, rough, seg["length"] + le_fit, angle,
             correlation=corr, voidage_method=void)
@@ -2454,7 +2474,7 @@ def _march_header_simple(tap_dists, gas_per_tap, liq_per_tap,
     D_eff  = D_nom - 2 * lthk_m if lined else D_nom
     rough  = (engine.LINER_ROUGHNESS[lmat] if lined
               else engine.MATERIAL_ROUGHNESS[hdr.get("material", "SS316L")])
-    le_fit = _sum_le_fit(hdr, D_eff)
+    le_fit = sum_le_fit(hdr, D_eff)
 
     current_P   = P_start_Pa
     total_dp    = dp_fric = dp_grav = 0.0
@@ -2521,7 +2541,7 @@ def _march_single_seg(seg, P_in_Pa, T_C, gas_flows, liquid_type, q_lye, corr, vo
     D_nom = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
     mat   = seg.get("material", "SS316L")
     rough = engine.MATERIAL_ROUGHNESS.get(mat, engine.MATERIAL_ROUGHNESS["SS316L"])
-    le_fit = _sum_le_fit(seg, D_nom)
+    le_fit = sum_le_fit(seg, D_nom)
 
     props   = engine.calculate_two_phase_properties(
         P_in_Pa / 1e5, T_C, gas_flows, liquid_type, q_lye,
@@ -4657,6 +4677,65 @@ else:  # Engineering Tools
     - Supersonic inlet results assume the inlet is truly supersonic; upstream shock structure not checked.
     """)
 
+                st.divider()
+                _fn_rpt = report_generator.generate_calculator_report(
+                    tool_name="Fanno Flow",
+                    subtitle=f"{_fn_species}  ·  {_fn_dn}/{_fn_pn}  ·  {_fn_L_m:.1f} m",
+                    method_text=(
+                        "Adiabatic compressible duct flow (Fanno line) for a constant-area pipe "
+                        "with wall friction. The inlet Mach number is derived from the specified "
+                        "mass flow, pipe bore, and thermodynamic state. Friction causes subsonic "
+                        "flow to accelerate toward Ma = 1 (sonic limit). The critical length L* "
+                        "is the maximum pipe length at which the flow remains unchoked for the "
+                        "given inlet conditions. Friction factor from Churchill (1977). "
+                        "Ideal-gas law; calorically perfect gas (constant γ and MW)."
+                    ),
+                    inputs_rows=[
+                        ("Species",          _fn_species),
+                        ("MW (g/mol)",        f"{_fn_mw*1000:.3f}"),
+                        ("γ (Cp/Cv)",         f"{_fn_gamma:.4f}"),
+                        ("Inlet pressure P₁", f"{_fn_P1_bara:.3f} bara"),
+                        ("Inlet temperature", f"{_fn_T1_C:.1f} °C"),
+                        ("Mass flow",         f"{_fn_mdot_kgh:.3f} kg/h"),
+                        ("Pipe",              f"{_fn_dn} / {_fn_pn}  (ID = {_fn_D_m*1000:.2f} mm)"),
+                        ("Material",          _fn_mat if _fn_liner == "None" else f"{_fn_mat} + {_fn_liner} liner"),
+                        ("Roughness ε",       f"{_fn_rough:.2e} m"),
+                        ("Pipe length L",     f"{_fn_L_m:.2f} m"),
+                    ],
+                    results_rows=[
+                        ("Inlet Ma₁",              f"{_fn_res['Ma1']:.5f}"),
+                        ("Exit Ma₂",               f"{_fn_res['Ma2']:.5f}"),
+                        ("P₁ static (bara)",        f"{_fn_res['P1_bara']:.4f}"),
+                        ("T₁ static (°C)",          f"{_fn_res['T1_K']-273.15:.2f}"),
+                        ("P₀₁ stagnation (bara)",   f"{_fn_res['P01_bara']:.4f}"),
+                        ("V₁ (m/s)",               f"{_fn_res['V1_ms']:.2f}"),
+                        ("a₁ speed of sound (m/s)", f"{_fn_res['a1_ms']:.2f}"),
+                        ("Re₁",                    f"{_fn_res['Re1']:.3e}"),
+                        ("f (Churchill)",           f"{_fn_res['f1']:.5f}"),
+                        ("P₂ static (bara)",        f"{_fn_res['P2_bara']:.4f}"),
+                        ("T₂ static (°C)",          f"{_fn_res['T2_K']-273.15:.2f}"),
+                        ("P₀₂ stagnation (bara)",   f"{_fn_res['P02_bara']:.4f}"),
+                        ("V₂ (m/s)",               f"{_fn_res['V2_ms']:.2f}"),
+                        ("ΔP static (kPa)",         f"{_fn_res['dP_static_kPa']:.3f}"),
+                        ("ΔP stagnation (kPa)",     f"{_fn_res['dP_stag_kPa']:.3f}"),
+                        ("Critical length L* (m)",  f"{_fn_res['L_star_m']:.2f}"),
+                        ("L / L* (%)",              f"{_fn_L_m/_fn_res['L_star_m']*100:.1f} %"
+                                                    if _fn_res['L_star_m'] > 0 else "∞"),
+                        ("Margin to choke",         f"{_fn_res['margin_pct']:.1f} %"
+                                                    if not _fn_res['choked'] else "CHOKED"),
+                    ],
+                    fig=_fig1,
+                    fig_caption_text="Pressure and temperature profiles along the duct.",
+                    fig_height=340,
+                )
+                st.download_button(
+                    "Export Word (.docx)",
+                    _fn_rpt,
+                    file_name=f"fanno_{_fn_species}_{_fn_dn}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="fn_dl",
+                )
+
     # =============================================================================
     # Tab: Restriction Orifice (RO)
     # =============================================================================
@@ -4997,6 +5076,112 @@ else:  # Engineering Tools
     **Bore tolerance** — standard orifice bore tolerance per ASME B16.36 / ISO 5167 is typically ±0.05 mm.
     Round calculated bore to nearest 0.5 mm (or preferred drill size) before ordering.
     """)
+
+                # ── Word export ────────────────────────────────────────────────
+                st.divider()
+                _ro_fluid_lbl = (
+                    f"{_ro_species}  (MW={_ro_mw*1000:.1f} g/mol, γ={_ro_gamma:.3f})"
+                    if _ro_mode == "Gas"
+                    else getattr(_ro_liq_type, "__str__", lambda: str(_ro_liq_type))()
+                )
+                _ro_dir_lbl = "Size (flow → bore)" if _ro_size_mode else "Rate (bore → flow)"
+                _ro_inp = [
+                    ("Fluid",             f"{_ro_mode} — {_ro_fluid_lbl}"),
+                    ("Calculation",       _ro_dir_lbl),
+                    ("P₁ upstream",       f"{_ro_P1:.3f} bara"),
+                    ("P₂ downstream",     f"{_ro_P2:.3f} bara"),
+                    ("ΔP",                f"{(_ro_P1-_ro_P2)*100:.2f} kPa"),
+                    ("Pipe",              f"{_ro_dn}/{_ro_pn}  (ID = {_ro_D_m*1000:.1f} mm)"),
+                ]
+                if _ro_mode == "Gas":
+                    _ro_inp += [
+                        ("Temperature T₁", f"{_ro_T1:.1f} °C"),
+                        ("Flow / bore",    f"{_ro_mdot_kgh:.2f} kg/h" if _ro_size_mode
+                                           else f"{_ro_d_mm:.2f} mm"),
+                    ]
+                else:
+                    _ro_inp += [
+                        ("Density ρ",   f"{_ro_rho:.2f} kg/m³"),
+                        ("Viscosity μ", f"{_ro_mu*1e3:.4f} mPa·s"),
+                        ("Flow / bore", f"{_ro_mdot_kgh:.2f} kg/h" if _ro_size_mode
+                                        else f"{_ro_d_mm:.2f} mm"),
+                    ]
+                _ro_res_rows = [
+                    ("Orifice bore d",  f"{_ro_d_result:.3f} mm"),
+                    ("β = d/D",         f"{_ro_res['beta']:.5f}"),
+                    ("C (ISO 5167)",    f"{_ro_res['C']:.5f}"),
+                    ("Flow",           f"{_ro_flow_kgh:.3f} kg/h"),
+                    ("Re_D",           f"{_ro_res['Re_D']:.3e}"),
+                ]
+                if _ro_mode == "Gas":
+                    _ro_res_rows += [
+                        ("Ma throat",        f"{_ro_res['Ma_throat']:.5f}"),
+                        ("ε (expansion)",    f"{_ro_res['eps']:.5f}"
+                                             if not _ro_res['choked'] else "N/A (choked)"),
+                        ("Choked?",          "Yes" if _ro_res['choked'] else "No"),
+                        ("r_c (critical)",   f"{_ro_res['r_c']:.5f}"),
+                    ]
+                else:
+                    _kc_v = _ro_res['Kc']
+                    _ro_res_rows += [
+                        ("Kc (cavitation)", f"{_kc_v:.4f}" if _kc_v != float('inf') else "∞"),
+                        ("Cavitating?",     "Yes" if _ro_res['cavitating'] else "No"),
+                        ("Choked?",         "Yes" if _ro_res['choked'] else "No"),
+                    ]
+                _ro_ms_data = []
+                if _ro_mode == "Gas":
+                    _ro_ms_hdrs = ["Stage","P_in (bara)","P_out (bara)","ΔP (bar)","Bore (mm)","β","C","ε","Ma throat"]
+                    for _s in _ms["stages"]:
+                        _ro_ms_data.append([
+                            str(_s["stage"]),
+                            f"{_s['P_in_bara']:.3f}", f"{_s['P_out_bara']:.3f}",
+                            f"{_s['dP_bar']:.3f}", f"{_s['d_mm']:.2f}",
+                            f"{_s['beta']:.4f}", f"{_s['C']:.4f}",
+                            f"{_s['eps']:.4f}", f"{_s['Ma_throat']:.4f}",
+                        ])
+                    _ro_ms_cw = [0.4, 0.75, 0.75, 0.65, 0.65, 0.55, 0.55, 0.55, 0.65]
+                else:
+                    _ro_ms_hdrs = ["Stage","P_in (bara)","P_out (bara)","ΔP (bar)","Bore (mm)","β","C","Kc"]
+                    for _s in _ms["stages"]:
+                        _ro_ms_data.append([
+                            str(_s["stage"]),
+                            f"{_s['P_in_bara']:.3f}", f"{_s['P_out_bara']:.3f}",
+                            f"{_s['dP_bar']:.3f}", f"{_s['d_mm']:.2f}",
+                            f"{_s['beta']:.4f}", f"{_s['C']:.4f}",
+                            f"{_s['Kc']:.4f}",
+                        ])
+                    _ro_ms_cw = [0.4, 0.75, 0.75, 0.65, 0.65, 0.55, 0.55, 0.65]
+                _ro_rpt = report_generator.generate_calculator_report(
+                    tool_name="Restriction Orifice",
+                    subtitle=f"{_ro_mode}  ·  {_ro_dir_lbl}  ·  {_ro_dn}/{_ro_pn}",
+                    method_text=(
+                        "ISO 5167-2:2022 orifice plate sizing with the Reader-Harris/Gallagher "
+                        "discharge coefficient. For gas service, the expansion factor ε accounts "
+                        "for compressibility; critical (choked) flow is detected when the "
+                        "pressure ratio P₂/P₁ falls below the isentropic critical ratio r_c. "
+                        "For liquid service, the cavitation index Kc = ΔP/(P₁−Pᵥ) is evaluated "
+                        "against ISO 5167 / IEC 60534 thresholds. "
+                        f"Multi-stage analysis: {_ms['N']} stage(s) recommended."
+                    ),
+                    inputs_rows=_ro_inp,
+                    results_rows=_ro_res_rows,
+                    extra_tables=[{
+                        "title": "Multi-stage Analysis",
+                        "headers": _ro_ms_hdrs,
+                        "data":    _ro_ms_data,
+                        "col_widths": _ro_ms_cw,
+                    }],
+                    fig=_pfig,
+                    fig_caption_text="Pressure schedule across stages.",
+                    fig_height=340,
+                )
+                st.download_button(
+                    "Export Word (.docx)",
+                    _ro_rpt,
+                    file_name=f"ro_{_ro_mode.lower()}_{_ro_dn}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="ro_dl",
+                )
 
     # =============================================================================
     # Tab: PSV — API 520 Part I / API 526
@@ -5342,6 +5527,99 @@ else:  # Engineering Tools
     **Overpressure allowance** — 10% for non-fire; 21% for fire case (API 520 §3.1 / ASME Sec VIII-1).
     """)
 
+        # ── Word export ───────────────────────────────────────────────────────
+        st.divider()
+        _psv_flow_str = (f"{_psv_W_kgh:.1f} kg/h" if _psv_service != "Liquid"
+                         else f"{_psv_Q_m3h:.3f} m³/h")
+        _psv_inp = [
+            ("Service",              _psv_service),
+            ("PSV type",             _psv_type),
+            ("Set pressure",         f"{_psv_Pset_barg:.2f} barg"),
+            ("Allowable overpressure", f"{_psv_op_pct:.1f} %"),
+            ("Relieving pressure P₁", f"{_psv_P1_bara:.3f} bara"),
+            ("Back pressure",        f"{_psv_Pback_barg:.2f} barg"),
+            ("Relieving temperature", f"{_psv_T_C:.1f} °C"),
+            ("Relief flow",          _psv_flow_str),
+            ("Rupture disc upstream", "Yes (Kc = 0.90)" if _psv_rupture_disc else "No (Kc = 1.00)"),
+        ]
+        if _psv_service == "Gas / Vapour":
+            _psv_inp += [
+                ("Species",   _psv_species),
+                ("MW",        f"{_psv_MW:.3f} kg/kmol"),
+                ("γ (Cp/Cv)", f"{_psv_gamma:.4f}"),
+                ("Z",         f"{_psv_Z:.4f}"),
+            ]
+        elif _psv_service == "Liquid":
+            _psv_inp += [
+                ("Density ρ",   f"{_psv_rho:.2f} kg/m³"),
+                ("Viscosity μ", f"{_psv_mu_cP:.4f} cP"),
+            ]
+        _psv_flange = psv.flange_nps(_psv_res["orifice_letter"])
+        _psv_flange_str = (
+            f"NPS {_psv_flange[0]:g}\" × NPS {_psv_flange[1]:g}\""
+            if _psv_flange else "—"
+        )
+        _psv_res_rows = [
+            ("Required area A_req",    f"{_psv_res['A_req_mm2']:.2f} mm²"),
+            ("API 526 orifice letter",  _psv_res["orifice_letter"]),
+            ("Orifice effective area",  f"{_psv_res['orifice_area_mm2']:.1f} mm²"
+                                        if _psv_res["orifice_area_mm2"] < math.inf else "Exceeds T"),
+            ("Area margin",            f"+{_area_margin:.1f} %"),
+            ("Flange (inlet × outlet)", _psv_flange_str),
+            ("Min. flange class (inlet)", f"ASME {psv.min_flange_class(_psv_P1_bara)} lb"),
+            ("Kd (discharge)",         f"{_psv_res['Kd']:.3f}"),
+            ("Kb / Kw (back pressure)", f"{_psv_res.get('Kb', _psv_res.get('Kw', 1.0)):.3f}"),
+            ("Kc (rupture disc)",       f"{_psv_res['Kc']:.3f}"),
+        ]
+        if _psv_service != "Liquid" and "capacity_selected_kgh" in _psv_res:
+            _psv_res_rows += [
+                ("Rated capacity (selected orifice)", f"{_psv_res['capacity_selected_kgh']:.0f} kg/h"),
+                ("C coefficient",                     f"{_psv_res['C_coeff']:.5f}"),
+            ]
+        elif _psv_service == "Liquid" and "capacity_selected_m3h" in _psv_res:
+            _psv_res_rows += [
+                ("Rated capacity (selected orifice)", f"{_psv_res['capacity_selected_m3h']:.3f} m³/h"),
+                ("Kv (viscosity correction)",         f"{_psv_res['Kv']:.5f}"),
+            ]
+        _psv_orifice_data = []
+        for _let, _ar in psv.API526_ORIFICES.items():
+            _fn = psv.flange_nps(_let)
+            _psv_orifice_data.append([
+                _let,
+                f"{_ar:.1f}",
+                f"NPS {_fn[0]:g}\"" if _fn else "—",
+                f"NPS {_fn[1]:g}\"" if _fn else "—",
+                "✓" if _let == _psv_res["orifice_letter"] else "",
+            ])
+        _psv_rpt = report_generator.generate_calculator_report(
+            tool_name="Pressure Safety Valve",
+            subtitle=f"{_psv_service}  ·  {_psv_type}  ·  {_psv_res['orifice_letter']} orifice",
+            method_text=[
+                "API 520 Part I (SI, 10th Ed.) orifice area sizing. "
+                "The required effective orifice area is calculated from the specified relief "
+                "flow, relieving conditions, and correction factors (Kd, Kb, Kc). "
+                "The smallest API 526 standard orifice that meets or exceeds the required area "
+                "is selected. The standard effective orifice areas are from API 526 Table 2.",
+                f"Gas/steam: A = W/(C·Kd·P₁·Kb·Kc) · √(T·Z/M).  "
+                f"Liquid: A = (Q/3600)/(Kd·Kw·Kc·Kv·√(2·ρ·ΔP)).",
+            ],
+            inputs_rows=_psv_inp,
+            results_rows=_psv_res_rows,
+            extra_tables=[{
+                "title": "API 526 Standard Orifice Table",
+                "headers": ["Letter", "Eff. area (mm²)", "Inlet flange", "Outlet flange", "Selected"],
+                "data": _psv_orifice_data,
+                "col_widths": [0.55, 1.0, 1.3, 1.3, 0.65],
+            }],
+        )
+        st.download_button(
+            "Export Word (.docx)",
+            _psv_rpt,
+            file_name=f"psv_{_psv_service.replace(' / ','_').lower()}_{_psv_res['orifice_letter']}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="psv_dl",
+        )
+
     # =========================================================================
     # Tab: Control Valve — IEC 60534-2-1
     # =========================================================================
@@ -5650,6 +5928,103 @@ typically 2–5× higher for the same body size. Always confirm with vendor.
 Anti-cavitation trims can operate at σ down to ~0.5 FL².
 """)
 
+        # ── Word export ───────────────────────────────────────────────────────
+        st.divider()
+        _cv_inp = [
+            ("Service",        _cv_service),
+            ("Valve type",     _cv_vtype),
+            ("FL",             f"{_cv_FL:.3f}"),
+            ("xT",             f"{_cv_xT:.3f}"),
+            ("FP (piping)",    f"{_cv_FP:.3f}"),
+            ("P₁ upstream",    f"{_cv_P1:.3f} bara"),
+            ("P₂ downstream",  f"{_cv_P2:.3f} bara"),
+            ("ΔP",             f"{_cv_dP:.4f} bar"),
+            ("Temperature",    f"{_cv_T_C:.1f} °C"),
+        ]
+        if _cv_service == "Liquid":
+            _cv_lbl = getattr(_cv_liq, "__str__", lambda: str(_cv_liq))()
+            _cv_inp += [
+                ("Fluid",        _cv_lbl),
+                ("Density ρ",    f"{_cv_rho:.2f} kg/m³"),
+                ("Viscosity μ",  f"{_cv_mu*1e3:.4f} mPa·s"),
+                ("Flow rate",    f"{_cv_Q_m3h:.4f} m³/h"),
+            ]
+        elif _cv_service == "Gas / Vapour":
+            _cv_inp += [
+                ("Species",    _cv_species),
+                ("MW",         f"{_cv_MW:.3f} kg/kmol"),
+                ("γ (Cp/Cv)",  f"{_cv_gamma:.4f}"),
+                ("Z",          f"{_cv_Z:.4f}"),
+                ("Flow rate",  f"{_cv_W_kgh:.2f} kg/h"),
+            ]
+        else:
+            _cv_inp.append(("Flow rate", f"{_cv_W_steam:.2f} kg/h"))
+
+        _cv_res_rows = [
+            ("Kv required",  f"{_cv_res['Kv_req']:.3f} m³/h/√bar"),
+            ("Cv required",  f"{_cv_res['Cv_req']:.3f} USgpm/√psi"),
+            ("ΔP actual",    f"{_cv_res['dP_bar']:.4f} bar"),
+            ("FP (piping)",  f"{_cv_res['FP']:.4f}"),
+            ("Choked?",      "Yes" if _cv_res['choked'] else "No"),
+        ]
+        if _cv_service == "Liquid":
+            _cv_res_rows += [
+                ("ΔP choked",    f"{_cv_res['dP_choked_bar']:.4f} bar"
+                                 if _cv_res['dP_choked_bar'] < math.inf else "∞"),
+                ("Ff",           f"{_cv_res['Ff']:.5f}"),
+                ("FL",           f"{_cv_res['FL']:.4f}"),
+                ("σ (cavitation)", f"{_cv_res['sigma']:.4f}"
+                                   if _cv_res['sigma'] < 1e6 else "∞"),
+                ("Cavitating?",  "Yes" if _cv_res['cavitating'] else "No"),
+            ]
+        else:
+            _cv_res_rows += [
+                ("x (ΔP/P₁)",        f"{_cv_res['x']:.5f}"),
+                ("xT·Fγ (choke)",    f"{_cv_res['x_choked']:.5f}"),
+                ("Y (expansion)",    f"{_cv_res.get('Y', 1.0):.5f}"),
+                ("Fγ",               f"{_cv_res.get('Fgamma', 1.0):.5f}"),
+                ("ρ₁ (kg/m³)",       f"{_cv_res.get('rho1_kgm3', 0.0):.4f}"),
+            ]
+        _cv_res_rows += [
+            ("Suggested body size",  _sz["size_label"]),
+            ("Kv_100 min needed",    f"{_sz['Kv_min']:.2f}"),
+            ("Opening at design",    f"{_sz['opening_pct']:.0f} %"),
+        ]
+        _cv_kv_data = [
+            [_lbl, f"{_k100:.1f}", f"{_k100*cv.KV_TO_CV:.1f}",
+             f"{_kv/_k100*100:.0f}%" if _k100 >= _kv * 0.2 else "—",
+             "✓" if _lbl == _sz["size_label"] else ""]
+            for _lbl, _k100 in cv.INDICATIVE_KV.items()
+        ]
+        _cv_rpt = report_generator.generate_calculator_report(
+            tool_name="Control Valve",
+            subtitle=f"{_cv_service}  ·  {_cv_vtype}  ·  Kv = {_cv_res['Kv_req']:.2f} m³/h/√bar",
+            method_text=(
+                "IEC 60534-2-1:2011 (≡ ISA 75.01.01) flow coefficient sizing. "
+                "For liquid service, the choked ΔP limit is computed from FL² · (P₁ − Ff · Pv); "
+                "the cavitation index σ = (P₁ − Pv)/ΔP is checked against 1/FL². "
+                "For gas/steam service, the expansion factor Y = 1 − x/(3·Fγ·xT) accounts for "
+                "gas expansion; choked flow occurs when x ≥ Fγ·xT. "
+                "Body size recommendation is based on indicative globe-trim Kv_100 values at "
+                "80 % opening target."
+            ),
+            inputs_rows=_cv_inp,
+            results_rows=_cv_res_rows,
+            extra_tables=[{
+                "title": "Indicative Kv_100 by Body Size",
+                "headers": ["Body size", "Kv_100", "Cv_100", "Opening", ""],
+                "data": _cv_kv_data,
+                "col_widths": [1.1, 0.8, 0.8, 0.9, 0.4],
+            }],
+        )
+        st.download_button(
+            "Export Word (.docx)",
+            _cv_rpt,
+            file_name=f"cv_{_cv_service.replace(' / ','_').lower()}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="cv_dl",
+        )
+
     # =========================================================================
     # Tab: Dissolved Gas Flash
     # =========================================================================
@@ -5843,6 +6218,64 @@ Anti-cavitation trims can operate at σ down to ~0.5 FL².
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             )
             st.plotly_chart(_dg_fig, width='stretch')
+
+            # ── Word export ───────────────────────────────────────────────────
+            st.divider()
+            _dg_solvent_lbl = (f"KOH {_dg_koh_wt:.0f} wt%" if _dg_koh_wt > 0
+                               else "Pure water")
+            _dg_rpt = report_generator.generate_calculator_report(
+                tool_name="Dissolved Gas Flash",
+                subtitle=f"{dg.GAS_LABELS[_dg_gas]}  in  {_dg_solvent_lbl}",
+                method_text=(
+                    "Henry's Law dissolution: C [mol/L] = K_H(T) × P_gas [bar]. "
+                    "K_H is interpolated from Battino et al. tabular data for pure water. "
+                    "For KOH solutions, solubility is reduced by the Sechenov equation: "
+                    "log₁₀(K_H_water / K_H_KOH) = K_s × c_KOH. "
+                    "Gas released on depressurisation is the difference in equilibrium "
+                    "dissolved concentration between upstream and downstream conditions. "
+                    "The flash is split into a pressure-only component (ΔP at constant T₁) "
+                    "and a temperature-only component (ΔT at constant P₁); the combined "
+                    "result is the net change between (T₁, P₁) and (T₂, P₂)."
+                ),
+                inputs_rows=[
+                    ("Dissolved gas",         dg.GAS_LABELS[_dg_gas]),
+                    ("Solvent",               _dg_solvent_lbl),
+                    ("Upstream T₁",           f"{_dg_T1:.1f} °C"),
+                    ("Upstream P₁",           f"{_dg_P1:.3f} bara"),
+                    ("Downstream T₂",         f"{_dg_T2:.1f} °C"),
+                    ("Downstream P₂",         f"{_dg_P2:.3f} bara"),
+                ],
+                results_rows=[
+                    ("Upstream concentration C₁",  f"{_dg_res['C1_mol_L']:.4e} mol/L"),
+                    ("Downstream concentration C₂", f"{_dg_res['C2_mol_L']:.4e} mol/L"),
+                    ("Net ΔC (combined)",           f"{_dg_res['dC_combined_mol_L']*1e3:+.4f} mmol/L"),
+                    ("Released volume",             f"{_dg_res['released_mL_per_L']:.4f} mL/L STP"
+                                                    if _dg_released else "0 (absorbed)"),
+                    ("Nm³/m³ liquid",               f"{_dg_res['released_Nm3_per_m3']:.6f}"
+                                                    if _dg_released else "0"),
+                    ("Mass released",               f"{_dg_res['released_g_per_L']*1e3:.4f} mg/L"
+                                                    if _dg_released else "0"),
+                    ("Vol% gas at outlet",          f"{_dg_vol_pct:.3f} %"),
+                    ("ΔC — pressure effect only",   f"{_dg_res['dC_pressure_mol_L']*1e3:+.4f} mmol/L"),
+                    ("ΔC — temperature effect only", f"{_dg_res['dC_temp_mol_L']*1e3:+.4f} mmol/L"),
+                    ("K_H water at T₁",             f"{_dg_res['K_H1_water']:.4e} mol/L/bar"),
+                    ("K_H water at T₂",             f"{_dg_res['K_H2_water']:.4e} mol/L/bar"),
+                    (f"K_H {_dg_solvent_lbl} at T₁", f"{_dg_res['K_H1_soln']:.4e} mol/L/bar"),
+                    (f"K_H {_dg_solvent_lbl} at T₂", f"{_dg_res['K_H2_soln']:.4e} mol/L/bar"),
+                    ("Sechenov K_s at T₁",          f"{_dg_res['K_s1']:.4f} L/mol"),
+                    ("Sechenov K_s at T₂",          f"{_dg_res['K_s2']:.4f} L/mol"),
+                ],
+                fig=_dg_fig,
+                fig_caption_text="Henry's Law constant K_H vs temperature with operating points.",
+                fig_height=340,
+            )
+            st.download_button(
+                "Export Word (.docx)",
+                _dg_rpt,
+                file_name=f"dissolved_gas_{_dg_gas.lower()}_{_dg_solvent_lbl.replace(' ','_')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="dg_dl",
+            )
 
         except Exception as _dg_err:
             st.error(f"Calculation error: {_dg_err}")
@@ -6374,6 +6807,90 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                         hide_index=True, use_container_width=True,
                         column_config={"P design (barg)": st.column_config.NumberColumn(format="%.2f")},
                     )
+
+            # ── Word export ───────────────────────────────────────────────────
+            st.divider()
+            _pu_fluid_lbl = (
+                f"KOH {_pu_koh_conc} wt%"
+                if _pu_fluid_type == "KOH solution"
+                else str(_pu_fluid_name)
+            )
+            _pu_inp = [
+                ("Pump type",          _pu_type),
+                ("Fluid",              _pu_fluid_lbl),
+                ("Temperature",        f"{_pu_T_C:.1f} °C"),
+                ("Suction pressure",   f"{_pu_P_bara:.3f} bara"),
+                ("Density ρ",          f"{_pu_rho:.2f} kg/m³"),
+                ("Vapour pressure Pv", f"{_pu_Pv:.5f} bara"),
+                ("H_static (m)",       f"{_pu_H_static:.2f}"),
+                ("k_fric (m/(m³/h)²)", f"{_pu_k_fric:.6f}"),
+            ]
+            if not _pu_is_pd:
+                _pu_inp += [
+                    ("Motor efficiency",   f"{_pu_eta_motor:.1f} %"),
+                    ("Suction elevation",  f"{_pu_z_suc:.2f} m"),
+                    ("Suction head loss",  f"{_pu_h_suc_loss:.2f} m"),
+                    ("NPSH required",      f"{_pu_NPSH_R:.2f} m"),
+                    ("BEP flow",           f"{_pu_Qbep_used:.2f} m³/h"),
+                    ("Design P method",    f"#{_pu_dp_method}"),
+                    ("Material group",     _pu_mat_group),
+                ]
+            _pu_res_rows = [
+                ("P design (bara)",    f"{_pu['P_design_bara']:.3f}"),
+                ("P design (barg)",    f"{_pu['P_design_barg']:.3f}"),
+                ("ANSI class",         _pu["ansi"]["class_label"]),
+                ("ANSI rated (barg)",  f"{_pu['ansi']['rated_barg']:.1f}"),
+            ]
+            if not _pu_is_pd and _pu["op_ok"]:
+                _pu_res_rows = [
+                    ("Operating flow Q",   f"{_pu['Q_op']:.2f} m³/h"),
+                    ("Operating head H",   f"{_pu['H_op']:.2f} m  ({_pu['Hop_bar']:.3f} bar)"),
+                    ("Pump efficiency η",  f"{_pu['eta_op']:.1f} %"),
+                    ("Shaft power",        f"{_pu['P_shaft']:.2f} kW"),
+                    ("Motor power (input)", f"{_pu['P_motor']:.2f} kW"),
+                    ("NPSH available",     f"{_pu['NPSH_A']:.3f} m"),
+                    ("NPSH required",      f"{_pu_NPSH_R:.2f} m"),
+                    ("NPSH margin",        f"{_pu['npsh_margin']:+.3f} m  ({_pu['npsh_status']})"),
+                ] + _pu_res_rows
+            _pu_ansi_data = [
+                [r["Class"], r["Rated (barg)"], r["Adequate"]]
+                for r in _pu["ansi"]["all_classes"]
+            ]
+            _pu_rpt = report_generator.generate_calculator_report(
+                tool_name="Pump",
+                subtitle=f"{_pu_type}  ·  {_pu_fluid_lbl}  ·  P_design = {_pu['P_design_barg']:.2f} barg",
+                method_text=(
+                    "Centrifugal pump: H-Q curve fitted to 3-point or tabular data "
+                    "(polynomial H = a + b·Q + c·Q²). Operating point by intersection of "
+                    "the pump curve and the system curve (H_static + k_fric·Q²). "
+                    "Efficiency η by parabolic fit. Shaft power = ρ·g·Q·H/η. "
+                    "NPSH available = (P_suc − Pv)/(ρg) + z_suc − h_suc_loss. "
+                    "Design pressure per selected API 610 / NORSOK method; ANSI B16.5 "
+                    "class from the design pressure and material group."
+                    if not _pu_is_pd else
+                    "Positive displacement pump: design pressure = suction pressure + "
+                    "differential pressure (accumulation margin applied)."
+                ),
+                inputs_rows=_pu_inp,
+                results_rows=_pu_res_rows,
+                extra_tables=[{
+                    "title": "ANSI B16.5 Pressure Class Ratings",
+                    "headers": ["Class", "Rated (barg)", "Adequate"],
+                    "data": _pu_ansi_data,
+                    "col_widths": [1.2, 1.5, 0.9],
+                }],
+                fig=_fig_hq if (not _pu_is_pd and _pu["op_ok"]) else None,
+                fig_caption_text="Pump H-Q curve and system curve with operating point.",
+                fig_height=330,
+            )
+            st.download_button(
+                "Export Word (.docx)",
+                _pu_rpt,
+                file_name=f"pump_{_pu_type.split()[0].lower()}_{_pu_fluid_lbl.replace(' ','_')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="pu_dl",
+            )
+
     # =========================================================================
     # Tab: Line Size
     # =========================================================================
@@ -6672,5 +7189,110 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                 )
                 st.plotly_chart(_fig_ls, use_container_width=True)
 
+                # ── Export buttons ────────────────────────────────────────────
+                st.divider()
+                _ls_fluid_lbl = (
+                    f"KOH {_ls_koh_c} wt%"
+                    if _ls_phase == "Liquid" and _ls_liq_src == "KOH solution"
+                    else (_ls_cp_fluid if _ls_phase == "Liquid" else _ls_gas)
+                )
+                _ls_criteria_str = (
+                    f"v = {_ls_v_min}–{_ls_v_max} m/s  |  ΔP/100m ≤ {_ls_dp_max} kPa  |  {_ls_preset}"
+                )
+                _ls_inp_rows = [
+                    ("Phase",              _ls_phase),
+                    ("Fluid",              _ls_fluid_lbl),
+                    ("Temperature",        f"{_ls_T:.1f} °C"),
+                    ("Pressure",           f"{_ls_P:.3f} bara"),
+                    ("Density ρ",          f"{_ls_rho:.4f} kg/m³"),
+                    ("Viscosity μ",        f"{_ls_mu*1e6:.2f} μPa·s" if _ls_phase == "Gas"
+                                           else f"{_ls_mu*1e3:.4f} mPa·s"),
+                    ("Flow rate",          f"{_ls_m_kgh:.2f} kg/h  ({_ls_Q_m3h:.4f} m³/h)"),
+                    ("PN rating",          _ls_pn),
+                    ("Material",           _ls_mat),
+                    ("DN range",           f"{_ls_dn_min} – {_ls_dn_max}"),
+                    ("Service preset",     _ls_preset),
+                    ("Min velocity",       f"{_ls_v_min:.2f} m/s"),
+                    ("Max velocity",       f"{_ls_v_max:.2f} m/s"),
+                    ("Max ΔP/100m",        f"{_ls_dp_max:.2f} kPa"),
+                ]
+                _ls_res_rows = [
+                    ("Recommended DN",     _ls_recommended if _ls_recommended else "None in range"),
+                    ("Sizing criteria",    _ls_criteria_str),
+                ]
+                _ls_table_data = [
+                    [r["DN"], str(r["ID (mm)"]), f"{r['v (m/s)']:.3f}",
+                     f"{r['Re']:,}", r["Regime"], f"{r['ΔP/100m (kPa)']:.2f}",
+                     r["v ✓"], r["ΔP ✓"], r["Adequate"]]
+                    for r in _ls_rows
+                ]
+                _ls_exp_c1, _ls_exp_c2 = st.columns(2)
+                with _ls_exp_c1:
+                    _ls_rpt = report_generator.generate_calculator_report(
+                        tool_name="Line Size",
+                        subtitle=f"{_ls_phase}  ·  {_ls_fluid_lbl}  ·  {_ls_Q_m3h:.3f} m³/h",
+                        method_text=(
+                            "Darcy-Weisbach friction pressure drop per 100 m of straight pipe, "
+                            "evaluated for each DN in the selected range. "
+                            "Friction factor from Churchill (1977) covering laminar, transitional, "
+                            "and turbulent regimes. Velocity computed from volumetric flow rate "
+                            "and pipe bore area. The recommended DN is the smallest that meets "
+                            "both the velocity band and the ΔP/100m limit simultaneously."
+                        ),
+                        inputs_rows=_ls_inp_rows,
+                        results_rows=_ls_res_rows,
+                        extra_tables=[{
+                            "title": "DN Sizing Table",
+                            "headers": ["DN","ID (mm)","v (m/s)","Re","Regime",
+                                        "ΔP/100m (kPa)","v ✓","ΔP ✓","Adequate"],
+                            "data": _ls_table_data,
+                            "col_widths": [0.55, 0.6, 0.65, 0.7, 0.75, 0.85, 0.4, 0.4, 0.55],
+                        }],
+                        fig=_fig_ls,
+                        fig_caption_text="Velocity and ΔP/100m vs pipe size.",
+                        fig_height=340,
+                    )
+                    st.download_button(
+                        "Export Word (.docx)",
+                        _ls_rpt,
+                        file_name=f"linesize_{_ls_fluid_lbl.replace(' ','_')}_{_ls_pn}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                        key="ls_dl_w",
+                    )
+                with _ls_exp_c2:
+                    import io as _ls_io
+                    _ls_xl_buf = _ls_io.BytesIO()
+                    with pd.ExcelWriter(_ls_xl_buf, engine="openpyxl") as _ls_xw:
+                        _ls_info = pd.DataFrame([
+                            ["Phase",        _ls_phase],
+                            ["Fluid",        _ls_fluid_lbl],
+                            ["Temperature",  f"{_ls_T:.1f} °C"],
+                            ["Pressure",     f"{_ls_P:.3f} bara"],
+                            ["Density",      f"{_ls_rho:.4f} kg/m³"],
+                            ["Viscosity",    f"{_ls_mu*1e3:.4f} mPa·s" if _ls_phase == "Liquid"
+                                             else f"{_ls_mu*1e6:.2f} μPa·s"],
+                            ["Flow rate",    f"{_ls_m_kgh:.2f} kg/h"],
+                            ["Flow rate",    f"{_ls_Q_m3h:.4f} m³/h"],
+                            ["PN rating",    _ls_pn],
+                            ["Material",     _ls_mat],
+                            ["Service",      _ls_preset],
+                            ["Min velocity", f"{_ls_v_min:.2f} m/s"],
+                            ["Max velocity", f"{_ls_v_max:.2f} m/s"],
+                            ["Max ΔP/100m",  f"{_ls_dp_max:.2f} kPa"],
+                            ["Recommended",  _ls_recommended or "None"],
+                        ], columns=["Parameter", "Value"])
+                        _ls_info.to_excel(_ls_xw, sheet_name="Inputs", index=False)
+                        pd.DataFrame(_ls_rows).to_excel(
+                            _ls_xw, sheet_name="DN Sizing Table", index=False)
+                    _ls_xl_buf.seek(0)
+                    st.download_button(
+                        "Export Excel (.xlsx)",
+                        _ls_xl_buf,
+                        file_name=f"linesize_{_ls_fluid_lbl.replace(' ','_')}_{_ls_pn}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="ls_dl_x",
+                    )
 
 

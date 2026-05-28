@@ -2380,3 +2380,153 @@ def generate_dn_study_report(
     doc.save(buf)
     buf.seek(0)
     return buf
+
+
+# ============================================================================
+# ENGINEERING CALCULATOR REPORT  (Fanno / RO / PSV / CV / DG / Pump / Line Size)
+# ============================================================================
+
+def generate_calculator_report(
+    tool_name: str,
+    subtitle: str,
+    method_text,
+    inputs_rows: list,
+    results_rows: list,
+    extra_tables=None,
+    notes: str = None,
+    fig=None,
+    fig_caption_text: str = "",
+    fig_width: int = 900,
+    fig_height: int = 380,
+) -> "BytesIO":
+    """Generic Word report for any engineering calculator.
+
+    tool_name    : e.g. "Fanno Flow"
+    subtitle     : one-line description of what was calculated
+    method_text  : str or list[str] — method / assumption paragraphs
+    inputs_rows  : list of (label, value) tuples — inputs table
+    results_rows : list of (label, value) tuples — results table
+    extra_tables : list of dicts:
+        KV table: {"title": str, "rows": [(label, value), ...], "widths": (w1, w2)}
+        Grid table: {"title": str, "headers": [str, ...], "data": [[str, ...], ...],
+                     "col_widths": [float, ...]}
+    notes        : optional engineering note appended as footer
+    fig          : optional Plotly figure
+    fig_caption_text : caption shown above the figure image
+    fig_width, fig_height : kaleido render dimensions in pixels
+    """
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width    = Inches(8.27)
+    sec.page_height   = Inches(11.69)
+    sec.left_margin   = Inches(0.9)
+    sec.right_margin  = Inches(0.9)
+    sec.top_margin    = Inches(0.9)
+    sec.bottom_margin = Inches(0.9)
+
+    _add_footer_page_numbers(doc)
+
+    def _body(text):
+        p = doc.add_paragraph(text)
+        p.paragraph_format.space_after = Pt(4)
+        if p.runs:
+            p.runs[0].font.size = Pt(9)
+        return p
+
+    _sec_n = [0]
+    def _h1(title):
+        _sec_n[0] += 1
+        doc.add_heading(f"{_sec_n[0]}. {title}", level=1)
+
+    # ── Title block ──────────────────────────────────────────────────────────
+    h = doc.add_heading(f"{tool_name} — Calculation Report", level=0)
+    h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    sub = doc.add_paragraph(
+        f"{subtitle}  ·  {datetime.now().strftime('%d %B %Y  %H:%M')}"
+    )
+    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if sub.runs:
+        sub.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+        sub.runs[0].font.size = Pt(10)
+    doc.add_paragraph()
+
+    # ── 1. Method ────────────────────────────────────────────────────────────
+    _h1("Method")
+    if isinstance(method_text, str):
+        _body(method_text)
+    else:
+        for t in method_text:
+            _body(t)
+    doc.add_paragraph()
+
+    # ── 2. Inputs ────────────────────────────────────────────────────────────
+    _h1("Inputs")
+    _kv_table(doc, inputs_rows)
+    doc.add_paragraph()
+
+    # ── 3. Results ───────────────────────────────────────────────────────────
+    _h1("Results")
+    _kv_table(doc, results_rows)
+    doc.add_paragraph()
+
+    # ── Extra tables ─────────────────────────────────────────────────────────
+    if extra_tables:
+        for tbl_spec in extra_tables:
+            _h1(tbl_spec["title"])
+            if "headers" in tbl_spec:
+                headers = tbl_spec["headers"]
+                data    = tbl_spec["data"]
+                widths  = tbl_spec.get("col_widths")
+                tbl = doc.add_table(rows=len(data) + 1, cols=len(headers))
+                tbl.style = "Table Grid"
+                _style_header(tbl.rows[0], font_size=8)
+                for j, hdr in enumerate(headers):
+                    tbl.rows[0].cells[j].text = hdr
+                for i, row_vals in enumerate(data, start=1):
+                    row = tbl.rows[i]
+                    if i % 2 == 0:
+                        for cell in row.cells:
+                            _shd(cell, _ALT_BG)
+                    for j, v in enumerate(row_vals):
+                        row.cells[j].text = str(v)
+                        _cell_font(row.cells[j], size_pt=8)
+                if widths:
+                    _set_col_widths(tbl, widths)
+            else:
+                _kv_table(doc, tbl_spec["rows"],
+                          col_widths=tbl_spec.get("widths", (2.5, 3.5)))
+            doc.add_paragraph()
+
+    # ── Figure ───────────────────────────────────────────────────────────────
+    if fig is not None:
+        _h1("Chart")
+        if fig_caption_text:
+            _body(fig_caption_text)
+        img = _fig_to_png(fig, width=fig_width, height=fig_height, scale=2)
+        if img:
+            doc.add_picture(BytesIO(img), width=Inches(6.2))
+        else:
+            doc.add_paragraph(
+                "(Chart rendering timed out — install kaleido for embedded charts.)"
+            )
+        doc.add_paragraph()
+
+    # ── Disclaimer ───────────────────────────────────────────────────────────
+    doc.add_paragraph()
+    _note_text = (notes if notes else (
+        f"FlowBench {tool_name} calculation. "
+        "Provided for general engineering reference only. "
+        "No warranty is given for accuracy, completeness, or fitness for any "
+        "particular purpose. Validate all results independently before use in "
+        "any design, procurement, or safety-critical application."
+    ))
+    _note_p = doc.add_paragraph(_note_text)
+    if _note_p.runs:
+        _note_p.runs[0].font.size = Pt(8)
+        _note_p.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf

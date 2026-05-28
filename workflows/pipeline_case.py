@@ -20,6 +20,7 @@ from standards.piping import (
     MATERIAL_ROUGHNESS,
     LINER_ROUGHNESS,
     FITTING_Le_over_D,
+    sum_le_fit,
 )
 
 # Pipe inclination angles (radians) keyed by segment type label.
@@ -30,22 +31,6 @@ _ANGLES: dict[str, float] = {
 }
 
 
-def _sum_le_fit(seg: dict, D_eff: float) -> float:
-    """Sum equivalent pipe length (m) from all fittings in a segment definition."""
-    fl = seg.get("fittings_list")
-    if fl is not None:
-        total = 0.0
-        for fit in fl:
-            t = fit.get("type", "")
-            q = fit.get("qty", 0)
-            if t in FITTING_Le_over_D and q > 0:
-                total += FITTING_Le_over_D[t] * D_eff * q
-        return total
-    f = seg.get("fittings", "None")
-    c = seg.get("fitting_count", 0)
-    if f in FITTING_Le_over_D and c > 0:
-        return FITTING_Le_over_D[f] * D_eff * c
-    return 0.0
 
 
 def compute_pipeline_case(
@@ -296,7 +281,7 @@ def compute_pipeline_case(
                 liquid_flows_kgh=eff_liquid_flows)
 
         angle  = _ANGLES[seg["type"]]
-        le_fit = _sum_le_fit(seg, D_eff)
+        le_fit = sum_le_fit(seg, D_eff)
         L_eff  = seg["length"] + le_fit
 
         seg_result = engine.calculate_segment_pressure_drop(
