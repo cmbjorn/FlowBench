@@ -2131,6 +2131,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                 custom_liquid=_eff_custom_liq,
                 stream_records=stream_records if stream_records else None,
                 sensitivity_results=_sens_data if not _is_single_phase else None,
+                slug_records=slug_records if slug_records else None,
             )
         _wg1, _wg2 = st.columns(2)
         with _wg1:
@@ -2315,6 +2316,7 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
         "vle_fluid":            vle_fluid_id,
         "vle_x_mass":           vle_x,
         "vle_m_total_kgs":      vle_m_kgs,
+        "slug_records":         slug_records,
     }
 
 

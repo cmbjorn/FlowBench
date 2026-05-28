@@ -248,6 +248,7 @@ def generate_report(
     custom_liquid=None,        # dict (used for KOH concentration)
     stream_records=None,       # list of stream-balance dicts (VLE phase distribution)
     sensitivity_results=None,  # list of dicts from run_sensitivity()
+    slug_records=None,         # list of dicts from slug_dynamics() per slug segment
 ):
     doc = Document()
 
@@ -633,7 +634,70 @@ def generate_report(
         ("Effective Length (incl. fittings)",    f"{cumulative_distance:.2f} m"),
     ])
 
-    # ── 8. Method Sensitivity Analysis (if available) ────────────────────────
+    # ── 8. Slug Flow Dynamics (if slug segments present) ────────────────────
+    if slug_records:
+        _h1("Slug Flow Dynamics")
+        _body(
+            "One or more pipeline segments were classified as slug or intermittent flow. "
+            "The table below characterises each slug segment: arrival frequency, translational "
+            "velocity, liquid holdup, indicative slug length, and the peak pressure pulse and "
+            "force that a liquid slug imposes at a 90° elbow. "
+            "Design values include a Dynamic Load Factor of 2.0 per ASME B31.3 occasional-load "
+            "provisions. Use these results as first-pass inputs for pipe-support and structural "
+            "assessment; ±30 % accuracy is typical for empirical slug correlations."
+        )
+        doc.add_paragraph()
+        _SLUG_COLS = [
+            "Seg", "DN", "Regime",
+            "f_slug (Hz)", "f_slug (slugs/min)",
+            "V_slug (m/s)", "H_Ls", "L_slug (m)",
+            "ΔP_pulse (kPa)", "ΔP_design (kPa)",
+            "F_elbow (N)", "F_design (N)",
+        ]
+        _SLUG_W = [0.28, 0.38, 0.90, 0.52, 0.72, 0.58, 0.38, 0.55, 0.68, 0.72, 0.58, 0.62]
+        tbl_slug = doc.add_table(rows=len(slug_records) + 1, cols=len(_SLUG_COLS))
+        tbl_slug.style = "Table Grid"
+        _style_header(tbl_slug.rows[0], font_size=8)
+        for j, col in enumerate(_SLUG_COLS):
+            tbl_slug.rows[0].cells[j].text = col
+        for i, rec in enumerate(slug_records, start=1):
+            row = tbl_slug.rows[i]
+            if i % 2 == 0:
+                for cell in row.cells:
+                    _shd(cell, _ALT_BG)
+            for j, col in enumerate(_SLUG_COLS):
+                row.cells[j].text = str(rec.get(col, ""))
+                _cell_font(row.cells[j], size_pt=8)
+        _set_col_widths(tbl_slug, _SLUG_W)
+        doc.add_paragraph()
+        # Summary row
+        _max_freq   = max(r["f_slug (Hz)"]       for r in slug_records)
+        _max_vel    = max(r["V_slug (m/s)"]      for r in slug_records)
+        _max_pulse  = max(r["ΔP_pulse (kPa)"]    for r in slug_records)
+        _max_design = max(r["ΔP_design (kPa)"]   for r in slug_records)
+        _max_fe     = max(r["F_elbow (N)"]        for r in slug_records)
+        _max_fd     = max(r["F_design (N)"]       for r in slug_records)
+        _kv_table(doc, [
+            ("Max slug frequency",               f"{_max_freq:.3f} Hz"),
+            ("Max slug velocity",                f"{_max_vel:.2f} m/s"),
+            ("Max ΔP pulse at 90° elbow",        f"{_max_pulse:.2f} kPa"),
+            ("Max ΔP design (DLF 2.0)",          f"{_max_design:.2f} kPa"),
+            ("Max elbow force",                  f"{_max_fe:.1f} N"),
+            ("Max elbow force — design (DLF 2)", f"{_max_fd:.1f} N"),
+        ])
+        doc.add_paragraph()
+        slug_note = doc.add_paragraph(
+            "References: Gregory-Scott (1969) slug frequency (horizontal empirical); "
+            "Bendiksen (1984) slug translational velocity; Gregory et al. (1978) slug body "
+            "liquid holdup; Brill & Mukherjee 30D slug length rule-of-thumb. "
+            "Pressure pulse: momentum balance at 90° bend. "
+            "Design values: ASME B31.3 DLF = 2.0 occasional-load provision."
+        )
+        if slug_note.runs:
+            slug_note.runs[0].font.size      = Pt(8)
+            slug_note.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+
+    # ── 9. Method Sensitivity Analysis (if available) ────────────────────────
     if sensitivity_results:
         _ok = [r for r in sensitivity_results if r.get("ok")]
         if _ok:
@@ -1041,7 +1105,51 @@ def generate_comparison_report(
     _seg_table(doc, results_b["grid_records"])
     doc.add_paragraph()
 
-    # ── 7. Visualisations ────────────────────────────────────────────────────
+    # ── 7. Slug Flow Dynamics (if slug segments in either case) ──────────────
+    _slug_a = results_a.get("slug_records") or []
+    _slug_b = results_b.get("slug_records") or []
+    if _slug_a or _slug_b:
+        doc.add_heading("7. Slug Flow Dynamics", level=1)
+        _pslug = doc.add_paragraph(
+            "One or more pipeline segments were classified as slug or intermittent flow. "
+            "Slug frequency (Gregory-Scott 1969), translational velocity (Bendiksen 1984), "
+            "liquid holdup (Gregory et al. 1978), and 90° elbow pressure pulse / force "
+            "(momentum balance, ASME B31.3 DLF = 2.0) are shown per case below."
+        )
+        _pslug.paragraph_format.space_after = Pt(4)
+        if _pslug.runs:
+            _pslug.runs[0].font.size = Pt(9)
+        doc.add_paragraph()
+        _SCOLS = ["Seg","DN","Regime","f_slug (Hz)","f_slug (slugs/min)",
+                  "V_slug (m/s)","H_Ls","L_slug (m)",
+                  "ΔP_pulse (kPa)","ΔP_design (kPa)","F_elbow (N)","F_design (N)"]
+        _SW = [0.28,0.38,0.90,0.52,0.72,0.58,0.38,0.55,0.68,0.72,0.58,0.62]
+        def _slug_tbl(doc, records):
+            if not records:
+                doc.add_paragraph("No slug segments in this case.")
+                return
+            tbl = doc.add_table(rows=len(records)+1, cols=len(_SCOLS))
+            tbl.style = "Table Grid"
+            _style_header(tbl.rows[0], font_size=8)
+            for j, col in enumerate(_SCOLS):
+                tbl.rows[0].cells[j].text = col
+            for i, rec in enumerate(records, start=1):
+                row = tbl.rows[i]
+                if i % 2 == 0:
+                    for cell in row.cells:
+                        _shd(cell, _ALT_BG)
+                for j, col in enumerate(_SCOLS):
+                    row.cells[j].text = str(rec.get(col, ""))
+                    _cell_font(row.cells[j], size_pt=8)
+            _set_col_widths(tbl, _SW)
+        doc.add_heading(f"{label_a} — Slug Segments", level=2)
+        _slug_tbl(doc, _slug_a)
+        doc.add_paragraph()
+        doc.add_heading(f"{label_b} — Slug Segments", level=2)
+        _slug_tbl(doc, _slug_b)
+        doc.add_paragraph()
+
+    # ── 8. Visualisations ────────────────────────────────────────────────────
     if fig_cmp is not None or fig_bar is not None:
         doc.add_page_break()
         doc.add_heading("7. Visualisations", level=1)
@@ -1960,6 +2068,47 @@ def generate_combined_report(
         for _bc, _blbl in _branch_pairs:
             doc.add_heading(_blbl, level=2)
             _seg_tbl(_bc["grid_records"])
+            doc.add_paragraph()
+
+    # ── B2. Slug Flow Dynamics (branch lines with slug segments) ─────────────
+    _slug_branch_pairs = [
+        (c, lbl) for c, lbl, h in zip(cases, case_labels, _is_hdr)
+        if not h and (c.get("slug_records") or [])
+    ]
+    if _slug_branch_pairs:
+        doc.add_heading("B2.  Slug Flow Dynamics — Branch Lines", level=1)
+        _pb2 = doc.add_paragraph(
+            "One or more branch segments were classified as slug or intermittent flow. "
+            "Slug frequency (Gregory-Scott 1969), translational velocity (Bendiksen 1984), "
+            "liquid holdup (Gregory et al. 1978), and 90° elbow pressure pulse / force "
+            "(momentum balance, ASME B31.3 DLF = 2.0) are tabulated below per branch."
+        )
+        _pb2.paragraph_format.space_after = Pt(4)
+        if _pb2.runs:
+            _pb2.runs[0].font.size = Pt(9)
+        doc.add_paragraph()
+        _SCOLS2 = ["Seg","DN","Regime","f_slug (Hz)","f_slug (slugs/min)",
+                   "V_slug (m/s)","H_Ls","L_slug (m)",
+                   "ΔP_pulse (kPa)","ΔP_design (kPa)","F_elbow (N)","F_design (N)"]
+        _SW2 = [0.28,0.38,0.90,0.52,0.72,0.58,0.38,0.55,0.68,0.72,0.58,0.62]
+        def _slug_tbl2(doc, records):
+            tbl = doc.add_table(rows=len(records)+1, cols=len(_SCOLS2))
+            tbl.style = "Table Grid"
+            _style_header(tbl.rows[0], font_size=8)
+            for j, col in enumerate(_SCOLS2):
+                tbl.rows[0].cells[j].text = col
+            for i, rec in enumerate(records, start=1):
+                row = tbl.rows[i]
+                if i % 2 == 0:
+                    for cell in row.cells:
+                        _shd(cell, _ALT_BG)
+                for j, col in enumerate(_SCOLS2):
+                    row.cells[j].text = str(rec.get(col, ""))
+                    _cell_font(row.cells[j], size_pt=8)
+            _set_col_widths(tbl, _SW2)
+        for _sc, _slbl in _slug_branch_pairs:
+            doc.add_heading(_slbl, level=2)
+            _slug_tbl2(doc, _sc["slug_records"])
             doc.add_paragraph()
 
     # ── C. Header Configuration ───────────────────────────────────────────────
