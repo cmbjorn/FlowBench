@@ -6,6 +6,6 @@ textColor                = "#0F172A"
 font                     = "sans serif"
 
 [server]
-headless = false
-address  = "localhost"
+headless = true
+address  = "127.0.0.1"
 port     = 8501

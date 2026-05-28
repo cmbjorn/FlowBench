@@ -26,13 +26,15 @@ if (-not (Test-Path ".venv\Scripts\Activate.ps1")) {
     & ".venv\Scripts\Activate.ps1"
 }
 
-Write-Host "Stopping any existing FlowBench on port 8501..."
+# Kill any previous instance on port 8501
 Get-NetTCPConnection -LocalPort 8501 -ErrorAction SilentlyContinue |
     ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 
+# Open browser (it will retry until the server is ready)
+Start-Process "http://127.0.0.1:8501"
+
 Write-Host ""
-Write-Host "Starting FlowBench..." -ForegroundColor Green
-Write-Host "If the browser does not open, navigate to: http://localhost:8501" -ForegroundColor Cyan
+Write-Host "Starting FlowBench at http://127.0.0.1:8501" -ForegroundColor Green
 Write-Host "Press Ctrl+C to stop."
 Write-Host ""
 streamlit run app.py
