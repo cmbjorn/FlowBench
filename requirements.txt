@@ -1,22 +1,23 @@
 # Core UI and data
-streamlit>=1.57.0
-pandas>=3.0.0
-numpy>=2.0.0
-plotly>=6.0.0
+streamlit>=1.42.0
+pandas>=2.0.0
+numpy>=1.24.0
+plotly>=5.18.0
 
 # Engineering / thermodynamics
-# CoolProp: prebuilt wheels available for Python 3.8-3.12 on Windows x64.
-# If pip tries to compile from source, install Visual Studio Build Tools first.
-CoolProp>=7.2.0
-fluids>=1.3.0
+# CoolProp: prebuilt wheels for Python 3.8–3.12 on Windows x64.
+# If pip falls back to source compilation, install Visual Studio Build Tools first:
+#   https://visualstudio.microsoft.com/visual-cpp-build-tools/
+CoolProp>=6.4.0
+fluids>=1.0.0
 
 # thermo: optional — enables Peng-Robinson PT equilibrium flash.
 # App runs without it; flash tab will show a warning instead.
-thermo>=0.6.0
+thermo>=0.4.0
 
 # Report export
-python-docx>=1.2.0
+python-docx>=1.0.0
 openpyxl>=3.1.0
 # kaleido 1.x: pure-Python chart renderer, no Node.js subprocess.
-# Much more reliable on Windows than the 0.x series.
-kaleido>=1.3.0
+# Much more reliable on Windows than the 0.x series — do not downgrade.
+kaleido>=1.0.0
