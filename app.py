@@ -5392,253 +5392,261 @@ else:  # Engineering Tools
             )
             _psv_Kc = psv.KC_DISC if _psv_rupture_disc else psv.KC_NONE
 
+            _psv_btn = st.button("Calculate", key="psv_run", type="primary", use_container_width=True)
+            if _psv_btn:
+                st.session_state["psv_show"] = True
+
         # ── Fluid properties (right side top) ──────────────────────────────────
         with _psv_c2:
-            if _psv_service == "Gas / Vapour":
-                st.markdown("**GAS PROPERTIES**")
-                _psv_species = st.selectbox(
-                    "Species", list(fanno.GASES.keys()), key="psv_species"
-                )
-                _psv_cp_name   = fanno.GASES[_psv_species][2]   # CoolProp ID or None
-                _psv_MW_kgmol  = fanno.GASES[_psv_species][0]   # kg/mol or None
-                _psv_gam_table = fanno.GASES[_psv_species][1]   # table γ or None
-
-                if _psv_cp_name is not None:
-                    # Known species: fetch γ and Z from CoolProp at relieving conditions
-                    _psv_MW    = (_psv_MW_kgmol * 1000.0) if _psv_MW_kgmol else 28.97
-                    _psv_gamma = _psv_gam_table or 1.40
-                    _psv_Z     = 1.0
-                    try:
-                        import CoolProp.CoolProp as CP
-                        _P_Pa_psv = _psv_P1_kPa * 1000.0
-                        _Cp_v = CP.PropsSI("C", "T", _psv_T1_K, "P", _P_Pa_psv, _psv_cp_name)
-                        _Cv_v = CP.PropsSI("O", "T", _psv_T1_K, "P", _P_Pa_psv, _psv_cp_name)
-                        if _Cv_v > 0:
-                            _psv_gamma = _Cp_v / _Cv_v
-                        _rho_v = CP.PropsSI("D", "T", _psv_T1_K, "P", _P_Pa_psv, _psv_cp_name)
-                        _psv_Z = _P_Pa_psv * _psv_MW / (_rho_v * 8314.46 * _psv_T1_K)
-                        st.caption(
-                            f"CoolProp at {_psv_T1_K-273.15:.0f} °C, {_psv_P1_kPa/100:.3f} bara — "
-                            f"γ = {_psv_gamma:.4f}  |  Z = {_psv_Z:.4f}  |  MW = {_psv_MW:.3f} kg/kmol"
-                        )
-                    except Exception as _cp_err:
-                        st.caption(
-                            f"CoolProp unavailable ({_cp_err}) — using table: "
-                            f"γ = {_psv_gamma:.4f}, Z = 1.0"
-                        )
-                else:
-                    # Custom gas: manual inputs
-                    _cg1, _cg2, _cg3 = st.columns(3)
-                    _psv_MW    = _cg1.number_input("MW (kg/kmol)", value=28.97, min_value=1.0, step=0.5, key="psv_MW")
-                    _psv_gamma = _cg2.number_input("γ (Cp/Cv)", value=1.40, min_value=1.01, max_value=2.0, step=0.01, key="psv_gamma")
-                    _psv_Z     = _cg3.number_input("Z", value=1.0, min_value=0.1, max_value=2.0, step=0.01, key="psv_Z")
-
-                # Backpressure correction
-                if "Conventional" in _psv_type:
-                    _psv_Kb = psv.kb_conventional(_psv_Pback_kPa, _psv_P1_kPa)
-                elif "Balanced" in _psv_type:
-                    _psv_Kb = psv.kb_balanced_bellows(_psv_Pback_kPa, _psv_P1_kPa, _psv_gamma)
-                else:
-                    _psv_Kb = psv.kb_pilot(_psv_Pback_kPa, _psv_P1_kPa)
-
-                _psv_res = psv.psv_gas_size(
-                    _psv_W_kgh, _psv_P1_kPa, _psv_T1_K, _psv_MW, _psv_gamma,
-                    Kb=_psv_Kb, Kc=_psv_Kc, Z=_psv_Z,
-                )
-
-            elif _psv_service == "Steam":
-                st.markdown("**STEAM PROPERTIES** — via CoolProp")
-                st.caption("γ and Z are computed from CoolProp at the relieving conditions.")
-                _psv_Z = 1.0
-
-                if "Conventional" in _psv_type:
-                    _psv_Kb = psv.kb_conventional(_psv_Pback_kPa, _psv_P1_kPa)
-                elif "Balanced" in _psv_type:
-                    _psv_Kb = psv.kb_balanced_bellows(_psv_Pback_kPa, _psv_P1_kPa, 1.33)
-                else:
-                    _psv_Kb = psv.kb_pilot(_psv_Pback_kPa, _psv_P1_kPa)
-
-                _psv_res = psv.psv_steam_size(
-                    _psv_W_kgh, _psv_P1_kPa, _psv_T1_K,
-                    Kb=_psv_Kb, Kc=_psv_Kc,
-                )
-                for _note in _psv_res.get("notes", []):
-                    if _note.startswith("UNPHYSICAL"):
-                        st.error(_note)
-                    else:
-                        st.caption(_note)
-                _psv_gamma = _psv_res.get("gamma", 1.33)
-                _psv_MW    = _psv_res.get("MW", 18.015)
-
-            else:  # Liquid
-                st.markdown("**LIQUID PROPERTIES**")
-                _liq_opts = list(engine.LIQUID_COOLPROP_ID.keys()) + ["KOH solution"] + ["Custom"]
-                _liq_pick = st.selectbox("Fluid", _liq_opts, key="psv_liq_fluid")
-
-                _ll1, _ll2, _ll3 = st.columns(3)
-                if _liq_pick == "KOH solution":
-                    _psv_koh_conc = st.slider("Concentration (wt%)", min_value=5, max_value=40,
-                                               value=30, step=5, key="psv_koh_conc",
-                                               help="Valid 0–40 wt%, 10–90 °C (Gilliam et al. 2007)")
-                    _liq_props = ro.koh_liquid_properties(_psv_T_C, float(_psv_koh_conc))
-                    _rho_def   = _liq_props["rho_kgm3"]
-                    _mu_cP_def = _liq_props["mu_pas"] * 1e3
-                    st.caption(
-                        f"ρ = {_rho_def:.1f} kg/m³  |  μ = {_mu_cP_def:.3f} cP  |  "
-                        f"Pᵥ = {_liq_props['Pv_Pa']/1e5:.5f} bara"
+            _psv_show = st.session_state.get("psv_show", False)
+            if not _psv_show:
+                st.info("Set inputs and press **Calculate**.")
+            else:
+                if _psv_service == "Gas / Vapour":
+                    st.markdown("**GAS PROPERTIES**")
+                    _psv_species = st.selectbox(
+                        "Species", list(fanno.GASES.keys()), key="psv_species"
                     )
-                elif _liq_pick != "Custom":
-                    _liq_cp_id = engine.LIQUID_COOLPROP_ID[_liq_pick]
-                    try:
-                        _liq_props = ro.liquid_properties(_liq_cp_id, _psv_T_C, _psv_P1_bara * 1e5)
+                    _psv_cp_name   = fanno.GASES[_psv_species][2]   # CoolProp ID or None
+                    _psv_MW_kgmol  = fanno.GASES[_psv_species][0]   # kg/mol or None
+                    _psv_gam_table = fanno.GASES[_psv_species][1]   # table γ or None
+
+                    if _psv_cp_name is not None:
+                        # Known species: fetch γ and Z from CoolProp at relieving conditions
+                        _psv_MW    = (_psv_MW_kgmol * 1000.0) if _psv_MW_kgmol else 28.97
+                        _psv_gamma = _psv_gam_table or 1.40
+                        _psv_Z     = 1.0
+                        try:
+                            import CoolProp.CoolProp as CP
+                            _P_Pa_psv = _psv_P1_kPa * 1000.0
+                            _Cp_v = CP.PropsSI("C", "T", _psv_T1_K, "P", _P_Pa_psv, _psv_cp_name)
+                            _Cv_v = CP.PropsSI("O", "T", _psv_T1_K, "P", _P_Pa_psv, _psv_cp_name)
+                            if _Cv_v > 0:
+                                _psv_gamma = _Cp_v / _Cv_v
+                            _rho_v = CP.PropsSI("D", "T", _psv_T1_K, "P", _P_Pa_psv, _psv_cp_name)
+                            _psv_Z = _P_Pa_psv * _psv_MW / (_rho_v * 8314.46 * _psv_T1_K)
+                            st.caption(
+                                f"CoolProp at {_psv_T1_K-273.15:.0f} °C, {_psv_P1_kPa/100:.3f} bara — "
+                                f"γ = {_psv_gamma:.4f}  |  Z = {_psv_Z:.4f}  |  MW = {_psv_MW:.3f} kg/kmol"
+                            )
+                        except Exception as _cp_err:
+                            st.caption(
+                                f"CoolProp unavailable ({_cp_err}) — using table: "
+                                f"γ = {_psv_gamma:.4f}, Z = 1.0"
+                            )
+                    else:
+                        # Custom gas: manual inputs
+                        _cg1, _cg2, _cg3 = st.columns(3)
+                        _psv_MW    = _cg1.number_input("MW (kg/kmol)", value=28.97, min_value=1.0, step=0.5, key="psv_MW")
+                        _psv_gamma = _cg2.number_input("γ (Cp/Cv)", value=1.40, min_value=1.01, max_value=2.0, step=0.01, key="psv_gamma")
+                        _psv_Z     = _cg3.number_input("Z", value=1.0, min_value=0.1, max_value=2.0, step=0.01, key="psv_Z")
+
+                    # Backpressure correction
+                    if "Conventional" in _psv_type:
+                        _psv_Kb = psv.kb_conventional(_psv_Pback_kPa, _psv_P1_kPa)
+                    elif "Balanced" in _psv_type:
+                        _psv_Kb = psv.kb_balanced_bellows(_psv_Pback_kPa, _psv_P1_kPa, _psv_gamma)
+                    else:
+                        _psv_Kb = psv.kb_pilot(_psv_Pback_kPa, _psv_P1_kPa)
+
+                    _psv_res = psv.psv_gas_size(
+                        _psv_W_kgh, _psv_P1_kPa, _psv_T1_K, _psv_MW, _psv_gamma,
+                        Kb=_psv_Kb, Kc=_psv_Kc, Z=_psv_Z,
+                    )
+
+                elif _psv_service == "Steam":
+                    st.markdown("**STEAM PROPERTIES** — via CoolProp")
+                    st.caption("γ and Z are computed from CoolProp at the relieving conditions.")
+                    _psv_Z = 1.0
+
+                    if "Conventional" in _psv_type:
+                        _psv_Kb = psv.kb_conventional(_psv_Pback_kPa, _psv_P1_kPa)
+                    elif "Balanced" in _psv_type:
+                        _psv_Kb = psv.kb_balanced_bellows(_psv_Pback_kPa, _psv_P1_kPa, 1.33)
+                    else:
+                        _psv_Kb = psv.kb_pilot(_psv_Pback_kPa, _psv_P1_kPa)
+
+                    _psv_res = psv.psv_steam_size(
+                        _psv_W_kgh, _psv_P1_kPa, _psv_T1_K,
+                        Kb=_psv_Kb, Kc=_psv_Kc,
+                    )
+                    for _note in _psv_res.get("notes", []):
+                        if _note.startswith("UNPHYSICAL"):
+                            st.error(_note)
+                        else:
+                            st.caption(_note)
+                    _psv_gamma = _psv_res.get("gamma", 1.33)
+                    _psv_MW    = _psv_res.get("MW", 18.015)
+
+                else:  # Liquid
+                    st.markdown("**LIQUID PROPERTIES**")
+                    _liq_opts = list(engine.LIQUID_COOLPROP_ID.keys()) + ["KOH solution"] + ["Custom"]
+                    _liq_pick = st.selectbox("Fluid", _liq_opts, key="psv_liq_fluid")
+
+                    _ll1, _ll2, _ll3 = st.columns(3)
+                    if _liq_pick == "KOH solution":
+                        _psv_koh_conc = st.slider("Concentration (wt%)", min_value=5, max_value=40,
+                                                   value=30, step=5, key="psv_koh_conc",
+                                                   help="Valid 0–40 wt%, 10–90 °C (Gilliam et al. 2007)")
+                        _liq_props = ro.koh_liquid_properties(_psv_T_C, float(_psv_koh_conc))
                         _rho_def   = _liq_props["rho_kgm3"]
                         _mu_cP_def = _liq_props["mu_pas"] * 1e3
-                    except Exception:
+                        st.caption(
+                            f"ρ = {_rho_def:.1f} kg/m³  |  μ = {_mu_cP_def:.3f} cP  |  "
+                            f"Pᵥ = {_liq_props['Pv_Pa']/1e5:.5f} bara"
+                        )
+                    elif _liq_pick != "Custom":
+                        _liq_cp_id = engine.LIQUID_COOLPROP_ID[_liq_pick]
+                        try:
+                            _liq_props = ro.liquid_properties(_liq_cp_id, _psv_T_C, _psv_P1_bara * 1e5)
+                            _rho_def   = _liq_props["rho_kgm3"]
+                            _mu_cP_def = _liq_props["mu_pas"] * 1e3
+                        except Exception:
+                            _rho_def, _mu_cP_def = 1000.0, 1.0
+                    else:
                         _rho_def, _mu_cP_def = 1000.0, 1.0
-                else:
-                    _rho_def, _mu_cP_def = 1000.0, 1.0
 
-                with _ll1:
-                    _psv_rho = st.number_input(
-                        "Density (kg/m³)", value=round(_rho_def, 2), min_value=1.0,
-                        step=10.0, key="psv_rho"
+                    with _ll1:
+                        _psv_rho = st.number_input(
+                            "Density (kg/m³)", value=round(_rho_def, 2), min_value=1.0,
+                            step=10.0, key="psv_rho"
+                        )
+                    with _ll2:
+                        _psv_mu_cP = st.number_input(
+                            "Viscosity (cP)", value=round(_mu_cP_def, 3), min_value=0.001,
+                            step=0.1, key="psv_mu"
+                        )
+                    with _ll3:
+                        _psv_Kw = 1.0 if "Conventional" in _psv_type else st.number_input(
+                            "Kw (back-pressure)", value=1.0, min_value=0.5, max_value=1.0,
+                            step=0.01, key="psv_Kw"
+                        )
+
+                    _psv_P2_liq_kPa = _psv_Pback_kPa
+
+                    _psv_res = psv.psv_liquid_size(
+                        _psv_Q_m3h, _psv_P1_kPa, _psv_P2_liq_kPa,
+                        _psv_rho, _psv_mu_cP, Kw=_psv_Kw, Kc=_psv_Kc,
                     )
-                with _ll2:
-                    _psv_mu_cP = st.number_input(
-                        "Viscosity (cP)", value=round(_mu_cP_def, 3), min_value=0.001,
-                        step=0.1, key="psv_mu"
-                    )
-                with _ll3:
-                    _psv_Kw = 1.0 if "Conventional" in _psv_type else st.number_input(
-                        "Kw (back-pressure)", value=1.0, min_value=0.5, max_value=1.0,
-                        step=0.01, key="psv_Kw"
-                    )
+                    _psv_gamma = None
+                    _psv_MW    = None
+                    _psv_Kb    = _psv_Kw
 
-                _psv_P2_liq_kPa = _psv_Pback_kPa
-
-                _psv_res = psv.psv_liquid_size(
-                    _psv_Q_m3h, _psv_P1_kPa, _psv_P2_liq_kPa,
-                    _psv_rho, _psv_mu_cP, Kw=_psv_Kw, Kc=_psv_Kc,
-                )
-                _psv_gamma = None
-                _psv_MW    = None
-                _psv_Kb    = _psv_Kw
-
-            # ── Warnings ────────────────────────────────────────────────────────
-            _bp_pct = psv.backpressure_pct(_psv_Pback_kPa, _psv_P1_kPa)
-            if "Conventional" in _psv_type and _bp_pct > 10.0:
-                st.warning(
-                    f"Back pressure = {_bp_pct:.1f}% of relieving pressure P₁. "
-                    "API 520 recommends consulting the valve vendor above 10% for conventional valves."
-                )
-            if "Balanced" in _psv_type and _bp_pct > 30.0:
-                st.warning(
-                    f"Back pressure = {_bp_pct:.1f}% of P₁. Kb correction applied. "
-                    "Verify with valve vendor for back pressure > 30%."
-                )
-            if _psv_res["orifice_letter"] == "T+":
-                st.error(
-                    "Required area exceeds the largest API 526 standard orifice (T = 16 774 mm²). "
-                    "Consider multiple PSVs in parallel or a non-standard design."
-                )
-
-            # Back-pressure subcritical warning for gas/steam
-            if _psv_service in ("Gas / Vapour", "Steam") and _psv_gamma:
-                _r_c = (2.0 / (_psv_gamma + 1.0)) ** (_psv_gamma / (_psv_gamma - 1.0))
-                if _psv_Pback_kPa / _psv_P1_kPa > _r_c:
+                # ── Warnings ────────────────────────────────────────────────────────
+                _bp_pct = psv.backpressure_pct(_psv_Pback_kPa, _psv_P1_kPa)
+                if "Conventional" in _psv_type and _bp_pct > 10.0:
                     st.warning(
-                        f"Back pressure ratio {_psv_Pback_kPa/_psv_P1_kPa:.3f} > critical ratio "
-                        f"{_r_c:.4f} — flow may be subcritical at the nozzle. "
-                        "Contact valve vendor for subcritical-flow rated capacity."
+                        f"Back pressure = {_bp_pct:.1f}% of relieving pressure P₁. "
+                        "API 520 recommends consulting the valve vendor above 10% for conventional valves."
+                    )
+                if "Balanced" in _psv_type and _bp_pct > 30.0:
+                    st.warning(
+                        f"Back pressure = {_bp_pct:.1f}% of P₁. Kb correction applied. "
+                        "Verify with valve vendor for back pressure > 30%."
+                    )
+                if _psv_res["orifice_letter"] == "T+":
+                    st.error(
+                        "Required area exceeds the largest API 526 standard orifice (T = 16 774 mm²). "
+                        "Consider multiple PSVs in parallel or a non-standard design."
                     )
 
-            # ── Results ─────────────────────────────────────────────────────────
-            st.divider()
-            st.subheader("Sizing Results")
+                # Back-pressure subcritical warning for gas/steam
+                if _psv_service in ("Gas / Vapour", "Steam") and _psv_gamma:
+                    _r_c = (2.0 / (_psv_gamma + 1.0)) ** (_psv_gamma / (_psv_gamma - 1.0))
+                    if _psv_Pback_kPa / _psv_P1_kPa > _r_c:
+                        st.warning(
+                            f"Back pressure ratio {_psv_Pback_kPa/_psv_P1_kPa:.3f} > critical ratio "
+                            f"{_r_c:.4f} — flow may be subcritical at the nozzle. "
+                            "Contact valve vendor for subcritical-flow rated capacity."
+                        )
 
-            _rc1, _rc2, _rc3, _rc4 = st.columns(4)
-            _rc1.metric("Required area", f"{_psv_res['A_req_mm2']:.1f} mm²")
-            _rc2.metric("API 526 orifice", _psv_res["orifice_letter"])
-            _rc3.metric("Orifice area", f"{_psv_res['orifice_area_mm2']:.1f} mm²"
-                        if _psv_res["orifice_area_mm2"] < math.inf else "N/A")
-            _area_margin = (
-                (_psv_res["orifice_area_mm2"] / _psv_res["A_req_mm2"] - 1.0) * 100.0
-                if _psv_res["orifice_area_mm2"] < math.inf and _psv_res["A_req_mm2"] > 0
-                else 0.0
-            )
-            _rc4.metric("Area margin", f"+{_area_margin:.1f}%")
+                # ── Results ─────────────────────────────────────────────────────────
+                st.divider()
+                st.subheader("Sizing Results")
 
-            # ── Flange row ───────────────────────────────────────────────────────
-            _flange = psv.flange_nps(_psv_res["orifice_letter"])
-            if _flange:
-                _in_nps, _out_nps = _flange
-                _in_dn,  _out_dn  = psv.nps_to_dn(_in_nps), psv.nps_to_dn(_out_nps)
-                _fl_class = psv.min_flange_class(_psv_P1_bara)
-                _rfl1, _rfl2, _rfl3, _rfl4 = st.columns(4)
-                _rfl1.metric("Inlet flange",
-                             f"NPS {_in_nps:g}\" / DN {_in_dn}")
-                _rfl2.metric("Outlet flange",
-                             f"NPS {_out_nps:g}\" / DN {_out_dn}")
-                _rfl3.metric("Min. flange class",
-                             f"ASME {_fl_class} lb",
-                             help="ASME B16.5 Group 1.1 CS at 38 °C. Class 300 is the "
-                                  "industry minimum for PSV inlets per API 526.")
-                _rfl4.metric("Orifice designation",
-                             f"{_in_nps:g}\" × {_out_nps:g}\" – {_psv_res['orifice_letter']}")
+                _rc1, _rc2, _rc3, _rc4 = st.columns(4)
+                _rc1.metric("Required area", f"{_psv_res['A_req_mm2']:.1f} mm²")
+                _rc2.metric("API 526 orifice", _psv_res["orifice_letter"])
+                _rc3.metric("Orifice area", f"{_psv_res['orifice_area_mm2']:.1f} mm²"
+                            if _psv_res["orifice_area_mm2"] < math.inf else "N/A")
+                _area_margin = (
+                    (_psv_res["orifice_area_mm2"] / _psv_res["A_req_mm2"] - 1.0) * 100.0
+                    if _psv_res["orifice_area_mm2"] < math.inf and _psv_res["A_req_mm2"] > 0
+                    else 0.0
+                )
+                _rc4.metric("Area margin", f"+{_area_margin:.1f}%")
 
-            # Rated capacity row
-            if _psv_service in ("Gas / Vapour", "Steam") and "capacity_selected_kgh" in _psv_res:
-                _rcap1, _rcap2, _rcap3, _rcap4 = st.columns(4)
-                _rcap1.metric("Rated capacity", f"{_psv_res['capacity_selected_kgh']:.0f} kg/h")
-                _rcap2.metric("Required flow",  f"{_psv_W_kgh:.0f} kg/h")
-                _rcap3.metric("C coefficient",  f"{_psv_res['C_coeff']:.5f}")
-                _rcap4.metric("Kb",             f"{_psv_res['Kb']:.3f}")
-            elif _psv_service == "Liquid" and "capacity_selected_m3h" in _psv_res:
-                _rcap1, _rcap2, _rcap3, _rcap4 = st.columns(4)
-                _rcap1.metric("Rated capacity", f"{_psv_res['capacity_selected_m3h']:.2f} m³/h")
-                _rcap2.metric("Required flow",  f"{_psv_Q_m3h:.2f} m³/h")
-                _rcap3.metric("Kv (viscosity)", f"{_psv_res['Kv']:.4f}")
-                _rcap4.metric("Re_v",           f"{_psv_res['Re_v']:.0f}")
+                # ── Flange row ───────────────────────────────────────────────────────
+                _flange = psv.flange_nps(_psv_res["orifice_letter"])
+                if _flange:
+                    _in_nps, _out_nps = _flange
+                    _in_dn,  _out_dn  = psv.nps_to_dn(_in_nps), psv.nps_to_dn(_out_nps)
+                    _fl_class = psv.min_flange_class(_psv_P1_bara)
+                    _rfl1, _rfl2, _rfl3, _rfl4 = st.columns(4)
+                    _rfl1.metric("Inlet flange",
+                                 f"NPS {_in_nps:g}\" / DN {_in_dn}")
+                    _rfl2.metric("Outlet flange",
+                                 f"NPS {_out_nps:g}\" / DN {_out_dn}")
+                    _rfl3.metric("Min. flange class",
+                                 f"ASME {_fl_class} lb",
+                                 help="ASME B16.5 Group 1.1 CS at 38 °C. Class 300 is the "
+                                      "industry minimum for PSV inlets per API 526.")
+                    _rfl4.metric("Orifice designation",
+                                 f"{_in_nps:g}\" × {_out_nps:g}\" – {_psv_res['orifice_letter']}")
 
-            # Correction factors table
-            st.markdown("**Correction factors applied**")
-            _kfactors = {
-                "Factor": ["Kd (discharge)", "Kb (back pressure)", "Kc (comb. disc)"],
-                "Value":  [
-                    f"{_psv_res['Kd']:.3f}",
-                    f"{_psv_res.get('Kb', _psv_res.get('Kw', 1.0)):.3f}",
-                    f"{_psv_res['Kc']:.3f}",
-                ],
-                "Source": [
-                    "API 520 Table 5",
-                    "API 520 §3.3 / PSV type",
-                    "API 520 §4.7",
-                ],
-            }
-            if _psv_service == "Liquid":
-                _kfactors["Factor"].append("Kw (back pressure)")
-                _kfactors["Value"].append(f"{_psv_res['Kw']:.3f}")
-                _kfactors["Source"].append("API 520 §3.5")
-            st.dataframe(pd.DataFrame(_kfactors), width='stretch', hide_index=True)
+                # Rated capacity row
+                if _psv_service in ("Gas / Vapour", "Steam") and "capacity_selected_kgh" in _psv_res:
+                    _rcap1, _rcap2, _rcap3, _rcap4 = st.columns(4)
+                    _rcap1.metric("Rated capacity", f"{_psv_res['capacity_selected_kgh']:.0f} kg/h")
+                    _rcap2.metric("Required flow",  f"{_psv_W_kgh:.0f} kg/h")
+                    _rcap3.metric("C coefficient",  f"{_psv_res['C_coeff']:.5f}")
+                    _rcap4.metric("Kb",             f"{_psv_res['Kb']:.3f}")
+                elif _psv_service == "Liquid" and "capacity_selected_m3h" in _psv_res:
+                    _rcap1, _rcap2, _rcap3, _rcap4 = st.columns(4)
+                    _rcap1.metric("Rated capacity", f"{_psv_res['capacity_selected_m3h']:.2f} m³/h")
+                    _rcap2.metric("Required flow",  f"{_psv_Q_m3h:.2f} m³/h")
+                    _rcap3.metric("Kv (viscosity)", f"{_psv_res['Kv']:.4f}")
+                    _rcap4.metric("Re_v",           f"{_psv_res['Re_v']:.0f}")
 
-            # Standard orifice table with flange sizes
-            st.markdown("**API 526 standard orifice and flange sizes**")
-            _orifice_rows = []
-            for _letter, _area in psv.API526_ORIFICES.items():
-                _fn = psv.flange_nps(_letter)
-                _in_str  = f"NPS {_fn[0]:g}\" (DN {psv.nps_to_dn(_fn[0])})" if _fn else "—"
-                _out_str = f"NPS {_fn[1]:g}\" (DN {psv.nps_to_dn(_fn[1])})" if _fn else "—"
-                _orifice_rows.append({
-                    "Letter": _letter,
-                    "Eff. area (mm²)": f"{_area:.1f}",
-                    "Inlet flange": _in_str,
-                    "Outlet flange": _out_str,
-                    "": "✓" if _letter == _psv_res["orifice_letter"] else "",
-                })
-            st.dataframe(pd.DataFrame(_orifice_rows), width='stretch', hide_index=True)
+                # Correction factors table
+                st.markdown("**Correction factors applied**")
+                _kfactors = {
+                    "Factor": ["Kd (discharge)", "Kb (back pressure)", "Kc (comb. disc)"],
+                    "Value":  [
+                        f"{_psv_res['Kd']:.3f}",
+                        f"{_psv_res.get('Kb', _psv_res.get('Kw', 1.0)):.3f}",
+                        f"{_psv_res['Kc']:.3f}",
+                    ],
+                    "Source": [
+                        "API 520 Table 5",
+                        "API 520 §3.3 / PSV type",
+                        "API 520 §4.7",
+                    ],
+                }
+                if _psv_service == "Liquid":
+                    _kfactors["Factor"].append("Kw (back pressure)")
+                    _kfactors["Value"].append(f"{_psv_res['Kw']:.3f}")
+                    _kfactors["Source"].append("API 520 §3.5")
+                st.dataframe(pd.DataFrame(_kfactors), width='stretch', hide_index=True)
 
-            with st.expander("Assumptions and references"):
-                st.markdown(f"""
+                # Standard orifice table with flange sizes
+                st.markdown("**API 526 standard orifice and flange sizes**")
+                _orifice_rows = []
+                for _letter, _area in psv.API526_ORIFICES.items():
+                    _fn = psv.flange_nps(_letter)
+                    _in_str  = f"NPS {_fn[0]:g}\" (DN {psv.nps_to_dn(_fn[0])})" if _fn else "—"
+                    _out_str = f"NPS {_fn[1]:g}\" (DN {psv.nps_to_dn(_fn[1])})" if _fn else "—"
+                    _orifice_rows.append({
+                        "Letter": _letter,
+                        "Eff. area (mm²)": f"{_area:.1f}",
+                        "Inlet flange": _in_str,
+                        "Outlet flange": _out_str,
+                        "": "✓" if _letter == _psv_res["orifice_letter"] else "",
+                    })
+                st.dataframe(pd.DataFrame(_orifice_rows), width='stretch', hide_index=True)
+
+                with st.expander("Assumptions and references"):
+                    st.markdown(f"""
     **API 520 Part I** (SI, 10th Ed.) — PSV sizing for gas/vapour, steam, and liquid service.
 
     **API 526** (7th Ed.) — standard effective orifice areas (D through T). Effective area is
@@ -5664,98 +5672,98 @@ else:  # Engineering Tools
     **Overpressure allowance** — 10% for non-fire; 21% for fire case (API 520 §3.1 / ASME Sec VIII-1).
     """)
 
-        # ── Word export ───────────────────────────────────────────────────────
-        st.divider()
-        _psv_flow_str = (f"{_psv_W_kgh:.1f} kg/h" if _psv_service != "Liquid"
-                         else f"{_psv_Q_m3h:.3f} m³/h")
-        _psv_inp = [
-            ("Service",              _psv_service),
-            ("PSV type",             _psv_type),
-            ("Set pressure",         f"{_psv_Pset_barg:.2f} barg"),
-            ("Allowable overpressure", f"{_psv_op_pct:.1f} %"),
-            ("Relieving pressure P₁", f"{_psv_P1_bara:.3f} bara"),
-            ("Back pressure",        f"{_psv_Pback_barg:.2f} barg"),
-            ("Relieving temperature", f"{_psv_T_C:.1f} °C"),
-            ("Relief flow",          _psv_flow_str),
-            ("Rupture disc upstream", "Yes (Kc = 0.90)" if _psv_rupture_disc else "No (Kc = 1.00)"),
-        ]
-        if _psv_service == "Gas / Vapour":
-            _psv_inp += [
-                ("Species",   _psv_species),
-                ("MW",        f"{_psv_MW:.3f} kg/kmol"),
-                ("γ (Cp/Cv)", f"{_psv_gamma:.4f}"),
-                ("Z",         f"{_psv_Z:.4f}"),
-            ]
-        elif _psv_service == "Liquid":
-            _psv_inp += [
-                ("Density ρ",   f"{_psv_rho:.2f} kg/m³"),
-                ("Viscosity μ", f"{_psv_mu_cP:.4f} cP"),
-            ]
-        _psv_flange = psv.flange_nps(_psv_res["orifice_letter"])
-        _psv_flange_str = (
-            f"NPS {_psv_flange[0]:g}\" × NPS {_psv_flange[1]:g}\""
-            if _psv_flange else "—"
-        )
-        _psv_res_rows = [
-            ("Required area A_req",    f"{_psv_res['A_req_mm2']:.2f} mm²"),
-            ("API 526 orifice letter",  _psv_res["orifice_letter"]),
-            ("Orifice effective area",  f"{_psv_res['orifice_area_mm2']:.1f} mm²"
-                                        if _psv_res["orifice_area_mm2"] < math.inf else "Exceeds T"),
-            ("Area margin",            f"+{_area_margin:.1f} %"),
-            ("Flange (inlet × outlet)", _psv_flange_str),
-            ("Min. flange class (inlet)", f"ASME {psv.min_flange_class(_psv_P1_bara)} lb"),
-            ("Kd (discharge)",         f"{_psv_res['Kd']:.3f}"),
-            ("Kb / Kw (back pressure)", f"{_psv_res.get('Kb', _psv_res.get('Kw', 1.0)):.3f}"),
-            ("Kc (rupture disc)",       f"{_psv_res['Kc']:.3f}"),
-        ]
-        if _psv_service != "Liquid" and "capacity_selected_kgh" in _psv_res:
-            _psv_res_rows += [
-                ("Rated capacity (selected orifice)", f"{_psv_res['capacity_selected_kgh']:.0f} kg/h"),
-                ("C coefficient",                     f"{_psv_res['C_coeff']:.5f}"),
-            ]
-        elif _psv_service == "Liquid" and "capacity_selected_m3h" in _psv_res:
-            _psv_res_rows += [
-                ("Rated capacity (selected orifice)", f"{_psv_res['capacity_selected_m3h']:.3f} m³/h"),
-                ("Kv (viscosity correction)",         f"{_psv_res['Kv']:.5f}"),
-            ]
-        _psv_orifice_data = []
-        for _let, _ar in psv.API526_ORIFICES.items():
-            _fn = psv.flange_nps(_let)
-            _psv_orifice_data.append([
-                _let,
-                f"{_ar:.1f}",
-                f"NPS {_fn[0]:g}\"" if _fn else "—",
-                f"NPS {_fn[1]:g}\"" if _fn else "—",
-                "✓" if _let == _psv_res["orifice_letter"] else "",
-            ])
-        _psv_rpt = report_generator.generate_calculator_report(
-            tool_name="Pressure Safety Valve",
-            subtitle=f"{_psv_service}  ·  {_psv_type}  ·  {_psv_res['orifice_letter']} orifice",
-            method_text=[
-                "API 520 Part I (SI, 10th Ed.) orifice area sizing. "
-                "The required effective orifice area is calculated from the specified relief "
-                "flow, relieving conditions, and correction factors (Kd, Kb, Kc). "
-                "The smallest API 526 standard orifice that meets or exceeds the required area "
-                "is selected. The standard effective orifice areas are from API 526 Table 2.",
-                f"Gas/steam: A = W/(C·Kd·P₁·Kb·Kc) · √(T·Z/M).  "
-                f"Liquid: A = (Q/3600)/(Kd·Kw·Kc·Kv·√(2·ρ·ΔP)).",
-            ],
-            inputs_rows=_psv_inp,
-            results_rows=_psv_res_rows,
-            extra_tables=[{
-                "title": "API 526 Standard Orifice Table",
-                "headers": ["Letter", "Eff. area (mm²)", "Inlet flange", "Outlet flange", "Selected"],
-                "data": _psv_orifice_data,
-                "col_widths": [0.55, 1.0, 1.3, 1.3, 0.65],
-            }],
-        )
-        st.download_button(
-            "Export Word (.docx)",
-            _psv_rpt,
-            file_name=f"psv_{_psv_service.replace(' / ','_').lower()}_{_psv_res['orifice_letter']}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key="psv_dl",
-        )
+                # ── Word export ───────────────────────────────────────────────────────
+                st.divider()
+                _psv_flow_str = (f"{_psv_W_kgh:.1f} kg/h" if _psv_service != "Liquid"
+                                 else f"{_psv_Q_m3h:.3f} m³/h")
+                _psv_inp = [
+                    ("Service",              _psv_service),
+                    ("PSV type",             _psv_type),
+                    ("Set pressure",         f"{_psv_Pset_barg:.2f} barg"),
+                    ("Allowable overpressure", f"{_psv_op_pct:.1f} %"),
+                    ("Relieving pressure P₁", f"{_psv_P1_bara:.3f} bara"),
+                    ("Back pressure",        f"{_psv_Pback_barg:.2f} barg"),
+                    ("Relieving temperature", f"{_psv_T_C:.1f} °C"),
+                    ("Relief flow",          _psv_flow_str),
+                    ("Rupture disc upstream", "Yes (Kc = 0.90)" if _psv_rupture_disc else "No (Kc = 1.00)"),
+                ]
+                if _psv_service == "Gas / Vapour":
+                    _psv_inp += [
+                        ("Species",   _psv_species),
+                        ("MW",        f"{_psv_MW:.3f} kg/kmol"),
+                        ("γ (Cp/Cv)", f"{_psv_gamma:.4f}"),
+                        ("Z",         f"{_psv_Z:.4f}"),
+                    ]
+                elif _psv_service == "Liquid":
+                    _psv_inp += [
+                        ("Density ρ",   f"{_psv_rho:.2f} kg/m³"),
+                        ("Viscosity μ", f"{_psv_mu_cP:.4f} cP"),
+                    ]
+                _psv_flange = psv.flange_nps(_psv_res["orifice_letter"])
+                _psv_flange_str = (
+                    f"NPS {_psv_flange[0]:g}\" × NPS {_psv_flange[1]:g}\""
+                    if _psv_flange else "—"
+                )
+                _psv_res_rows = [
+                    ("Required area A_req",    f"{_psv_res['A_req_mm2']:.2f} mm²"),
+                    ("API 526 orifice letter",  _psv_res["orifice_letter"]),
+                    ("Orifice effective area",  f"{_psv_res['orifice_area_mm2']:.1f} mm²"
+                                                if _psv_res["orifice_area_mm2"] < math.inf else "Exceeds T"),
+                    ("Area margin",            f"+{_area_margin:.1f} %"),
+                    ("Flange (inlet × outlet)", _psv_flange_str),
+                    ("Min. flange class (inlet)", f"ASME {psv.min_flange_class(_psv_P1_bara)} lb"),
+                    ("Kd (discharge)",         f"{_psv_res['Kd']:.3f}"),
+                    ("Kb / Kw (back pressure)", f"{_psv_res.get('Kb', _psv_res.get('Kw', 1.0)):.3f}"),
+                    ("Kc (rupture disc)",       f"{_psv_res['Kc']:.3f}"),
+                ]
+                if _psv_service != "Liquid" and "capacity_selected_kgh" in _psv_res:
+                    _psv_res_rows += [
+                        ("Rated capacity (selected orifice)", f"{_psv_res['capacity_selected_kgh']:.0f} kg/h"),
+                        ("C coefficient",                     f"{_psv_res['C_coeff']:.5f}"),
+                    ]
+                elif _psv_service == "Liquid" and "capacity_selected_m3h" in _psv_res:
+                    _psv_res_rows += [
+                        ("Rated capacity (selected orifice)", f"{_psv_res['capacity_selected_m3h']:.3f} m³/h"),
+                        ("Kv (viscosity correction)",         f"{_psv_res['Kv']:.5f}"),
+                    ]
+                _psv_orifice_data = []
+                for _let, _ar in psv.API526_ORIFICES.items():
+                    _fn = psv.flange_nps(_let)
+                    _psv_orifice_data.append([
+                        _let,
+                        f"{_ar:.1f}",
+                        f"NPS {_fn[0]:g}\"" if _fn else "—",
+                        f"NPS {_fn[1]:g}\"" if _fn else "—",
+                        "✓" if _let == _psv_res["orifice_letter"] else "",
+                    ])
+                _psv_rpt = report_generator.generate_calculator_report(
+                    tool_name="Pressure Safety Valve",
+                    subtitle=f"{_psv_service}  ·  {_psv_type}  ·  {_psv_res['orifice_letter']} orifice",
+                    method_text=[
+                        "API 520 Part I (SI, 10th Ed.) orifice area sizing. "
+                        "The required effective orifice area is calculated from the specified relief "
+                        "flow, relieving conditions, and correction factors (Kd, Kb, Kc). "
+                        "The smallest API 526 standard orifice that meets or exceeds the required area "
+                        "is selected. The standard effective orifice areas are from API 526 Table 2.",
+                        f"Gas/steam: A = W/(C·Kd·P₁·Kb·Kc) · √(T·Z/M).  "
+                        f"Liquid: A = (Q/3600)/(Kd·Kw·Kc·Kv·√(2·ρ·ΔP)).",
+                    ],
+                    inputs_rows=_psv_inp,
+                    results_rows=_psv_res_rows,
+                    extra_tables=[{
+                        "title": "API 526 Standard Orifice Table",
+                        "headers": ["Letter", "Eff. area (mm²)", "Inlet flange", "Outlet flange", "Selected"],
+                        "data": _psv_orifice_data,
+                        "col_widths": [0.55, 1.0, 1.3, 1.3, 0.65],
+                    }],
+                )
+                st.download_button(
+                    "Export Word (.docx)",
+                    _psv_rpt,
+                    file_name=f"psv_{_psv_service.replace(' / ','_').lower()}_{_psv_res['orifice_letter']}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="psv_dl",
+                )
 
     # =========================================================================
     # Tab: Control Valve — IEC 60534-2-1
@@ -5821,225 +5829,233 @@ else:  # Engineering Tools
                 help="1.0 for no reducers. Compute per IEC 60534-2-3 when pipe ≠ valve size.",
             )
 
+            _cv_btn = st.button("Calculate", key="cv_run", type="primary", use_container_width=True)
+            if _cv_btn:
+                st.session_state["cv_show"] = True
+
         # ── Fluid and flow rate (right column) ───────────────────────────────
         with _cv_col_out:
-            if _cv_service == "Liquid":
-                st.markdown("**LIQUID PROPERTIES**")
-                _cv_liq_opts = list(engine.LIQUID_COOLPROP_ID.keys()) + ["KOH solution", "Custom"]
-                _cv_liq = st.selectbox("Fluid", _cv_liq_opts, key="cv_liq")
+            _cv_show = st.session_state.get("cv_show", False)
+            if not _cv_show:
+                st.info("Set inputs and press **Calculate**.")
+            else:
+                if _cv_service == "Liquid":
+                    st.markdown("**LIQUID PROPERTIES**")
+                    _cv_liq_opts = list(engine.LIQUID_COOLPROP_ID.keys()) + ["KOH solution", "Custom"]
+                    _cv_liq = st.selectbox("Fluid", _cv_liq_opts, key="cv_liq")
 
-                _cv_T_liq = _cv_T_C   # shared temperature
+                    _cv_T_liq = _cv_T_C   # shared temperature
 
-                if _cv_liq == "KOH solution":
-                    _cv_koh_conc = st.slider(
-                        "Concentration (wt%)", 5, 40, 30, 5, key="cv_koh_conc"
-                    )
-                    _lp = ro.koh_liquid_properties(_cv_T_liq, float(_cv_koh_conc))
-                    _cv_rho = _lp["rho_kgm3"]
-                    _cv_mu  = _lp["mu_pas"]
-                    _cv_Pv  = _lp["Pv_Pa"]
-                    _cv_Pc  = 0.0  # no critical pressure for mixture
-                    st.caption(f"ρ = {_cv_rho:.1f} kg/m³  |  μ = {_cv_mu*1e3:.3f} cP  |  Pᵥ = {_cv_Pv/1e5:.5f} bara")
-                elif _cv_liq != "Custom":
-                    _cv_cp_id = engine.LIQUID_COOLPROP_ID[_cv_liq]
-                    try:
-                        _lp = ro.liquid_properties(_cv_cp_id, _cv_T_liq, _cv_P1 * 1e5)
+                    if _cv_liq == "KOH solution":
+                        _cv_koh_conc = st.slider(
+                            "Concentration (wt%)", 5, 40, 30, 5, key="cv_koh_conc"
+                        )
+                        _lp = ro.koh_liquid_properties(_cv_T_liq, float(_cv_koh_conc))
                         _cv_rho = _lp["rho_kgm3"]
                         _cv_mu  = _lp["mu_pas"]
                         _cv_Pv  = _lp["Pv_Pa"]
-                        _cv_Pc  = cv.critical_pressure(_cv_cp_id)
-                        st.caption(
-                            f"ρ = {_cv_rho:.1f} kg/m³  |  μ = {_cv_mu*1e3:.4f} cP  |  "
-                            f"Pᵥ = {_cv_Pv/1e5:.5f} bara  |  Pc = {_cv_Pc/1e5:.1f} bara"
-                        )
-                    except Exception as _e:
-                        st.error(f"CoolProp: {_e}")
-                        _cv_rho, _cv_mu, _cv_Pv, _cv_Pc = 1000.0, 1e-3, 0.0, 0.0
-                else:
-                    _cvc1, _cvc2, _cvc3 = st.columns(3)
-                    _cv_rho = _cvc1.number_input("ρ (kg/m³)",  value=1000.0, min_value=1.0,  step=10.0,  key="cv_rho")
-                    _cv_mu  = _cvc2.number_input("μ (cP)",     value=1.0,    min_value=0.001, step=0.1,  key="cv_mu") * 1e-3
-                    _cv_Pv  = _cvc3.number_input("Pᵥ (bara)",  value=0.023,  min_value=0.0,  step=0.001, key="cv_Pv",  format="%.4f") * 1e5
-                    _cv_Pc  = st.number_input("Pc (bara, crit.)", value=220.6, min_value=0.0, step=1.0, key="cv_Pc") * 1e5
-
-                st.markdown("**FLOW RATE**")
-                _cv_liq_flow_mode = st.radio(
-                    "Input as", ["Volumetric (m³/h)", "Mass (kg/h)"],
-                    horizontal=True, key="cv_liq_flow_mode"
-                )
-                if _cv_liq_flow_mode == "Volumetric (m³/h)":
-                    _cv_Q_m3h = st.number_input(
-                        "Flow rate (m³/h)", value=10.0, min_value=0.0001, step=1.0, key="cv_Q_liq"
-                    )
-                else:
-                    _cv_W_kgh_liq = st.number_input(
-                        "Mass flow (kg/h)", value=10_000.0, min_value=0.001, step=100.0, key="cv_W_liq"
-                    )
-                    _cv_Q_m3h = _cv_W_kgh_liq / _cv_rho if _cv_rho > 0 else 0.0
-
-                _cv_res = cv.cv_liquid_size(
-                    _cv_Q_m3h, _cv_P1 * 1e5, _cv_P2 * 1e5,
-                    _cv_rho, _cv_Pv, _cv_Pc, _cv_FL, _cv_FP,
-                )
-
-            elif _cv_service == "Gas / Vapour":
-                st.markdown("**GAS PROPERTIES**")
-                _gp1, _gp2 = st.columns(2)
-                with _gp1:
-                    _cv_species = st.selectbox(
-                        "Species", list(fanno.GASES.keys()), key="cv_gas_species"
-                    )
-                _cv_MW_def  = fanno.GASES[_cv_species][0]
-                _cv_gam_def = fanno.GASES[_cv_species][1]
-                with _gp2:
-                    _cv_Z = st.number_input(
-                        "Compressibility Z", value=1.0, min_value=0.1, max_value=2.0,
-                        step=0.01, key="cv_Z"
-                    )
-                _gp3, _gp4 = st.columns(2)
-                with _gp3:
-                    _cv_MW = st.number_input(
-                        "MW (kg/kmol)",
-                        value=float(_cv_MW_def) * 1000.0 if _cv_MW_def else 28.97,
-                        min_value=1.0, step=0.5, key="cv_MW"
-                    )
-                with _gp4:
-                    _cv_gamma = st.number_input(
-                        "γ (Cp/Cv)",
-                        value=float(_cv_gam_def) if _cv_gam_def else 1.40,
-                        min_value=1.01, max_value=2.0, step=0.01, key="cv_gamma"
-                    )
-
-                st.markdown("**FLOW RATE**")
-                _cv_gas_flow_mode = st.radio(
-                    "Input as", ["Mass flow (kg/h)", "Normal volumetric (Nm³/h)"],
-                    horizontal=True, key="cv_gas_flow_mode"
-                )
-                if _cv_gas_flow_mode == "Mass flow (kg/h)":
-                    _cv_W_kgh = st.number_input(
-                        "Mass flow (kg/h)", value=1000.0, min_value=0.001, step=100.0, key="cv_W_gas"
-                    )
-                else:
-                    _cv_Qn = st.number_input(
-                        "Normal flow (Nm³/h)", value=5000.0, min_value=0.001, step=100.0, key="cv_Qn"
-                    )
-                    _cv_W_kgh = cv.nm3h_to_kgh(_cv_Qn, _cv_MW, _cv_Z)
-                    st.caption(f"≡ {_cv_W_kgh:.1f} kg/h at MW = {_cv_MW:.2f} kg/kmol")
-
-                _cv_res = cv.cv_gas_size(
-                    _cv_W_kgh, _cv_P1 * 1e5, _cv_P2 * 1e5, _cv_T1_K,
-                    _cv_MW, _cv_gamma, _cv_Z, _cv_xT, _cv_FP,
-                )
-
-            else:  # Steam
-                st.markdown("**STEAM PROPERTIES** — from CoolProp at relieving conditions")
-
-                st.markdown("**FLOW RATE**")
-                _cv_W_steam = st.number_input(
-                    "Mass flow (kg/h)", value=1000.0, min_value=0.001, step=100.0, key="cv_W_steam"
-                )
-
-                _cv_res = cv.cv_steam_size(
-                    _cv_W_steam, _cv_P1 * 1e5, _cv_P2 * 1e5, _cv_T1_K, _cv_xT, _cv_FP,
-                )
-                for _note in _cv_res.get("notes", []):
-                    if _note.startswith("UNPHYSICAL"):
-                        st.error(_note)
+                        _cv_Pc  = 0.0  # no critical pressure for mixture
+                        st.caption(f"ρ = {_cv_rho:.1f} kg/m³  |  μ = {_cv_mu*1e3:.3f} cP  |  Pᵥ = {_cv_Pv/1e5:.5f} bara")
+                    elif _cv_liq != "Custom":
+                        _cv_cp_id = engine.LIQUID_COOLPROP_ID[_cv_liq]
+                        try:
+                            _lp = ro.liquid_properties(_cv_cp_id, _cv_T_liq, _cv_P1 * 1e5)
+                            _cv_rho = _lp["rho_kgm3"]
+                            _cv_mu  = _lp["mu_pas"]
+                            _cv_Pv  = _lp["Pv_Pa"]
+                            _cv_Pc  = cv.critical_pressure(_cv_cp_id)
+                            st.caption(
+                                f"ρ = {_cv_rho:.1f} kg/m³  |  μ = {_cv_mu*1e3:.4f} cP  |  "
+                                f"Pᵥ = {_cv_Pv/1e5:.5f} bara  |  Pc = {_cv_Pc/1e5:.1f} bara"
+                            )
+                        except Exception as _e:
+                            st.error(f"CoolProp: {_e}")
+                            _cv_rho, _cv_mu, _cv_Pv, _cv_Pc = 1000.0, 1e-3, 0.0, 0.0
                     else:
-                        st.caption(_note)
+                        _cvc1, _cvc2, _cvc3 = st.columns(3)
+                        _cv_rho = _cvc1.number_input("ρ (kg/m³)",  value=1000.0, min_value=1.0,  step=10.0,  key="cv_rho")
+                        _cv_mu  = _cvc2.number_input("μ (cP)",     value=1.0,    min_value=0.001, step=0.1,  key="cv_mu") * 1e-3
+                        _cv_Pv  = _cvc3.number_input("Pᵥ (bara)",  value=0.023,  min_value=0.0,  step=0.001, key="cv_Pv",  format="%.4f") * 1e5
+                        _cv_Pc  = st.number_input("Pc (bara, crit.)", value=220.6, min_value=0.0, step=1.0, key="cv_Pc") * 1e5
 
-            # ── Results ───────────────────────────────────────────────────────
-            st.divider()
-            st.subheader("Sizing Results")
-
-            _kv  = _cv_res["Kv_req"]
-            _cv_ = _cv_res["Cv_req"]
-
-            _r1, _r2, _r3, _r4 = st.columns(4)
-            _r1.metric("Kv required", f"{_kv:.2f} m³/h/√bar")
-            _r2.metric("Cv required", f"{_cv_:.2f} USgpm/√psi")
-            _r3.metric("ΔP actual",   f"{_cv_res['dP_bar']:.3f} bar")
-
-            if _cv_service == "Liquid":
-                _dp_chok = _cv_res["dP_choked_bar"]
-                _r4.metric(
-                    "ΔP choked",
-                    f"{_dp_chok:.3f} bar" if _dp_chok < math.inf else "∞ (no Pᵥ data)"
-                )
-            else:
-                _r4.metric("x / xT", f"{_cv_res['x']:.3f} / {_cv_res['x_choked']:.3f}")
-
-            # Flow status row
-            _s1, _s2, _s3, _s4 = st.columns(4)
-            if _cv_service == "Liquid":
-                _s1.metric("Ff (crit. press. ratio)", f"{_cv_res['Ff']:.4f}")
-                _s2.metric("FL", f"{_cv_res['FL']:.3f}")
-                _sig = _cv_res["sigma"]
-                _s3.metric("σ (cavitation index)", f"{_sig:.3f}" if _sig < 1e6 else "∞")
-                _s4.metric("FP (piping)", f"{_cv_res['FP']:.3f}")
-            else:
-                _s1.metric("Y (expansion factor)", f"{_cv_res['Y']:.4f}")
-                _s2.metric("Fγ", f"{_cv_res['Fgamma']:.3f}")
-                _s3.metric("ρ₁", f"{_cv_res['rho1_kgm3']:.3f} kg/m³")
-                _s4.metric("FP (piping)", f"{_cv_res['FP']:.3f}")
-
-            # Warnings
-            if _cv_service == "Liquid":
-                if _cv_res["choked"]:
-                    st.warning(
-                        f"Choked liquid flow — ΔP ({_cv_res['dP_bar']:.3f} bar) exceeds "
-                        f"ΔP_choked ({_cv_res['dP_choked_bar']:.3f} bar). "
-                        "Kv is sized to the choked ΔP; actual flow will not increase with further ΔP increase."
+                    st.markdown("**FLOW RATE**")
+                    _cv_liq_flow_mode = st.radio(
+                        "Input as", ["Volumetric (m³/h)", "Mass (kg/h)"],
+                        horizontal=True, key="cv_liq_flow_mode"
                     )
-                if _cv_res["cavitating"]:
-                    st.warning(
-                        f"Cavitation risk — σ = {_cv_res['sigma']:.3f} < 1/FL² = "
-                        f"{1/_cv_FL**2:.3f}. Consider a higher-FL valve, multi-stage letdown, "
-                        "or an anti-cavitation trim."
-                    )
-            else:
-                if _cv_res["choked"]:
-                    st.warning(
-                        f"Choked gas flow — x ({_cv_res['x']:.3f}) ≥ Fγ·xT ({_cv_res['x_choked']:.3f}). "
-                        "Flow is at the sonic limit; further lowering P₂ does not increase flow."
+                    if _cv_liq_flow_mode == "Volumetric (m³/h)":
+                        _cv_Q_m3h = st.number_input(
+                            "Flow rate (m³/h)", value=10.0, min_value=0.0001, step=1.0, key="cv_Q_liq"
+                        )
+                    else:
+                        _cv_W_kgh_liq = st.number_input(
+                            "Mass flow (kg/h)", value=10_000.0, min_value=0.001, step=100.0, key="cv_W_liq"
+                        )
+                        _cv_Q_m3h = _cv_W_kgh_liq / _cv_rho if _cv_rho > 0 else 0.0
+
+                    _cv_res = cv.cv_liquid_size(
+                        _cv_Q_m3h, _cv_P1 * 1e5, _cv_P2 * 1e5,
+                        _cv_rho, _cv_Pv, _cv_Pc, _cv_FL, _cv_FP,
                     )
 
-            # Valve body recommendation
-            st.markdown("**Valve body size recommendation**")
-            _sz = cv.suggest_valve_size(_kv, target_opening=0.80)
-            _b1, _b2, _b3 = st.columns(3)
-            _b1.metric("Minimum Kv_100 needed", f"{_sz['Kv_min']:.2f}")
-            _b2.metric("Suggested body (indicative)", _sz["size_label"])
-            _b3.metric("Opening at design flow", f"{_sz['opening_pct']:.0f}%")
+                elif _cv_service == "Gas / Vapour":
+                    st.markdown("**GAS PROPERTIES**")
+                    _gp1, _gp2 = st.columns(2)
+                    with _gp1:
+                        _cv_species = st.selectbox(
+                            "Species", list(fanno.GASES.keys()), key="cv_gas_species"
+                        )
+                    _cv_MW_def  = fanno.GASES[_cv_species][0]
+                    _cv_gam_def = fanno.GASES[_cv_species][1]
+                    with _gp2:
+                        _cv_Z = st.number_input(
+                            "Compressibility Z", value=1.0, min_value=0.1, max_value=2.0,
+                            step=0.01, key="cv_Z"
+                        )
+                    _gp3, _gp4 = st.columns(2)
+                    with _gp3:
+                        _cv_MW = st.number_input(
+                            "MW (kg/kmol)",
+                            value=float(_cv_MW_def) * 1000.0 if _cv_MW_def else 28.97,
+                            min_value=1.0, step=0.5, key="cv_MW"
+                        )
+                    with _gp4:
+                        _cv_gamma = st.number_input(
+                            "γ (Cp/Cv)",
+                            value=float(_cv_gam_def) if _cv_gam_def else 1.40,
+                            min_value=1.01, max_value=2.0, step=0.01, key="cv_gamma"
+                        )
 
-            if _sz["oversized"]:
-                st.error("Required Kv exceeds the largest standard body in the table. Use parallel valves or a custom design.")
-            elif _sz["opening_pct"] < 20.0:
-                st.warning(
-                    f"Valve is only {_sz['opening_pct']:.0f}% open at design flow — "
-                    "consider a smaller body for better controllability."
-                )
-            elif _sz["opening_pct"] > 90.0:
-                st.warning(
-                    f"Valve is {_sz['opening_pct']:.0f}% open — tight controllability margin. "
-                    "Verify with vendor Kv_100 before ordering."
-                )
+                    st.markdown("**FLOW RATE**")
+                    _cv_gas_flow_mode = st.radio(
+                        "Input as", ["Mass flow (kg/h)", "Normal volumetric (Nm³/h)"],
+                        horizontal=True, key="cv_gas_flow_mode"
+                    )
+                    if _cv_gas_flow_mode == "Mass flow (kg/h)":
+                        _cv_W_kgh = st.number_input(
+                            "Mass flow (kg/h)", value=1000.0, min_value=0.001, step=100.0, key="cv_W_gas"
+                        )
+                    else:
+                        _cv_Qn = st.number_input(
+                            "Normal flow (Nm³/h)", value=5000.0, min_value=0.001, step=100.0, key="cv_Qn"
+                        )
+                        _cv_W_kgh = cv.nm3h_to_kgh(_cv_Qn, _cv_MW, _cv_Z)
+                        st.caption(f"≡ {_cv_W_kgh:.1f} kg/h at MW = {_cv_MW:.2f} kg/kmol")
 
-            # Indicative body size table
-            st.markdown("**Indicative Kv_100 by body size** (globe valve — verify with vendor)")
-            _kv_rows = []
-            for _lbl, _k100 in cv.INDICATIVE_KV.items():
-                _kv_rows.append({
-                    "Body size":     _lbl,
-                    "Kv_100":        f"{_k100:.1f}",
-                    "Cv_100":        f"{_k100 * cv.KV_TO_CV:.1f}",
-                    "At design flow": f"{_kv/_k100*100:.0f}%" if _k100 >= _kv * 0.2 else "—",
-                    "":              "✓" if _lbl == _sz["size_label"] else "",
-                })
-            st.dataframe(pd.DataFrame(_kv_rows), width='stretch', hide_index=True)
+                    _cv_res = cv.cv_gas_size(
+                        _cv_W_kgh, _cv_P1 * 1e5, _cv_P2 * 1e5, _cv_T1_K,
+                        _cv_MW, _cv_gamma, _cv_Z, _cv_xT, _cv_FP,
+                    )
 
-            with st.expander("Equations and references"):
-                st.markdown(f"""
+                else:  # Steam
+                    st.markdown("**STEAM PROPERTIES** — from CoolProp at relieving conditions")
+
+                    st.markdown("**FLOW RATE**")
+                    _cv_W_steam = st.number_input(
+                        "Mass flow (kg/h)", value=1000.0, min_value=0.001, step=100.0, key="cv_W_steam"
+                    )
+
+                    _cv_res = cv.cv_steam_size(
+                        _cv_W_steam, _cv_P1 * 1e5, _cv_P2 * 1e5, _cv_T1_K, _cv_xT, _cv_FP,
+                    )
+                    for _note in _cv_res.get("notes", []):
+                        if _note.startswith("UNPHYSICAL"):
+                            st.error(_note)
+                        else:
+                            st.caption(_note)
+
+                # ── Results ───────────────────────────────────────────────────────
+                st.divider()
+                st.subheader("Sizing Results")
+
+                _kv  = _cv_res["Kv_req"]
+                _cv_ = _cv_res["Cv_req"]
+
+                _r1, _r2, _r3, _r4 = st.columns(4)
+                _r1.metric("Kv required", f"{_kv:.2f} m³/h/√bar")
+                _r2.metric("Cv required", f"{_cv_:.2f} USgpm/√psi")
+                _r3.metric("ΔP actual",   f"{_cv_res['dP_bar']:.3f} bar")
+
+                if _cv_service == "Liquid":
+                    _dp_chok = _cv_res["dP_choked_bar"]
+                    _r4.metric(
+                        "ΔP choked",
+                        f"{_dp_chok:.3f} bar" if _dp_chok < math.inf else "∞ (no Pᵥ data)"
+                    )
+                else:
+                    _r4.metric("x / xT", f"{_cv_res['x']:.3f} / {_cv_res['x_choked']:.3f}")
+
+                # Flow status row
+                _s1, _s2, _s3, _s4 = st.columns(4)
+                if _cv_service == "Liquid":
+                    _s1.metric("Ff (crit. press. ratio)", f"{_cv_res['Ff']:.4f}")
+                    _s2.metric("FL", f"{_cv_res['FL']:.3f}")
+                    _sig = _cv_res["sigma"]
+                    _s3.metric("σ (cavitation index)", f"{_sig:.3f}" if _sig < 1e6 else "∞")
+                    _s4.metric("FP (piping)", f"{_cv_res['FP']:.3f}")
+                else:
+                    _s1.metric("Y (expansion factor)", f"{_cv_res['Y']:.4f}")
+                    _s2.metric("Fγ", f"{_cv_res['Fgamma']:.3f}")
+                    _s3.metric("ρ₁", f"{_cv_res['rho1_kgm3']:.3f} kg/m³")
+                    _s4.metric("FP (piping)", f"{_cv_res['FP']:.3f}")
+
+                # Warnings
+                if _cv_service == "Liquid":
+                    if _cv_res["choked"]:
+                        st.warning(
+                            f"Choked liquid flow — ΔP ({_cv_res['dP_bar']:.3f} bar) exceeds "
+                            f"ΔP_choked ({_cv_res['dP_choked_bar']:.3f} bar). "
+                            "Kv is sized to the choked ΔP; actual flow will not increase with further ΔP increase."
+                        )
+                    if _cv_res["cavitating"]:
+                        st.warning(
+                            f"Cavitation risk — σ = {_cv_res['sigma']:.3f} < 1/FL² = "
+                            f"{1/_cv_FL**2:.3f}. Consider a higher-FL valve, multi-stage letdown, "
+                            "or an anti-cavitation trim."
+                        )
+                else:
+                    if _cv_res["choked"]:
+                        st.warning(
+                            f"Choked gas flow — x ({_cv_res['x']:.3f}) ≥ Fγ·xT ({_cv_res['x_choked']:.3f}). "
+                            "Flow is at the sonic limit; further lowering P₂ does not increase flow."
+                        )
+
+                # Valve body recommendation
+                st.markdown("**Valve body size recommendation**")
+                _sz = cv.suggest_valve_size(_kv, target_opening=0.80)
+                _b1, _b2, _b3 = st.columns(3)
+                _b1.metric("Minimum Kv_100 needed", f"{_sz['Kv_min']:.2f}")
+                _b2.metric("Suggested body (indicative)", _sz["size_label"])
+                _b3.metric("Opening at design flow", f"{_sz['opening_pct']:.0f}%")
+
+                if _sz["oversized"]:
+                    st.error("Required Kv exceeds the largest standard body in the table. Use parallel valves or a custom design.")
+                elif _sz["opening_pct"] < 20.0:
+                    st.warning(
+                        f"Valve is only {_sz['opening_pct']:.0f}% open at design flow — "
+                        "consider a smaller body for better controllability."
+                    )
+                elif _sz["opening_pct"] > 90.0:
+                    st.warning(
+                        f"Valve is {_sz['opening_pct']:.0f}% open — tight controllability margin. "
+                        "Verify with vendor Kv_100 before ordering."
+                    )
+
+                # Indicative body size table
+                st.markdown("**Indicative Kv_100 by body size** (globe valve — verify with vendor)")
+                _kv_rows = []
+                for _lbl, _k100 in cv.INDICATIVE_KV.items():
+                    _kv_rows.append({
+                        "Body size":     _lbl,
+                        "Kv_100":        f"{_k100:.1f}",
+                        "Cv_100":        f"{_k100 * cv.KV_TO_CV:.1f}",
+                        "At design flow": f"{_kv/_k100*100:.0f}%" if _k100 >= _kv * 0.2 else "—",
+                        "":              "✓" if _lbl == _sz["size_label"] else "",
+                    })
+                st.dataframe(pd.DataFrame(_kv_rows), width='stretch', hide_index=True)
+
+                with st.expander("Equations and references"):
+                    st.markdown(f"""
 **Standard**: IEC 60534-2-1:2011 (≡ ISA 75.01.01) — Inherent flow characteristics and rangeability.
 
 **Liquid Kv** (no choke):
@@ -6065,102 +6081,102 @@ typically 2–5× higher for the same body size. Always confirm with vendor.
 Anti-cavitation trims can operate at σ down to ~0.5 FL².
 """)
 
-        # ── Word export ───────────────────────────────────────────────────────
-        st.divider()
-        _cv_inp = [
-            ("Service",        _cv_service),
-            ("Valve type",     _cv_vtype),
-            ("FL",             f"{_cv_FL:.3f}"),
-            ("xT",             f"{_cv_xT:.3f}"),
-            ("FP (piping)",    f"{_cv_FP:.3f}"),
-            ("P₁ upstream",    f"{_cv_P1:.3f} bara"),
-            ("P₂ downstream",  f"{_cv_P2:.3f} bara"),
-            ("ΔP",             f"{_cv_dP:.4f} bar"),
-            ("Temperature",    f"{_cv_T_C:.1f} °C"),
-        ]
-        if _cv_service == "Liquid":
-            _cv_lbl = getattr(_cv_liq, "__str__", lambda: str(_cv_liq))()
-            _cv_inp += [
-                ("Fluid",        _cv_lbl),
-                ("Density ρ",    f"{_cv_rho:.2f} kg/m³"),
-                ("Viscosity μ",  f"{_cv_mu*1e3:.4f} mPa·s"),
-                ("Flow rate",    f"{_cv_Q_m3h:.4f} m³/h"),
-            ]
-        elif _cv_service == "Gas / Vapour":
-            _cv_inp += [
-                ("Species",    _cv_species),
-                ("MW",         f"{_cv_MW:.3f} kg/kmol"),
-                ("γ (Cp/Cv)",  f"{_cv_gamma:.4f}"),
-                ("Z",          f"{_cv_Z:.4f}"),
-                ("Flow rate",  f"{_cv_W_kgh:.2f} kg/h"),
-            ]
-        else:
-            _cv_inp.append(("Flow rate", f"{_cv_W_steam:.2f} kg/h"))
+                # ── Word export ───────────────────────────────────────────────────────
+                st.divider()
+                _cv_inp = [
+                    ("Service",        _cv_service),
+                    ("Valve type",     _cv_vtype),
+                    ("FL",             f"{_cv_FL:.3f}"),
+                    ("xT",             f"{_cv_xT:.3f}"),
+                    ("FP (piping)",    f"{_cv_FP:.3f}"),
+                    ("P₁ upstream",    f"{_cv_P1:.3f} bara"),
+                    ("P₂ downstream",  f"{_cv_P2:.3f} bara"),
+                    ("ΔP",             f"{_cv_dP:.4f} bar"),
+                    ("Temperature",    f"{_cv_T_C:.1f} °C"),
+                ]
+                if _cv_service == "Liquid":
+                    _cv_lbl = getattr(_cv_liq, "__str__", lambda: str(_cv_liq))()
+                    _cv_inp += [
+                        ("Fluid",        _cv_lbl),
+                        ("Density ρ",    f"{_cv_rho:.2f} kg/m³"),
+                        ("Viscosity μ",  f"{_cv_mu*1e3:.4f} mPa·s"),
+                        ("Flow rate",    f"{_cv_Q_m3h:.4f} m³/h"),
+                    ]
+                elif _cv_service == "Gas / Vapour":
+                    _cv_inp += [
+                        ("Species",    _cv_species),
+                        ("MW",         f"{_cv_MW:.3f} kg/kmol"),
+                        ("γ (Cp/Cv)",  f"{_cv_gamma:.4f}"),
+                        ("Z",          f"{_cv_Z:.4f}"),
+                        ("Flow rate",  f"{_cv_W_kgh:.2f} kg/h"),
+                    ]
+                else:
+                    _cv_inp.append(("Flow rate", f"{_cv_W_steam:.2f} kg/h"))
 
-        _cv_res_rows = [
-            ("Kv required",  f"{_cv_res['Kv_req']:.3f} m³/h/√bar"),
-            ("Cv required",  f"{_cv_res['Cv_req']:.3f} USgpm/√psi"),
-            ("ΔP actual",    f"{_cv_res['dP_bar']:.4f} bar"),
-            ("FP (piping)",  f"{_cv_res['FP']:.4f}"),
-            ("Choked?",      "Yes" if _cv_res['choked'] else "No"),
-        ]
-        if _cv_service == "Liquid":
-            _cv_res_rows += [
-                ("ΔP choked",    f"{_cv_res['dP_choked_bar']:.4f} bar"
-                                 if _cv_res['dP_choked_bar'] < math.inf else "∞"),
-                ("Ff",           f"{_cv_res['Ff']:.5f}"),
-                ("FL",           f"{_cv_res['FL']:.4f}"),
-                ("σ (cavitation)", f"{_cv_res['sigma']:.4f}"
-                                   if _cv_res['sigma'] < 1e6 else "∞"),
-                ("Cavitating?",  "Yes" if _cv_res['cavitating'] else "No"),
-            ]
-        else:
-            _cv_res_rows += [
-                ("x (ΔP/P₁)",        f"{_cv_res['x']:.5f}"),
-                ("xT·Fγ (choke)",    f"{_cv_res['x_choked']:.5f}"),
-                ("Y (expansion)",    f"{_cv_res.get('Y', 1.0):.5f}"),
-                ("Fγ",               f"{_cv_res.get('Fgamma', 1.0):.5f}"),
-                ("ρ₁ (kg/m³)",       f"{_cv_res.get('rho1_kgm3', 0.0):.4f}"),
-            ]
-        _cv_res_rows += [
-            ("Suggested body size",  _sz["size_label"]),
-            ("Kv_100 min needed",    f"{_sz['Kv_min']:.2f}"),
-            ("Opening at design",    f"{_sz['opening_pct']:.0f} %"),
-        ]
-        _cv_kv_data = [
-            [_lbl, f"{_k100:.1f}", f"{_k100*cv.KV_TO_CV:.1f}",
-             f"{_kv/_k100*100:.0f}%" if _k100 >= _kv * 0.2 else "—",
-             "✓" if _lbl == _sz["size_label"] else ""]
-            for _lbl, _k100 in cv.INDICATIVE_KV.items()
-        ]
-        _cv_rpt = report_generator.generate_calculator_report(
-            tool_name="Control Valve",
-            subtitle=f"{_cv_service}  ·  {_cv_vtype}  ·  Kv = {_cv_res['Kv_req']:.2f} m³/h/√bar",
-            method_text=(
-                "IEC 60534-2-1:2011 (≡ ISA 75.01.01) flow coefficient sizing. "
-                "For liquid service, the choked ΔP limit is computed from FL² · (P₁ − Ff · Pv); "
-                "the cavitation index σ = (P₁ − Pv)/ΔP is checked against 1/FL². "
-                "For gas/steam service, the expansion factor Y = 1 − x/(3·Fγ·xT) accounts for "
-                "gas expansion; choked flow occurs when x ≥ Fγ·xT. "
-                "Body size recommendation is based on indicative globe-trim Kv_100 values at "
-                "80 % opening target."
-            ),
-            inputs_rows=_cv_inp,
-            results_rows=_cv_res_rows,
-            extra_tables=[{
-                "title": "Indicative Kv_100 by Body Size",
-                "headers": ["Body size", "Kv_100", "Cv_100", "Opening", ""],
-                "data": _cv_kv_data,
-                "col_widths": [1.1, 0.8, 0.8, 0.9, 0.4],
-            }],
-        )
-        st.download_button(
-            "Export Word (.docx)",
-            _cv_rpt,
-            file_name=f"cv_{_cv_service.replace(' / ','_').lower()}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key="cv_dl",
-        )
+                _cv_res_rows = [
+                    ("Kv required",  f"{_cv_res['Kv_req']:.3f} m³/h/√bar"),
+                    ("Cv required",  f"{_cv_res['Cv_req']:.3f} USgpm/√psi"),
+                    ("ΔP actual",    f"{_cv_res['dP_bar']:.4f} bar"),
+                    ("FP (piping)",  f"{_cv_res['FP']:.4f}"),
+                    ("Choked?",      "Yes" if _cv_res['choked'] else "No"),
+                ]
+                if _cv_service == "Liquid":
+                    _cv_res_rows += [
+                        ("ΔP choked",    f"{_cv_res['dP_choked_bar']:.4f} bar"
+                                         if _cv_res['dP_choked_bar'] < math.inf else "∞"),
+                        ("Ff",           f"{_cv_res['Ff']:.5f}"),
+                        ("FL",           f"{_cv_res['FL']:.4f}"),
+                        ("σ (cavitation)", f"{_cv_res['sigma']:.4f}"
+                                           if _cv_res['sigma'] < 1e6 else "∞"),
+                        ("Cavitating?",  "Yes" if _cv_res['cavitating'] else "No"),
+                    ]
+                else:
+                    _cv_res_rows += [
+                        ("x (ΔP/P₁)",        f"{_cv_res['x']:.5f}"),
+                        ("xT·Fγ (choke)",    f"{_cv_res['x_choked']:.5f}"),
+                        ("Y (expansion)",    f"{_cv_res.get('Y', 1.0):.5f}"),
+                        ("Fγ",               f"{_cv_res.get('Fgamma', 1.0):.5f}"),
+                        ("ρ₁ (kg/m³)",       f"{_cv_res.get('rho1_kgm3', 0.0):.4f}"),
+                    ]
+                _cv_res_rows += [
+                    ("Suggested body size",  _sz["size_label"]),
+                    ("Kv_100 min needed",    f"{_sz['Kv_min']:.2f}"),
+                    ("Opening at design",    f"{_sz['opening_pct']:.0f} %"),
+                ]
+                _cv_kv_data = [
+                    [_lbl, f"{_k100:.1f}", f"{_k100*cv.KV_TO_CV:.1f}",
+                     f"{_kv/_k100*100:.0f}%" if _k100 >= _kv * 0.2 else "—",
+                     "✓" if _lbl == _sz["size_label"] else ""]
+                    for _lbl, _k100 in cv.INDICATIVE_KV.items()
+                ]
+                _cv_rpt = report_generator.generate_calculator_report(
+                    tool_name="Control Valve",
+                    subtitle=f"{_cv_service}  ·  {_cv_vtype}  ·  Kv = {_cv_res['Kv_req']:.2f} m³/h/√bar",
+                    method_text=(
+                        "IEC 60534-2-1:2011 (≡ ISA 75.01.01) flow coefficient sizing. "
+                        "For liquid service, the choked ΔP limit is computed from FL² · (P₁ − Ff · Pv); "
+                        "the cavitation index σ = (P₁ − Pv)/ΔP is checked against 1/FL². "
+                        "For gas/steam service, the expansion factor Y = 1 − x/(3·Fγ·xT) accounts for "
+                        "gas expansion; choked flow occurs when x ≥ Fγ·xT. "
+                        "Body size recommendation is based on indicative globe-trim Kv_100 values at "
+                        "80 % opening target."
+                    ),
+                    inputs_rows=_cv_inp,
+                    results_rows=_cv_res_rows,
+                    extra_tables=[{
+                        "title": "Indicative Kv_100 by Body Size",
+                        "headers": ["Body size", "Kv_100", "Cv_100", "Opening", ""],
+                        "data": _cv_kv_data,
+                        "col_widths": [1.1, 0.8, 0.8, 0.9, 0.4],
+                    }],
+                )
+                st.download_button(
+                    "Export Word (.docx)",
+                    _cv_rpt,
+                    file_name=f"cv_{_cv_service.replace(' / ','_').lower()}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="cv_dl",
+                )
 
     # =========================================================================
     # Tab: Dissolved Gas Flash
@@ -6207,215 +6223,223 @@ Anti-cavitation trims can operate at σ down to ~0.5 FL².
 
         st.divider()
 
-        # ── Compute ──────────────────────────────────────────────────────────
-        try:
-            _dg_res = dg.flash_dissolved_gas(
-                gas=_dg_gas,
-                T1_C=_dg_T1,
-                P1_bar=_dg_P1,
-                T2_C=_dg_T2,
-                P2_bar=_dg_P2,
-                wt_pct_koh=_dg_koh_wt,
-                y_gas=1.0,
-            )
+        _dg_btn = st.button("Calculate", key="dg_run", type="primary", use_container_width=True)
+        if _dg_btn:
+            st.session_state["dg_show"] = True
 
-            _dg_released = _dg_res["dC_combined_mol_L"] > 0
-            _dg_vol_pct  = _dg_res["vol_pct_outlet"]
-
-            # ── KPIs ─────────────────────────────────────────────────────────
-            st.markdown("**Flash result — combined (ΔP + ΔT)**")
-            _dg_ka, _dg_kb, _dg_kc, _dg_kd, _dg_ke = st.columns(5)
-            _dg_ka.metric(
-                "Net Δ concentration",
-                f"{_dg_res['dC_combined_mol_L']*1e3:+.3f} mmol/L",
-                help="Positive = gas released; negative = more gas can dissolve (liquid stays undersaturated).",
-            )
-            _dg_kb.metric(
-                "Released volume",
-                f"{_dg_res['released_mL_per_L']:.2f} mL/L" if _dg_released else "0 (absorbed)",
-                help="mL of gas at STP (0 °C, 1 atm) per litre of liquid.",
-            )
-            _dg_kc.metric(
-                "Nm³/m³ liquid",
-                f"{_dg_res['released_Nm3_per_m3']:.4f}" if _dg_released else "0",
-            )
-            _dg_kd.metric(
-                "Mass released",
-                f"{_dg_res['released_g_per_L']*1e3:.3f} mg/L" if _dg_released else "0",
-            )
-            _dg_pump_note = (
-                "⚠ Pump risk (>4%)" if _dg_vol_pct > 4.0
-                else ("△ Monitor (2–4%)" if _dg_vol_pct > 2.0 else "✓ OK (<2%)")
-            ) if _dg_released else "—"
-            _dg_ke.metric(
-                "Vol% gas at outlet",
-                f"{_dg_vol_pct:.2f} %" if _dg_released else "0 %",
-                delta=_dg_pump_note,
-                delta_color="inverse" if _dg_vol_pct > 4.0 else ("off" if _dg_vol_pct > 2.0 else "normal"),
-                help="Actual gas volume fraction in the liquid+gas mixture at T₂, P₂ (ideal gas law). "
-                     "Centrifugal pumps typically tolerate <2 vol%; above 4 vol% performance and stability degrade.",
-            )
-
-            if not _dg_released:
-                st.info(
-                    f"The outlet conditions can hold **more** {_dg_gas} than at inlet. "
-                    "The liquid is **undersaturated** after the HX — no gas is released."
+        _dg_show = st.session_state.get("dg_show", False)
+        if not _dg_show:
+            st.info("Set inputs and press **Calculate**.")
+        else:
+            # ── Compute ──────────────────────────────────────────────────────────
+            try:
+                _dg_res = dg.flash_dissolved_gas(
+                    gas=_dg_gas,
+                    T1_C=_dg_T1,
+                    P1_bar=_dg_P1,
+                    T2_C=_dg_T2,
+                    P2_bar=_dg_P2,
+                    wt_pct_koh=_dg_koh_wt,
+                    y_gas=1.0,
                 )
 
-            # ── Decomposition table ──────────────────────────────────────────
-            st.markdown("**Effect decomposition**")
-            _dg_dec = {
-                "Effect": ["Pressure drop only (ΔP, same T₁)", "Cooling only (ΔT, same P₁)", "Combined (ΔP + ΔT)"],
-                "ΔC (mmol/L)": [
-                    f"{_dg_res['dC_pressure_mol_L']*1e3:+.3f}",
-                    f"{_dg_res['dC_temp_mol_L']*1e3:+.3f}",
-                    f"{_dg_res['dC_combined_mol_L']*1e3:+.3f}",
-                ],
-                "Released (mL/L STP)": [
-                    f"{_dg_res['pressure_effect']['V_mL_per_L']:.3f}" if _dg_res['dC_pressure_mol_L'] > 0 else "0 (absorbed)",
-                    f"{_dg_res['temp_effect']['V_mL_per_L']:.3f}"    if _dg_res['dC_temp_mol_L'] > 0    else "0 (absorbed)",
-                    f"{_dg_res['combined_effect']['V_mL_per_L']:.3f}" if _dg_res['dC_combined_mol_L'] > 0 else "0 (absorbed)",
-                ],
-                "Nm³/m³": [
-                    f"{_dg_res['pressure_effect']['V_Nm3_per_m3']:.4f}" if _dg_res['dC_pressure_mol_L'] > 0 else "—",
-                    f"{_dg_res['temp_effect']['V_Nm3_per_m3']:.4f}"    if _dg_res['dC_temp_mol_L'] > 0    else "—",
-                    f"{_dg_res['combined_effect']['V_Nm3_per_m3']:.4f}" if _dg_res['dC_combined_mol_L'] > 0 else "—",
-                ],
-            }
-            st.dataframe(pd.DataFrame(_dg_dec), hide_index=True, width='stretch')
+                _dg_released = _dg_res["dC_combined_mol_L"] > 0
+                _dg_vol_pct  = _dg_res["vol_pct_outlet"]
 
-            # ── Henry constants table ────────────────────────────────────────
-            st.markdown("**Henry's Law constants**")
-            _dg_solvent_label = f"KOH {_dg_koh_wt:.0f} wt%" if _dg_koh_wt > 0 else "Pure water"
-            _dg_htab = {
-                "State": ["Upstream (T₁, P₁)", "Downstream (T₂, P₂)"],
-                "T (°C)": [f"{_dg_T1:.1f}", f"{_dg_T2:.1f}"],
-                "P gas (bar)": [
-                    f"{_dg_P1:.3f}",
-                    f"{_dg_P2:.3f}",
-                ],
-                "K_H water (mol/L/bar)": [
-                    f"{_dg_res['K_H1_water']:.4e}",
-                    f"{_dg_res['K_H2_water']:.4e}",
-                ],
-                f"K_H {_dg_solvent_label} (mol/L/bar)": [
-                    f"{_dg_res['K_H1_soln']:.4e}",
-                    f"{_dg_res['K_H2_soln']:.4e}",
-                ],
-                "K_s (L/mol)": [
-                    f"{_dg_res['K_s1']:.4f}",
-                    f"{_dg_res['K_s2']:.4f}",
-                ],
-                "C (mol/L)": [
-                    f"{_dg_res['C1_mol_L']:.4e}",
-                    f"{_dg_res['C2_mol_L']:.4e}",
-                ],
-            }
-            st.dataframe(pd.DataFrame(_dg_htab), hide_index=True, width='stretch')
-
-            if _dg_koh_wt > 0:
-                _dg_c_koh = _dg_res["c_koh1_mol_L"]
-                st.caption(
-                    f"KOH {_dg_koh_wt:.0f} wt% → {_dg_c_koh:.2f} mol/L at T₁.  "
-                    f"Sechenov factor at T₁: 10^(−{_dg_res['K_s1']:.3f} × {_dg_c_koh:.2f}) "
-                    f"= {10**(-_dg_res['K_s1']*_dg_c_koh):.3f}  "
-                    f"(solubility reduced to {10**(-_dg_res['K_s1']*_dg_c_koh)*100:.0f}% of pure-water value)"
+                # ── KPIs ─────────────────────────────────────────────────────────
+                st.markdown("**Flash result — combined (ΔP + ΔT)**")
+                _dg_ka, _dg_kb, _dg_kc, _dg_kd, _dg_ke = st.columns(5)
+                _dg_ka.metric(
+                    "Net Δ concentration",
+                    f"{_dg_res['dC_combined_mol_L']*1e3:+.3f} mmol/L",
+                    help="Positive = gas released; negative = more gas can dissolve (liquid stays undersaturated).",
+                )
+                _dg_kb.metric(
+                    "Released volume",
+                    f"{_dg_res['released_mL_per_L']:.2f} mL/L" if _dg_released else "0 (absorbed)",
+                    help="mL of gas at STP (0 °C, 1 atm) per litre of liquid.",
+                )
+                _dg_kc.metric(
+                    "Nm³/m³ liquid",
+                    f"{_dg_res['released_Nm3_per_m3']:.4f}" if _dg_released else "0",
+                )
+                _dg_kd.metric(
+                    "Mass released",
+                    f"{_dg_res['released_g_per_L']*1e3:.3f} mg/L" if _dg_released else "0",
+                )
+                _dg_pump_note = (
+                    "⚠ Pump risk (>4%)" if _dg_vol_pct > 4.0
+                    else ("△ Monitor (2–4%)" if _dg_vol_pct > 2.0 else "✓ OK (<2%)")
+                ) if _dg_released else "—"
+                _dg_ke.metric(
+                    "Vol% gas at outlet",
+                    f"{_dg_vol_pct:.2f} %" if _dg_released else "0 %",
+                    delta=_dg_pump_note,
+                    delta_color="inverse" if _dg_vol_pct > 4.0 else ("off" if _dg_vol_pct > 2.0 else "normal"),
+                    help="Actual gas volume fraction in the liquid+gas mixture at T₂, P₂ (ideal gas law). "
+                         "Centrifugal pumps typically tolerate <2 vol%; above 4 vol% performance and stability degrade.",
                 )
 
-            # ── K_H vs T chart ────────────────────────────────────────────────
-            st.markdown("**K_H vs Temperature (solubility curve)**")
-            _dg_temps = [t for t in range(-5, 101, 5)]
-            _dg_kh_w = [dg._interp_kh_water(t, _dg_gas) * 1e4 for t in _dg_temps]
-            _dg_kh_s = [dg.kh_solution(t, _dg_gas, _dg_koh_wt) * 1e4 for t in _dg_temps] if _dg_koh_wt > 0 else None
+                if not _dg_released:
+                    st.info(
+                        f"The outlet conditions can hold **more** {_dg_gas} than at inlet. "
+                        "The liquid is **undersaturated** after the HX — no gas is released."
+                    )
 
-            _dg_fig = go.Figure()
-            _dg_fig.add_trace(go.Scatter(
-                x=_dg_temps, y=_dg_kh_w, mode="lines",
-                name="Pure water", line=dict(color="#3b82f6", width=2),
-            ))
-            if _dg_kh_s:
+                # ── Decomposition table ──────────────────────────────────────────
+                st.markdown("**Effect decomposition**")
+                _dg_dec = {
+                    "Effect": ["Pressure drop only (ΔP, same T₁)", "Cooling only (ΔT, same P₁)", "Combined (ΔP + ΔT)"],
+                    "ΔC (mmol/L)": [
+                        f"{_dg_res['dC_pressure_mol_L']*1e3:+.3f}",
+                        f"{_dg_res['dC_temp_mol_L']*1e3:+.3f}",
+                        f"{_dg_res['dC_combined_mol_L']*1e3:+.3f}",
+                    ],
+                    "Released (mL/L STP)": [
+                        f"{_dg_res['pressure_effect']['V_mL_per_L']:.3f}" if _dg_res['dC_pressure_mol_L'] > 0 else "0 (absorbed)",
+                        f"{_dg_res['temp_effect']['V_mL_per_L']:.3f}"    if _dg_res['dC_temp_mol_L'] > 0    else "0 (absorbed)",
+                        f"{_dg_res['combined_effect']['V_mL_per_L']:.3f}" if _dg_res['dC_combined_mol_L'] > 0 else "0 (absorbed)",
+                    ],
+                    "Nm³/m³": [
+                        f"{_dg_res['pressure_effect']['V_Nm3_per_m3']:.4f}" if _dg_res['dC_pressure_mol_L'] > 0 else "—",
+                        f"{_dg_res['temp_effect']['V_Nm3_per_m3']:.4f}"    if _dg_res['dC_temp_mol_L'] > 0    else "—",
+                        f"{_dg_res['combined_effect']['V_Nm3_per_m3']:.4f}" if _dg_res['dC_combined_mol_L'] > 0 else "—",
+                    ],
+                }
+                st.dataframe(pd.DataFrame(_dg_dec), hide_index=True, width='stretch')
+
+                # ── Henry constants table ────────────────────────────────────────
+                st.markdown("**Henry's Law constants**")
+                _dg_solvent_label = f"KOH {_dg_koh_wt:.0f} wt%" if _dg_koh_wt > 0 else "Pure water"
+                _dg_htab = {
+                    "State": ["Upstream (T₁, P₁)", "Downstream (T₂, P₂)"],
+                    "T (°C)": [f"{_dg_T1:.1f}", f"{_dg_T2:.1f}"],
+                    "P gas (bar)": [
+                        f"{_dg_P1:.3f}",
+                        f"{_dg_P2:.3f}",
+                    ],
+                    "K_H water (mol/L/bar)": [
+                        f"{_dg_res['K_H1_water']:.4e}",
+                        f"{_dg_res['K_H2_water']:.4e}",
+                    ],
+                    f"K_H {_dg_solvent_label} (mol/L/bar)": [
+                        f"{_dg_res['K_H1_soln']:.4e}",
+                        f"{_dg_res['K_H2_soln']:.4e}",
+                    ],
+                    "K_s (L/mol)": [
+                        f"{_dg_res['K_s1']:.4f}",
+                        f"{_dg_res['K_s2']:.4f}",
+                    ],
+                    "C (mol/L)": [
+                        f"{_dg_res['C1_mol_L']:.4e}",
+                        f"{_dg_res['C2_mol_L']:.4e}",
+                    ],
+                }
+                st.dataframe(pd.DataFrame(_dg_htab), hide_index=True, width='stretch')
+
+                if _dg_koh_wt > 0:
+                    _dg_c_koh = _dg_res["c_koh1_mol_L"]
+                    st.caption(
+                        f"KOH {_dg_koh_wt:.0f} wt% → {_dg_c_koh:.2f} mol/L at T₁.  "
+                        f"Sechenov factor at T₁: 10^(−{_dg_res['K_s1']:.3f} × {_dg_c_koh:.2f}) "
+                        f"= {10**(-_dg_res['K_s1']*_dg_c_koh):.3f}  "
+                        f"(solubility reduced to {10**(-_dg_res['K_s1']*_dg_c_koh)*100:.0f}% of pure-water value)"
+                    )
+
+                # ── K_H vs T chart ────────────────────────────────────────────────
+                st.markdown("**K_H vs Temperature (solubility curve)**")
+                _dg_temps = [t for t in range(-5, 101, 5)]
+                _dg_kh_w = [dg._interp_kh_water(t, _dg_gas) * 1e4 for t in _dg_temps]
+                _dg_kh_s = [dg.kh_solution(t, _dg_gas, _dg_koh_wt) * 1e4 for t in _dg_temps] if _dg_koh_wt > 0 else None
+
+                _dg_fig = go.Figure()
                 _dg_fig.add_trace(go.Scatter(
-                    x=_dg_temps, y=_dg_kh_s, mode="lines",
-                    name=f"KOH {_dg_koh_wt:.0f} wt%", line=dict(color="#f59e0b", width=2, dash="dash"),
+                    x=_dg_temps, y=_dg_kh_w, mode="lines",
+                    name="Pure water", line=dict(color="#3b82f6", width=2),
                 ))
-            # Mark operating points
-            _dg_kh1_plot = dg.kh_solution(_dg_T1, _dg_gas, _dg_koh_wt) * 1e4
-            _dg_kh2_plot = dg.kh_solution(_dg_T2, _dg_gas, _dg_koh_wt) * 1e4
-            _dg_fig.add_trace(go.Scatter(
-                x=[_dg_T1, _dg_T2], y=[_dg_kh1_plot, _dg_kh2_plot],
-                mode="markers",
-                marker=dict(size=10, color=["#16a34a", "#dc2626"], symbol="circle"),
-                name="Operating points (T₁/T₂)",
-            ))
-            _dg_fig.update_layout(
-                xaxis_title="Temperature (°C)",
-                yaxis_title="K_H (×10⁻⁴ mol/L/bar)",
-                height=320,
-                margin=dict(t=20, b=40, l=60, r=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            )
-            st.plotly_chart(_dg_fig, width='stretch')
+                if _dg_kh_s:
+                    _dg_fig.add_trace(go.Scatter(
+                        x=_dg_temps, y=_dg_kh_s, mode="lines",
+                        name=f"KOH {_dg_koh_wt:.0f} wt%", line=dict(color="#f59e0b", width=2, dash="dash"),
+                    ))
+                # Mark operating points
+                _dg_kh1_plot = dg.kh_solution(_dg_T1, _dg_gas, _dg_koh_wt) * 1e4
+                _dg_kh2_plot = dg.kh_solution(_dg_T2, _dg_gas, _dg_koh_wt) * 1e4
+                _dg_fig.add_trace(go.Scatter(
+                    x=[_dg_T1, _dg_T2], y=[_dg_kh1_plot, _dg_kh2_plot],
+                    mode="markers",
+                    marker=dict(size=10, color=["#16a34a", "#dc2626"], symbol="circle"),
+                    name="Operating points (T₁/T₂)",
+                ))
+                _dg_fig.update_layout(
+                    xaxis_title="Temperature (°C)",
+                    yaxis_title="K_H (×10⁻⁴ mol/L/bar)",
+                    height=320,
+                    margin=dict(t=20, b=40, l=60, r=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(_dg_fig, width='stretch')
 
-            # ── Word export ───────────────────────────────────────────────────
-            st.divider()
-            _dg_solvent_lbl = (f"KOH {_dg_koh_wt:.0f} wt%" if _dg_koh_wt > 0
-                               else "Pure water")
-            _dg_rpt = report_generator.generate_calculator_report(
-                tool_name="Dissolved Gas Flash",
-                subtitle=f"{dg.GAS_LABELS[_dg_gas]}  in  {_dg_solvent_lbl}",
-                method_text=(
-                    "Henry's Law dissolution: C [mol/L] = K_H(T) × P_gas [bar]. "
-                    "K_H is interpolated from Battino et al. tabular data for pure water. "
-                    "For KOH solutions, solubility is reduced by the Sechenov equation: "
-                    "log₁₀(K_H_water / K_H_KOH) = K_s × c_KOH. "
-                    "Gas released on depressurisation is the difference in equilibrium "
-                    "dissolved concentration between upstream and downstream conditions. "
-                    "The flash is split into a pressure-only component (ΔP at constant T₁) "
-                    "and a temperature-only component (ΔT at constant P₁); the combined "
-                    "result is the net change between (T₁, P₁) and (T₂, P₂)."
-                ),
-                inputs_rows=[
-                    ("Dissolved gas",         dg.GAS_LABELS[_dg_gas]),
-                    ("Solvent",               _dg_solvent_lbl),
-                    ("Upstream T₁",           f"{_dg_T1:.1f} °C"),
-                    ("Upstream P₁",           f"{_dg_P1:.3f} bara"),
-                    ("Downstream T₂",         f"{_dg_T2:.1f} °C"),
-                    ("Downstream P₂",         f"{_dg_P2:.3f} bara"),
-                ],
-                results_rows=[
-                    ("Upstream concentration C₁",  f"{_dg_res['C1_mol_L']:.4e} mol/L"),
-                    ("Downstream concentration C₂", f"{_dg_res['C2_mol_L']:.4e} mol/L"),
-                    ("Net ΔC (combined)",           f"{_dg_res['dC_combined_mol_L']*1e3:+.4f} mmol/L"),
-                    ("Released volume",             f"{_dg_res['released_mL_per_L']:.4f} mL/L STP"
-                                                    if _dg_released else "0 (absorbed)"),
-                    ("Nm³/m³ liquid",               f"{_dg_res['released_Nm3_per_m3']:.6f}"
-                                                    if _dg_released else "0"),
-                    ("Mass released",               f"{_dg_res['released_g_per_L']*1e3:.4f} mg/L"
-                                                    if _dg_released else "0"),
-                    ("Vol% gas at outlet",          f"{_dg_vol_pct:.3f} %"),
-                    ("ΔC — pressure effect only",   f"{_dg_res['dC_pressure_mol_L']*1e3:+.4f} mmol/L"),
-                    ("ΔC — temperature effect only", f"{_dg_res['dC_temp_mol_L']*1e3:+.4f} mmol/L"),
-                    ("K_H water at T₁",             f"{_dg_res['K_H1_water']:.4e} mol/L/bar"),
-                    ("K_H water at T₂",             f"{_dg_res['K_H2_water']:.4e} mol/L/bar"),
-                    (f"K_H {_dg_solvent_lbl} at T₁", f"{_dg_res['K_H1_soln']:.4e} mol/L/bar"),
-                    (f"K_H {_dg_solvent_lbl} at T₂", f"{_dg_res['K_H2_soln']:.4e} mol/L/bar"),
-                    ("Sechenov K_s at T₁",          f"{_dg_res['K_s1']:.4f} L/mol"),
-                    ("Sechenov K_s at T₂",          f"{_dg_res['K_s2']:.4f} L/mol"),
-                ],
-                fig=_dg_fig,
-                fig_caption_text="Henry's Law constant K_H vs temperature with operating points.",
-                fig_height=340,
-            )
-            st.download_button(
-                "Export Word (.docx)",
-                _dg_rpt,
-                file_name=f"dissolved_gas_{_dg_gas.lower()}_{_dg_solvent_lbl.replace(' ','_')}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key="dg_dl",
-            )
+                # ── Word export ───────────────────────────────────────────────────
+                st.divider()
+                _dg_solvent_lbl = (f"KOH {_dg_koh_wt:.0f} wt%" if _dg_koh_wt > 0
+                                   else "Pure water")
+                _dg_rpt = report_generator.generate_calculator_report(
+                    tool_name="Dissolved Gas Flash",
+                    subtitle=f"{dg.GAS_LABELS[_dg_gas]}  in  {_dg_solvent_lbl}",
+                    method_text=(
+                        "Henry's Law dissolution: C [mol/L] = K_H(T) × P_gas [bar]. "
+                        "K_H is interpolated from Battino et al. tabular data for pure water. "
+                        "For KOH solutions, solubility is reduced by the Sechenov equation: "
+                        "log₁₀(K_H_water / K_H_KOH) = K_s × c_KOH. "
+                        "Gas released on depressurisation is the difference in equilibrium "
+                        "dissolved concentration between upstream and downstream conditions. "
+                        "The flash is split into a pressure-only component (ΔP at constant T₁) "
+                        "and a temperature-only component (ΔT at constant P₁); the combined "
+                        "result is the net change between (T₁, P₁) and (T₂, P₂)."
+                    ),
+                    inputs_rows=[
+                        ("Dissolved gas",         dg.GAS_LABELS[_dg_gas]),
+                        ("Solvent",               _dg_solvent_lbl),
+                        ("Upstream T₁",           f"{_dg_T1:.1f} °C"),
+                        ("Upstream P₁",           f"{_dg_P1:.3f} bara"),
+                        ("Downstream T₂",         f"{_dg_T2:.1f} °C"),
+                        ("Downstream P₂",         f"{_dg_P2:.3f} bara"),
+                    ],
+                    results_rows=[
+                        ("Upstream concentration C₁",  f"{_dg_res['C1_mol_L']:.4e} mol/L"),
+                        ("Downstream concentration C₂", f"{_dg_res['C2_mol_L']:.4e} mol/L"),
+                        ("Net ΔC (combined)",           f"{_dg_res['dC_combined_mol_L']*1e3:+.4f} mmol/L"),
+                        ("Released volume",             f"{_dg_res['released_mL_per_L']:.4f} mL/L STP"
+                                                        if _dg_released else "0 (absorbed)"),
+                        ("Nm³/m³ liquid",               f"{_dg_res['released_Nm3_per_m3']:.6f}"
+                                                        if _dg_released else "0"),
+                        ("Mass released",               f"{_dg_res['released_g_per_L']*1e3:.4f} mg/L"
+                                                        if _dg_released else "0"),
+                        ("Vol% gas at outlet",          f"{_dg_vol_pct:.3f} %"),
+                        ("ΔC — pressure effect only",   f"{_dg_res['dC_pressure_mol_L']*1e3:+.4f} mmol/L"),
+                        ("ΔC — temperature effect only", f"{_dg_res['dC_temp_mol_L']*1e3:+.4f} mmol/L"),
+                        ("K_H water at T₁",             f"{_dg_res['K_H1_water']:.4e} mol/L/bar"),
+                        ("K_H water at T₂",             f"{_dg_res['K_H2_water']:.4e} mol/L/bar"),
+                        (f"K_H {_dg_solvent_lbl} at T₁", f"{_dg_res['K_H1_soln']:.4e} mol/L/bar"),
+                        (f"K_H {_dg_solvent_lbl} at T₂", f"{_dg_res['K_H2_soln']:.4e} mol/L/bar"),
+                        ("Sechenov K_s at T₁",          f"{_dg_res['K_s1']:.4f} L/mol"),
+                        ("Sechenov K_s at T₂",          f"{_dg_res['K_s2']:.4f} L/mol"),
+                    ],
+                    fig=_dg_fig,
+                    fig_caption_text="Henry's Law constant K_H vs temperature with operating points.",
+                    fig_height=340,
+                )
+                st.download_button(
+                    "Export Word (.docx)",
+                    _dg_rpt,
+                    file_name=f"dissolved_gas_{_dg_gas.lower()}_{_dg_solvent_lbl.replace(' ','_')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="dg_dl",
+                )
 
-        except Exception as _dg_err:
-            st.error(f"Calculation error: {_dg_err}")
+            except Exception as _dg_err:
+                st.error(f"Calculation error: {_dg_err}")
 
         with st.expander("Theory & References"):
             st.markdown("""
@@ -6766,267 +6790,274 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                 key="pu_mat_group",
             )
 
+            _pu_btn = st.button("Calculate", key="pu_run", type="primary", use_container_width=True)
+            if _pu_btn:
+                st.session_state["pu_show"] = True
+
         # ── RIGHT COLUMN — RESULTS ────────────────────────────────────────────
         with _pu_c2:
-
-            # ── Pump computation (pure Python, no Streamlit) ──────────────────
-            _pu_Qbep_used = (
-                _pu_Qbep
-                if (not _pu_is_pd and _pu_hq_mode == "3-point parametric")
-                else (pe.hq_max_flow(_pu_hq_coeffs) * 0.65
-                      if (not _pu_is_pd and _pu_hq_coeffs) else 0.0)
-            )
-            try:
-                _pu = compute_pump_case(
-                    is_pd      = _pu_is_pd,
-                    rho        = _pu_rho,
-                    Pv         = _pu_Pv,
-                    P_bara     = _pu_P_bara,
-                    hq_coeffs  = _pu_hq_coeffs  if not _pu_is_pd else None,
-                    eta_params = _pu_eta_params  if (not _pu_is_pd and _pu_hq_coeffs) else None,
-                    n_ratio    = _pu_n_ratio     if not _pu_is_pd else 1.0,
-                    Qbep_used  = _pu_Qbep_used,
-                    H_static   = _pu_H_static,
-                    k_fric     = _pu_k_fric,
-                    eta_motor  = _pu_eta_motor   if not _pu_is_pd else 93.0,
-                    z_suc      = _pu_z_suc       if not _pu_is_pd else 0.0,
-                    h_suc_loss = _pu_h_suc_loss  if not _pu_is_pd else 0.0,
-                    NPSH_R     = _pu_NPSH_R      if not _pu_is_pd else 0.0,
-                    dp_method  = _pu_dp_method   if not _pu_is_pd else 1,
-                    P_suc_max  = _pu_P_suc_max   if not _pu_is_pd else _pu_P_bara,
-                    PSV_set    = _pu_PSV_set,
-                    mat_group  = _pu_mat_group,
-                    pd_acc_pct = _pu_pd_acc_pct  if _pu_is_pd else 10.0,
+            _pu_show = st.session_state.get("pu_show", False)
+            if not _pu_show:
+                st.info("Set inputs and press **Calculate**.")
+            else:
+                # ── Pump computation (pure Python, no Streamlit) ──────────────────
+                _pu_Qbep_used = (
+                    _pu_Qbep
+                    if (not _pu_is_pd and _pu_hq_mode == "3-point parametric")
+                    else (pe.hq_max_flow(_pu_hq_coeffs) * 0.65
+                          if (not _pu_is_pd and _pu_hq_coeffs) else 0.0)
                 )
-            except ValueError as _pu_e:
-                st.warning(str(_pu_e))
-                st.stop()
-            except Exception as _pu_e:
-                st.error(f"Pump calculation error: {_pu_e}")
-                st.stop()
-
-            # ── KPIs ──────────────────────────────────────────────────────────
-            if not _pu_is_pd and _pu["op_ok"]:
-                st.markdown("**OPERATING POINT**")
-                _k1, _k2, _k3, _k4 = st.columns(4)
-                _k1.metric("Flow", f"{_pu['Q_op']:.1f} m³/h")
-                _k2.metric("Head", f"{_pu['H_op']:.1f} m",
-                           delta=f"{_pu['Hop_bar']:.2f} bar", delta_color="off")
-                _k3.metric("η pump", f"{_pu['eta_op']:.1f} %")
-                _k4.metric("P shaft", f"{_pu['P_shaft']:.1f} kW")
-
-                _k5, _k6, _k7, _k8 = st.columns(4)
-                _k5.metric("P motor (input)", f"{_pu['P_motor']:.1f} kW",
-                           help=f"Next IEC frame: {_pu['P_frame']:.0f} kW")
-                _k6.metric("NPSH available", f"{_pu['NPSH_A']:.2f} m")
-                _k7.metric("NPSH required", f"{_pu_NPSH_R:.2f} m")
-                _npsh_delta = f"{_pu['npsh_margin']:+.2f} m  ({_pu['npsh_status']})"
-                _k8.metric("NPSH margin", f"{_pu['npsh_margin']:.2f} m",
-                           delta=_npsh_delta,
-                           delta_color="normal" if _pu["npsh_color"] == "green"
-                                       else ("off" if _pu["npsh_color"] == "orange" else "inverse"))
-
-                # BEP deviation warning
-                if _pu["Q_op"] < 0.70 * _pu_Qbep_used:
-                    st.warning(
-                        f"Operating flow ({_pu['Q_op']:.1f} m³/h) is below 70 % of BEP "
-                        f"({_pu_Qbep_used:.1f} m³/h). Risk of internal recirculation, "
-                        "vibration, and premature seal/bearing wear."
+                try:
+                    _pu = compute_pump_case(
+                        is_pd      = _pu_is_pd,
+                        rho        = _pu_rho,
+                        Pv         = _pu_Pv,
+                        P_bara     = _pu_P_bara,
+                        hq_coeffs  = _pu_hq_coeffs  if not _pu_is_pd else None,
+                        eta_params = _pu_eta_params  if (not _pu_is_pd and _pu_hq_coeffs) else None,
+                        n_ratio    = _pu_n_ratio     if not _pu_is_pd else 1.0,
+                        Qbep_used  = _pu_Qbep_used,
+                        H_static   = _pu_H_static,
+                        k_fric     = _pu_k_fric,
+                        eta_motor  = _pu_eta_motor   if not _pu_is_pd else 93.0,
+                        z_suc      = _pu_z_suc       if not _pu_is_pd else 0.0,
+                        h_suc_loss = _pu_h_suc_loss  if not _pu_is_pd else 0.0,
+                        NPSH_R     = _pu_NPSH_R      if not _pu_is_pd else 0.0,
+                        dp_method  = _pu_dp_method   if not _pu_is_pd else 1,
+                        P_suc_max  = _pu_P_suc_max   if not _pu_is_pd else _pu_P_bara,
+                        PSV_set    = _pu_PSV_set,
+                        mat_group  = _pu_mat_group,
+                        pd_acc_pct = _pu_pd_acc_pct  if _pu_is_pd else 10.0,
                     )
-                elif _pu["Q_op"] > 1.10 * _pu_Qbep_used:
-                    st.warning(
-                        f"Operating flow ({_pu['Q_op']:.1f} m³/h) exceeds 110 % of BEP. "
-                        "Risk of cavitation, motor overload, and reduced seal life."
+                except ValueError as _pu_e:
+                    st.warning(str(_pu_e))
+                    st.stop()
+                except Exception as _pu_e:
+                    st.error(f"Pump calculation error: {_pu_e}")
+                    st.stop()
+
+                # ── KPIs ──────────────────────────────────────────────────────────
+                if not _pu_is_pd and _pu["op_ok"]:
+                    st.markdown("**OPERATING POINT**")
+                    _k1, _k2, _k3, _k4 = st.columns(4)
+                    _k1.metric("Flow", f"{_pu['Q_op']:.1f} m³/h")
+                    _k2.metric("Head", f"{_pu['H_op']:.1f} m",
+                               delta=f"{_pu['Hop_bar']:.2f} bar", delta_color="off")
+                    _k3.metric("η pump", f"{_pu['eta_op']:.1f} %")
+                    _k4.metric("P shaft", f"{_pu['P_shaft']:.1f} kW")
+
+                    _k5, _k6, _k7, _k8 = st.columns(4)
+                    _k5.metric("P motor (input)", f"{_pu['P_motor']:.1f} kW",
+                               help=f"Next IEC frame: {_pu['P_frame']:.0f} kW")
+                    _k6.metric("NPSH available", f"{_pu['NPSH_A']:.2f} m")
+                    _k7.metric("NPSH required", f"{_pu_NPSH_R:.2f} m")
+                    _npsh_delta = f"{_pu['npsh_margin']:+.2f} m  ({_pu['npsh_status']})"
+                    _k8.metric("NPSH margin", f"{_pu['npsh_margin']:.2f} m",
+                               delta=_npsh_delta,
+                               delta_color="normal" if _pu["npsh_color"] == "green"
+                                           else ("off" if _pu["npsh_color"] == "orange" else "inverse"))
+
+                    # BEP deviation warning
+                    if _pu["Q_op"] < 0.70 * _pu_Qbep_used:
+                        st.warning(
+                            f"Operating flow ({_pu['Q_op']:.1f} m³/h) is below 70 % of BEP "
+                            f"({_pu_Qbep_used:.1f} m³/h). Risk of internal recirculation, "
+                            "vibration, and premature seal/bearing wear."
+                        )
+                    elif _pu["Q_op"] > 1.10 * _pu_Qbep_used:
+                        st.warning(
+                            f"Operating flow ({_pu['Q_op']:.1f} m³/h) exceeds 110 % of BEP. "
+                            "Risk of cavitation, motor overload, and reduced seal life."
+                        )
+
+                    st.divider()
+
+                    # ── H-Q + System curve chart ──────────────────────────────────
+                    st.markdown("**PUMP & SYSTEM CURVES**")
+                    _fig_hq = go.Figure()
+                    _fig_hq.add_trace(go.Scatter(
+                        x=_pu["Q_plot"], y=_pu["H_plot"],
+                        name="Pump H-Q", line=dict(color="#2563EB", width=2.5),
+                    ))
+                    _fig_hq.add_trace(go.Scatter(
+                        x=_pu["Q_plot"], y=_pu["Hs_plot"],
+                        name="System curve", line=dict(color="#D97706", width=2.5, dash="dash"),
+                    ))
+                    _fig_hq.add_trace(go.Scatter(
+                        x=[_pu["Q_op"]], y=[_pu["H_op"]],
+                        name="Operating point",
+                        mode="markers",
+                        marker=dict(size=12, color="#16A34A", symbol="circle",
+                                    line=dict(color="white", width=2)),
+                    ))
+                    _pu_Hbep_on_curve = pe.eval_hq(_pu_hq_coeffs, _pu_Qbep_used)
+                    _fig_hq.add_trace(go.Scatter(
+                        x=[_pu_Qbep_used], y=[_pu_Hbep_on_curve],
+                        name="BEP",
+                        mode="markers",
+                        marker=dict(size=10, color="#7C3AED", symbol="diamond",
+                                    line=dict(color="white", width=2)),
+                    ))
+                    _fig_hq.update_layout(
+                        xaxis_title="Flow (m³/h)", yaxis_title="Head (m)",
+                        height=300, margin=dict(l=10, r=10, t=10, b=10),
+                        legend=dict(orientation="h", y=-0.25),
+                    )
+                    st.plotly_chart(_fig_hq, use_container_width=True)
+
+                    # η-Q chart
+                    _fig_eta = go.Figure()
+                    _fig_eta.add_trace(go.Scatter(
+                        x=_pu["Q_plot"], y=_pu["eta_plot"],
+                        name="Efficiency", line=dict(color="#7C3AED", width=2.5),
+                        fill="tozeroy", fillcolor="rgba(124,58,237,0.08)",
+                    ))
+                    _fig_eta.add_vline(x=_pu["Q_op"], line=dict(color="#16A34A", dash="dot", width=1.5),
+                                       annotation_text=f"Q_op={_pu['Q_op']:.1f}", annotation_position="top right")
+                    _fig_eta.update_layout(
+                        xaxis_title="Flow (m³/h)", yaxis_title="Efficiency (%)",
+                        yaxis_range=[0, 100],
+                        height=200, margin=dict(l=10, r=10, t=10, b=10),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(_fig_eta, use_container_width=True)
+
+                    st.divider()
+
+                # ── Design pressure results ───────────────────────────────────────
+                st.markdown("**DESIGN PRESSURE — DOWNSTREAM PIPING**")
+                if not _pu_is_pd and _pu_hq_coeffs:
+                    st.caption(
+                        f"Shut-off head (at {'max VSD' if _pu_vsd else 'rated'} speed): "
+                        f"**{_pu['H0_max']:.1f} m**  =  **{_pu['H0_bar']:.2f} bar**  "
+                        f"(ρ = {_pu_rho:.0f} kg/m³)"
+                    )
+                _dp1, _dp2, _dp3 = st.columns(3)
+                _dp1.metric("P design", f"{_pu['P_design_bara']:.2f} bara")
+                _dp2.metric("P design", f"{_pu['P_design_barg']:.2f} barg")
+                _dp3.metric("ANSI class", _pu["ansi"]["class_label"],
+                            delta=f"Rated {_pu['ansi']['rated_barg']:.1f} barg",
+                            delta_color="normal" if _pu["ansi"]["adequate"] else "inverse")
+
+                if not _pu["ansi"]["adequate"]:
+                    st.error(
+                        f"Design pressure ({_pu['P_design_barg']:.2f} barg) exceeds the maximum "
+                        f"ANSI 2500 rating ({_pu['ansi']['rated_barg']:.1f} barg) for the selected "
+                        "material group. Review design basis or use a higher-pressure standard."
                     )
 
+                st.caption(_pu["dp_res"]["notes"])
+
+                # ── ANSI class table ──────────────────────────────────────────────
+                with st.expander("ANSI B16.5 pressure class ratings — all classes"):
+                    _ansi_df = pd.DataFrame(_pu["ansi"]["all_classes"])
+                    st.dataframe(_ansi_df, hide_index=True, use_container_width=True)
+
+                # ── Design pressure method comparison table ────────────────────────
+                if not _pu_is_pd:
+                    with st.expander("Design pressure method comparison"):
+                        st.markdown(
+                            "All six methods evaluated at current inputs. "
+                            "Methods 4–6 require a PSV on the pump discharge."
+                        )
+                        _cmp_rows = []
+                        for _row in _pu["method_comparison"]:
+                            _sel = " ◄ selected" if _row["#"] == _pu_dp_method else ""
+                            _p_val = _row["P_design_barg"]
+                            _cmp_rows.append({
+                                "#":               _row["#"],
+                                "Method":          _row["method_label"],
+                                "P design (barg)": _p_val if _p_val is not None else "—  (PSV set required)",
+                                "ANSI class":      (_row["ansi_label"] + _sel) if _p_val is not None else "—",
+                            })
+                        st.dataframe(
+                            pd.DataFrame(_cmp_rows),
+                            hide_index=True, use_container_width=True,
+                            column_config={"P design (barg)": st.column_config.NumberColumn(format="%.2f")},
+                        )
+
+                # ── Word export ───────────────────────────────────────────────────
                 st.divider()
-
-                # ── H-Q + System curve chart ──────────────────────────────────
-                st.markdown("**PUMP & SYSTEM CURVES**")
-                _fig_hq = go.Figure()
-                _fig_hq.add_trace(go.Scatter(
-                    x=_pu["Q_plot"], y=_pu["H_plot"],
-                    name="Pump H-Q", line=dict(color="#2563EB", width=2.5),
-                ))
-                _fig_hq.add_trace(go.Scatter(
-                    x=_pu["Q_plot"], y=_pu["Hs_plot"],
-                    name="System curve", line=dict(color="#D97706", width=2.5, dash="dash"),
-                ))
-                _fig_hq.add_trace(go.Scatter(
-                    x=[_pu["Q_op"]], y=[_pu["H_op"]],
-                    name="Operating point",
-                    mode="markers",
-                    marker=dict(size=12, color="#16A34A", symbol="circle",
-                                line=dict(color="white", width=2)),
-                ))
-                _pu_Hbep_on_curve = pe.eval_hq(_pu_hq_coeffs, _pu_Qbep_used)
-                _fig_hq.add_trace(go.Scatter(
-                    x=[_pu_Qbep_used], y=[_pu_Hbep_on_curve],
-                    name="BEP",
-                    mode="markers",
-                    marker=dict(size=10, color="#7C3AED", symbol="diamond",
-                                line=dict(color="white", width=2)),
-                ))
-                _fig_hq.update_layout(
-                    xaxis_title="Flow (m³/h)", yaxis_title="Head (m)",
-                    height=300, margin=dict(l=10, r=10, t=10, b=10),
-                    legend=dict(orientation="h", y=-0.25),
+                _pu_fluid_lbl = (
+                    f"KOH {_pu_koh_conc} wt%"
+                    if _pu_fluid_type == "KOH solution"
+                    else str(_pu_fluid_name)
                 )
-                st.plotly_chart(_fig_hq, use_container_width=True)
-
-                # η-Q chart
-                _fig_eta = go.Figure()
-                _fig_eta.add_trace(go.Scatter(
-                    x=_pu["Q_plot"], y=_pu["eta_plot"],
-                    name="Efficiency", line=dict(color="#7C3AED", width=2.5),
-                    fill="tozeroy", fillcolor="rgba(124,58,237,0.08)",
-                ))
-                _fig_eta.add_vline(x=_pu["Q_op"], line=dict(color="#16A34A", dash="dot", width=1.5),
-                                   annotation_text=f"Q_op={_pu['Q_op']:.1f}", annotation_position="top right")
-                _fig_eta.update_layout(
-                    xaxis_title="Flow (m³/h)", yaxis_title="Efficiency (%)",
-                    yaxis_range=[0, 100],
-                    height=200, margin=dict(l=10, r=10, t=10, b=10),
-                    showlegend=False,
-                )
-                st.plotly_chart(_fig_eta, use_container_width=True)
-
-                st.divider()
-
-            # ── Design pressure results ───────────────────────────────────────
-            st.markdown("**DESIGN PRESSURE — DOWNSTREAM PIPING**")
-            if not _pu_is_pd and _pu_hq_coeffs:
-                st.caption(
-                    f"Shut-off head (at {'max VSD' if _pu_vsd else 'rated'} speed): "
-                    f"**{_pu['H0_max']:.1f} m**  =  **{_pu['H0_bar']:.2f} bar**  "
-                    f"(ρ = {_pu_rho:.0f} kg/m³)"
-                )
-            _dp1, _dp2, _dp3 = st.columns(3)
-            _dp1.metric("P design", f"{_pu['P_design_bara']:.2f} bara")
-            _dp2.metric("P design", f"{_pu['P_design_barg']:.2f} barg")
-            _dp3.metric("ANSI class", _pu["ansi"]["class_label"],
-                        delta=f"Rated {_pu['ansi']['rated_barg']:.1f} barg",
-                        delta_color="normal" if _pu["ansi"]["adequate"] else "inverse")
-
-            if not _pu["ansi"]["adequate"]:
-                st.error(
-                    f"Design pressure ({_pu['P_design_barg']:.2f} barg) exceeds the maximum "
-                    f"ANSI 2500 rating ({_pu['ansi']['rated_barg']:.1f} barg) for the selected "
-                    "material group. Review design basis or use a higher-pressure standard."
-                )
-
-            st.caption(_pu["dp_res"]["notes"])
-
-            # ── ANSI class table ──────────────────────────────────────────────
-            with st.expander("ANSI B16.5 pressure class ratings — all classes"):
-                _ansi_df = pd.DataFrame(_pu["ansi"]["all_classes"])
-                st.dataframe(_ansi_df, hide_index=True, use_container_width=True)
-
-            # ── Design pressure method comparison table ────────────────────────
-            if not _pu_is_pd:
-                with st.expander("Design pressure method comparison"):
-                    st.markdown(
-                        "All six methods evaluated at current inputs. "
-                        "Methods 4–6 require a PSV on the pump discharge."
-                    )
-                    _cmp_rows = []
-                    for _row in _pu["method_comparison"]:
-                        _sel = " ◄ selected" if _row["#"] == _pu_dp_method else ""
-                        _p_val = _row["P_design_barg"]
-                        _cmp_rows.append({
-                            "#":               _row["#"],
-                            "Method":          _row["method_label"],
-                            "P design (barg)": _p_val if _p_val is not None else "—  (PSV set required)",
-                            "ANSI class":      (_row["ansi_label"] + _sel) if _p_val is not None else "—",
-                        })
-                    st.dataframe(
-                        pd.DataFrame(_cmp_rows),
-                        hide_index=True, use_container_width=True,
-                        column_config={"P design (barg)": st.column_config.NumberColumn(format="%.2f")},
-                    )
-
-            # ── Word export ───────────────────────────────────────────────────
-            st.divider()
-            _pu_fluid_lbl = (
-                f"KOH {_pu_koh_conc} wt%"
-                if _pu_fluid_type == "KOH solution"
-                else str(_pu_fluid_name)
-            )
-            _pu_inp = [
-                ("Pump type",          _pu_type),
-                ("Fluid",              _pu_fluid_lbl),
-                ("Temperature",        f"{_pu_T_C:.1f} °C"),
-                ("Suction pressure",   f"{_pu_P_bara:.3f} bara"),
-                ("Density ρ",          f"{_pu_rho:.2f} kg/m³"),
-                ("Vapour pressure Pv", f"{_pu_Pv:.5f} bara"),
-                ("H_static (m)",       f"{_pu_H_static:.2f}"),
-                ("k_fric (m/(m³/h)²)", f"{_pu_k_fric:.6f}"),
-            ]
-            if not _pu_is_pd:
-                _pu_inp += [
-                    ("Motor efficiency",   f"{_pu_eta_motor:.1f} %"),
-                    ("Suction elevation",  f"{_pu_z_suc:.2f} m"),
-                    ("Suction head loss",  f"{_pu_h_suc_loss:.2f} m"),
-                    ("NPSH required",      f"{_pu_NPSH_R:.2f} m"),
-                    ("BEP flow",           f"{_pu_Qbep_used:.2f} m³/h"),
-                    ("Design P method",    f"#{_pu_dp_method}"),
-                    ("Material group",     _pu_mat_group),
+                _pu_inp = [
+                    ("Pump type",          _pu_type),
+                    ("Fluid",              _pu_fluid_lbl),
+                    ("Temperature",        f"{_pu_T_C:.1f} °C"),
+                    ("Suction pressure",   f"{_pu_P_bara:.3f} bara"),
+                    ("Density ρ",          f"{_pu_rho:.2f} kg/m³"),
+                    ("Vapour pressure Pv", f"{_pu_Pv:.5f} bara"),
+                    ("H_static (m)",       f"{_pu_H_static:.2f}"),
+                    ("k_fric (m/(m³/h)²)", f"{_pu_k_fric:.6f}"),
                 ]
-            _pu_res_rows = [
-                ("P design (bara)",    f"{_pu['P_design_bara']:.3f}"),
-                ("P design (barg)",    f"{_pu['P_design_barg']:.3f}"),
-                ("ANSI class",         _pu["ansi"]["class_label"]),
-                ("ANSI rated (barg)",  f"{_pu['ansi']['rated_barg']:.1f}"),
-            ]
-            if not _pu_is_pd and _pu["op_ok"]:
+                if not _pu_is_pd:
+                    _pu_inp += [
+                        ("Motor efficiency",   f"{_pu_eta_motor:.1f} %"),
+                        ("Suction elevation",  f"{_pu_z_suc:.2f} m"),
+                        ("Suction head loss",  f"{_pu_h_suc_loss:.2f} m"),
+                        ("NPSH required",      f"{_pu_NPSH_R:.2f} m"),
+                        ("BEP flow",           f"{_pu_Qbep_used:.2f} m³/h"),
+                        ("Design P method",    f"#{_pu_dp_method}"),
+                        ("Material group",     _pu_mat_group),
+                    ]
                 _pu_res_rows = [
-                    ("Operating flow Q",   f"{_pu['Q_op']:.2f} m³/h"),
-                    ("Operating head H",   f"{_pu['H_op']:.2f} m  ({_pu['Hop_bar']:.3f} bar)"),
-                    ("Pump efficiency η",  f"{_pu['eta_op']:.1f} %"),
-                    ("Shaft power",        f"{_pu['P_shaft']:.2f} kW"),
-                    ("Motor power (input)", f"{_pu['P_motor']:.2f} kW"),
-                    ("NPSH available",     f"{_pu['NPSH_A']:.3f} m"),
-                    ("NPSH required",      f"{_pu_NPSH_R:.2f} m"),
-                    ("NPSH margin",        f"{_pu['npsh_margin']:+.3f} m  ({_pu['npsh_status']})"),
-                ] + _pu_res_rows
-            _pu_ansi_data = [
-                [r["Class"], r["Rated (barg)"], r["Adequate"]]
-                for r in _pu["ansi"]["all_classes"]
-            ]
-            _pu_rpt = report_generator.generate_calculator_report(
-                tool_name="Pump",
-                subtitle=f"{_pu_type}  ·  {_pu_fluid_lbl}  ·  P_design = {_pu['P_design_barg']:.2f} barg",
-                method_text=(
-                    "Centrifugal pump: H-Q curve fitted to 3-point or tabular data "
-                    "(polynomial H = a + b·Q + c·Q²). Operating point by intersection of "
-                    "the pump curve and the system curve (H_static + k_fric·Q²). "
-                    "Efficiency η by parabolic fit. Shaft power = ρ·g·Q·H/η. "
-                    "NPSH available = (P_suc − Pv)/(ρg) + z_suc − h_suc_loss. "
-                    "Design pressure per selected API 610 / NORSOK method; ANSI B16.5 "
-                    "class from the design pressure and material group."
-                    if not _pu_is_pd else
-                    "Positive displacement pump: design pressure = suction pressure + "
-                    "differential pressure (accumulation margin applied)."
-                ),
-                inputs_rows=_pu_inp,
-                results_rows=_pu_res_rows,
-                extra_tables=[{
-                    "title": "ANSI B16.5 Pressure Class Ratings",
-                    "headers": ["Class", "Rated (barg)", "Adequate"],
-                    "data": _pu_ansi_data,
-                    "col_widths": [1.2, 1.5, 0.9],
-                }],
-                fig=_fig_hq if (not _pu_is_pd and _pu["op_ok"]) else None,
-                fig_caption_text="Pump H-Q curve and system curve with operating point.",
-                fig_height=330,
-            )
-            st.download_button(
-                "Export Word (.docx)",
-                _pu_rpt,
-                file_name=f"pump_{_pu_type.split()[0].lower()}_{_pu_fluid_lbl.replace(' ','_')}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key="pu_dl",
-            )
+                    ("P design (bara)",    f"{_pu['P_design_bara']:.3f}"),
+                    ("P design (barg)",    f"{_pu['P_design_barg']:.3f}"),
+                    ("ANSI class",         _pu["ansi"]["class_label"]),
+                    ("ANSI rated (barg)",  f"{_pu['ansi']['rated_barg']:.1f}"),
+                ]
+                if not _pu_is_pd and _pu["op_ok"]:
+                    _pu_res_rows = [
+                        ("Operating flow Q",   f"{_pu['Q_op']:.2f} m³/h"),
+                        ("Operating head H",   f"{_pu['H_op']:.2f} m  ({_pu['Hop_bar']:.3f} bar)"),
+                        ("Pump efficiency η",  f"{_pu['eta_op']:.1f} %"),
+                        ("Shaft power",        f"{_pu['P_shaft']:.2f} kW"),
+                        ("Motor power (input)", f"{_pu['P_motor']:.2f} kW"),
+                        ("NPSH available",     f"{_pu['NPSH_A']:.3f} m"),
+                        ("NPSH required",      f"{_pu_NPSH_R:.2f} m"),
+                        ("NPSH margin",        f"{_pu['npsh_margin']:+.3f} m  ({_pu['npsh_status']})"),
+                    ] + _pu_res_rows
+                _pu_ansi_data = [
+                    [r["Class"], r["Rated (barg)"], r["Adequate"]]
+                    for r in _pu["ansi"]["all_classes"]
+                ]
+                _pu_rpt = report_generator.generate_calculator_report(
+                    tool_name="Pump",
+                    subtitle=f"{_pu_type}  ·  {_pu_fluid_lbl}  ·  P_design = {_pu['P_design_barg']:.2f} barg",
+                    method_text=(
+                        "Centrifugal pump: H-Q curve fitted to 3-point or tabular data "
+                        "(polynomial H = a + b·Q + c·Q²). Operating point by intersection of "
+                        "the pump curve and the system curve (H_static + k_fric·Q²). "
+                        "Efficiency η by parabolic fit. Shaft power = ρ·g·Q·H/η. "
+                        "NPSH available = (P_suc − Pv)/(ρg) + z_suc − h_suc_loss. "
+                        "Design pressure per selected API 610 / NORSOK method; ANSI B16.5 "
+                        "class from the design pressure and material group."
+                        if not _pu_is_pd else
+                        "Positive displacement pump: design pressure = suction pressure + "
+                        "differential pressure (accumulation margin applied)."
+                    ),
+                    inputs_rows=_pu_inp,
+                    results_rows=_pu_res_rows,
+                    extra_tables=[{
+                        "title": "ANSI B16.5 Pressure Class Ratings",
+                        "headers": ["Class", "Rated (barg)", "Adequate"],
+                        "data": _pu_ansi_data,
+                        "col_widths": [1.2, 1.5, 0.9],
+                    }],
+                    fig=_fig_hq if (not _pu_is_pd and _pu["op_ok"]) else None,
+                    fig_caption_text="Pump H-Q curve and system curve with operating point.",
+                    fig_height=330,
+                )
+                st.download_button(
+                    "Export Word (.docx)",
+                    _pu_rpt,
+                    file_name=f"pump_{_pu_type.split()[0].lower()}_{_pu_fluid_lbl.replace(' ','_')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="pu_dl",
+                )
 
     # =========================================================================
     # Tab: Line Size
@@ -7190,246 +7221,253 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                 min_value=0.0, step=5.0, key="ls_dp_max",
             )
 
+            _ls_btn = st.button("Calculate", key="ls_run", type="primary", use_container_width=True)
+            if _ls_btn:
+                st.session_state["ls_show"] = True
+
         # ── RIGHT COLUMN — RESULTS ────────────────────────────────────────────
         with _ls_c2:
-
-            _ls_eps    = engine.MATERIAL_ROUGHNESS.get(_ls_mat, 1.5e-5)
-            _ls_Q_m3s  = _ls_Q_m3h / 3600.0
-            _ls_dn_i   = _ls_dn_opts.index(_ls_dn_min)
-            _ls_dn_j   = _ls_dn_opts.index(_ls_dn_max)
-            _ls_dns    = _ls_dn_opts[_ls_dn_i: _ls_dn_j + 1]
-
-            _ls_rows         = []
-            _ls_recommended  = None
-
-            for _dn in _ls_dns:
-                _pndb = engine.PIPE_DATABASE.get(_dn, {})
-                if _ls_pn not in _pndb:
-                    continue
-                _D   = _pndb[_ls_pn]            # bore in metres
-                _A   = _ls_math.pi / 4.0 * _D ** 2
-                _v   = _ls_Q_m3s / _A
-                _Re  = _ls_rho * _v * _D / max(_ls_mu, 1e-12)
-                _eD  = _ls_eps / _D
-                _f   = churchill_f(_Re, _eD)
-                _dp_pa_m     = _f * (_ls_rho * _v ** 2 / 2.0) / _D
-                _dp_kpa_100m = _dp_pa_m * 100.0 / 1000.0
-
-                _regime = ("Laminar" if _Re < 2300
-                           else ("Transitional" if _Re < 4000 else "Turbulent"))
-                _v_ok  = _ls_v_min <= _v <= _ls_v_max
-                _dp_ok = _dp_kpa_100m <= _ls_dp_max
-                _ok    = _v_ok and _dp_ok
-
-                if _ok and _ls_recommended is None:
-                    _ls_recommended = _dn
-
-                _ls_rows.append({
-                    "DN":               _dn,
-                    "ID (mm)":          round(_D * 1000, 1),
-                    "v (m/s)":          round(_v, 3),
-                    "Re":               int(_Re),
-                    "Regime":           _regime,
-                    "ΔP/100m (kPa)":    round(_dp_kpa_100m, 2),
-                    "v ✓":              "✓" if _v_ok  else "✗",
-                    "ΔP ✓":             "✓" if _dp_ok else "✗",
-                    "Adequate":         "✓" if _ok    else "—",
-                })
-
-            if not _ls_rows:
-                st.warning("No DN entries found for the selected PN rating in this range.")
+            _ls_show = st.session_state.get("ls_show", False)
+            if not _ls_show:
+                st.info("Set inputs and press **Calculate**.")
             else:
-                if _ls_recommended:
-                    st.success(
-                        f"**Recommended: {_ls_recommended}** — "
-                        f"smallest DN meeting both velocity and ΔP/100m criteria."
-                    )
+                _ls_eps    = engine.MATERIAL_ROUGHNESS.get(_ls_mat, 1.5e-5)
+                _ls_Q_m3s  = _ls_Q_m3h / 3600.0
+                _ls_dn_i   = _ls_dn_opts.index(_ls_dn_min)
+                _ls_dn_j   = _ls_dn_opts.index(_ls_dn_max)
+                _ls_dns    = _ls_dn_opts[_ls_dn_i: _ls_dn_j + 1]
+
+                _ls_rows         = []
+                _ls_recommended  = None
+
+                for _dn in _ls_dns:
+                    _pndb = engine.PIPE_DATABASE.get(_dn, {})
+                    if _ls_pn not in _pndb:
+                        continue
+                    _D   = _pndb[_ls_pn]            # bore in metres
+                    _A   = _ls_math.pi / 4.0 * _D ** 2
+                    _v   = _ls_Q_m3s / _A
+                    _Re  = _ls_rho * _v * _D / max(_ls_mu, 1e-12)
+                    _eD  = _ls_eps / _D
+                    _f   = churchill_f(_Re, _eD)
+                    _dp_pa_m     = _f * (_ls_rho * _v ** 2 / 2.0) / _D
+                    _dp_kpa_100m = _dp_pa_m * 100.0 / 1000.0
+
+                    _regime = ("Laminar" if _Re < 2300
+                               else ("Transitional" if _Re < 4000 else "Turbulent"))
+                    _v_ok  = _ls_v_min <= _v <= _ls_v_max
+                    _dp_ok = _dp_kpa_100m <= _ls_dp_max
+                    _ok    = _v_ok and _dp_ok
+
+                    if _ok and _ls_recommended is None:
+                        _ls_recommended = _dn
+
+                    _ls_rows.append({
+                        "DN":               _dn,
+                        "ID (mm)":          round(_D * 1000, 1),
+                        "v (m/s)":          round(_v, 3),
+                        "Re":               int(_Re),
+                        "Regime":           _regime,
+                        "ΔP/100m (kPa)":    round(_dp_kpa_100m, 2),
+                        "v ✓":              "✓" if _v_ok  else "✗",
+                        "ΔP ✓":             "✓" if _dp_ok else "✗",
+                        "Adequate":         "✓" if _ok    else "—",
+                    })
+
+                if not _ls_rows:
+                    st.warning("No DN entries found for the selected PN rating in this range.")
                 else:
-                    st.warning(
-                        "No DN in the selected range meets all criteria. "
-                        "Try a larger DN range or relax the criteria."
+                    if _ls_recommended:
+                        st.success(
+                            f"**Recommended: {_ls_recommended}** — "
+                            f"smallest DN meeting both velocity and ΔP/100m criteria."
+                        )
+                    else:
+                        st.warning(
+                            "No DN in the selected range meets all criteria. "
+                            "Try a larger DN range or relax the criteria."
+                        )
+
+                    _ls_df = pd.DataFrame(_ls_rows)
+                    st.dataframe(
+                        _ls_df, hide_index=True, use_container_width=True,
+                        column_config={
+                            "v (m/s)":       st.column_config.NumberColumn(format="%.3f"),
+                            "Re":            st.column_config.NumberColumn(format="%d"),
+                            "ΔP/100m (kPa)": st.column_config.NumberColumn(format="%.2f"),
+                        },
                     )
 
-                _ls_df = pd.DataFrame(_ls_rows)
-                st.dataframe(
-                    _ls_df, hide_index=True, use_container_width=True,
-                    column_config={
-                        "v (m/s)":       st.column_config.NumberColumn(format="%.3f"),
-                        "Re":            st.column_config.NumberColumn(format="%d"),
-                        "ΔP/100m (kPa)": st.column_config.NumberColumn(format="%.2f"),
-                    },
-                )
+                    # ── Velocity and ΔP/100m vs DN chart ──────────────────────────
+                    _ls_dns_plot  = [r["DN"]            for r in _ls_rows]
+                    _ls_v_plot    = [r["v (m/s)"]       for r in _ls_rows]
+                    _ls_dp_plot   = [r["ΔP/100m (kPa)"] for r in _ls_rows]
 
-                # ── Velocity and ΔP/100m vs DN chart ──────────────────────────
-                _ls_dns_plot  = [r["DN"]            for r in _ls_rows]
-                _ls_v_plot    = [r["v (m/s)"]       for r in _ls_rows]
-                _ls_dp_plot   = [r["ΔP/100m (kPa)"] for r in _ls_rows]
+                    _fig_ls = go.Figure()
 
-                _fig_ls = go.Figure()
-
-                # Velocity trace (primary y)
-                _fig_ls.add_trace(go.Scatter(
-                    x=_ls_dns_plot, y=_ls_v_plot, name="Velocity (m/s)",
-                    mode="lines+markers",
-                    line=dict(color="#2563EB", width=2.5),
-                    marker=dict(size=7),
-                    yaxis="y1",
-                ))
-                # Velocity band shading
-                _fig_ls.add_hrect(
-                    y0=_ls_v_min, y1=_ls_v_max,
-                    fillcolor="rgba(37,99,235,0.08)", line_width=0,
-                    annotation_text="v target", annotation_position="top left",
-                    yref="y1",
-                )
-
-                # ΔP/100m trace (secondary y)
-                _fig_ls.add_trace(go.Scatter(
-                    x=_ls_dns_plot, y=_ls_dp_plot, name="ΔP/100m (kPa)",
-                    mode="lines+markers",
-                    line=dict(color="#D97706", width=2.5, dash="dash"),
-                    marker=dict(size=7),
-                    yaxis="y2",
-                ))
-                # ΔP limit line
-                _fig_ls.add_hline(
-                    y=_ls_dp_max, line=dict(color="#D97706", dash="dot", width=1.5),
-                    annotation_text=f"ΔP limit {_ls_dp_max} kPa",
-                    annotation_position="bottom right",
-                    yref="y2",
-                )
-
-                # Recommended DN vertical marker (add_vline doesn't support categorical axes)
-                if _ls_recommended:
-                    _fig_ls.add_shape(
-                        type="line",
-                        x0=_ls_recommended, x1=_ls_recommended,
-                        y0=0, y1=1, yref="paper",
-                        line=dict(color="#16A34A", dash="dot", width=2),
-                    )
-                    _fig_ls.add_annotation(
-                        x=_ls_recommended, y=1.02, yref="paper",
-                        text=f"▼ {_ls_recommended}",
-                        showarrow=False, yanchor="bottom",
-                        font=dict(color="#16A34A", size=12),
+                    # Velocity trace (primary y)
+                    _fig_ls.add_trace(go.Scatter(
+                        x=_ls_dns_plot, y=_ls_v_plot, name="Velocity (m/s)",
+                        mode="lines+markers",
+                        line=dict(color="#2563EB", width=2.5),
+                        marker=dict(size=7),
+                        yaxis="y1",
+                    ))
+                    # Velocity band shading
+                    _fig_ls.add_hrect(
+                        y0=_ls_v_min, y1=_ls_v_max,
+                        fillcolor="rgba(37,99,235,0.08)", line_width=0,
+                        annotation_text="v target", annotation_position="top left",
+                        yref="y1",
                     )
 
-                _fig_ls.update_layout(
-                    xaxis_title="Pipe size",
-                    yaxis=dict(title=dict(text="Velocity (m/s)", font=dict(color="#2563EB"))),
-                    yaxis2=dict(
-                        title=dict(text="ΔP/100m (kPa)", font=dict(color="#D97706")),
-                        overlaying="y", side="right",
-                    ),
-                    legend=dict(orientation="h", y=-0.25),
-                    height=320, margin=dict(l=10, r=10, t=20, b=10),
-                )
-                st.plotly_chart(_fig_ls, use_container_width=True)
+                    # ΔP/100m trace (secondary y)
+                    _fig_ls.add_trace(go.Scatter(
+                        x=_ls_dns_plot, y=_ls_dp_plot, name="ΔP/100m (kPa)",
+                        mode="lines+markers",
+                        line=dict(color="#D97706", width=2.5, dash="dash"),
+                        marker=dict(size=7),
+                        yaxis="y2",
+                    ))
+                    # ΔP limit line
+                    _fig_ls.add_hline(
+                        y=_ls_dp_max, line=dict(color="#D97706", dash="dot", width=1.5),
+                        annotation_text=f"ΔP limit {_ls_dp_max} kPa",
+                        annotation_position="bottom right",
+                        yref="y2",
+                    )
 
-                # ── Export buttons ────────────────────────────────────────────
-                st.divider()
-                _ls_fluid_lbl = (
-                    f"KOH {_ls_koh_c} wt%"
-                    if _ls_phase == "Liquid" and _ls_liq_src == "KOH solution"
-                    else (_ls_cp_fluid if _ls_phase == "Liquid" else _ls_gas)
-                )
-                _ls_criteria_str = (
-                    f"v = {_ls_v_min}–{_ls_v_max} m/s  |  ΔP/100m ≤ {_ls_dp_max} kPa  |  {_ls_preset}"
-                )
-                _ls_inp_rows = [
-                    ("Phase",              _ls_phase),
-                    ("Fluid",              _ls_fluid_lbl),
-                    ("Temperature",        f"{_ls_T:.1f} °C"),
-                    ("Pressure",           f"{_ls_P:.3f} bara"),
-                    ("Density ρ",          f"{_ls_rho:.4f} kg/m³"),
-                    ("Viscosity μ",        f"{_ls_mu*1e6:.2f} μPa·s" if _ls_phase == "Gas"
-                                           else f"{_ls_mu*1e3:.4f} mPa·s"),
-                    ("Flow rate",          f"{_ls_m_kgh:.2f} kg/h  ({_ls_Q_m3h:.4f} m³/h)"),
-                    ("PN rating",          _ls_pn),
-                    ("Material",           _ls_mat),
-                    ("DN range",           f"{_ls_dn_min} – {_ls_dn_max}"),
-                    ("Service preset",     _ls_preset),
-                    ("Min velocity",       f"{_ls_v_min:.2f} m/s"),
-                    ("Max velocity",       f"{_ls_v_max:.2f} m/s"),
-                    ("Max ΔP/100m",        f"{_ls_dp_max:.2f} kPa"),
-                ]
-                _ls_res_rows = [
-                    ("Recommended DN",     _ls_recommended if _ls_recommended else "None in range"),
-                    ("Sizing criteria",    _ls_criteria_str),
-                ]
-                _ls_table_data = [
-                    [r["DN"], str(r["ID (mm)"]), f"{r['v (m/s)']:.3f}",
-                     f"{r['Re']:,}", r["Regime"], f"{r['ΔP/100m (kPa)']:.2f}",
-                     r["v ✓"], r["ΔP ✓"], r["Adequate"]]
-                    for r in _ls_rows
-                ]
-                _ls_exp_c1, _ls_exp_c2 = st.columns(2)
-                with _ls_exp_c1:
-                    _ls_rpt = report_generator.generate_calculator_report(
-                        tool_name="Line Size",
-                        subtitle=f"{_ls_phase}  ·  {_ls_fluid_lbl}  ·  {_ls_Q_m3h:.3f} m³/h",
-                        method_text=(
-                            "Darcy-Weisbach friction pressure drop per 100 m of straight pipe, "
-                            "evaluated for each DN in the selected range. "
-                            "Friction factor from Churchill (1977) covering laminar, transitional, "
-                            "and turbulent regimes. Velocity computed from volumetric flow rate "
-                            "and pipe bore area. The recommended DN is the smallest that meets "
-                            "both the velocity band and the ΔP/100m limit simultaneously."
+                    # Recommended DN vertical marker (add_vline doesn't support categorical axes)
+                    if _ls_recommended:
+                        _fig_ls.add_shape(
+                            type="line",
+                            x0=_ls_recommended, x1=_ls_recommended,
+                            y0=0, y1=1, yref="paper",
+                            line=dict(color="#16A34A", dash="dot", width=2),
+                        )
+                        _fig_ls.add_annotation(
+                            x=_ls_recommended, y=1.02, yref="paper",
+                            text=f"▼ {_ls_recommended}",
+                            showarrow=False, yanchor="bottom",
+                            font=dict(color="#16A34A", size=12),
+                        )
+
+                    _fig_ls.update_layout(
+                        xaxis_title="Pipe size",
+                        yaxis=dict(title=dict(text="Velocity (m/s)", font=dict(color="#2563EB"))),
+                        yaxis2=dict(
+                            title=dict(text="ΔP/100m (kPa)", font=dict(color="#D97706")),
+                            overlaying="y", side="right",
                         ),
-                        inputs_rows=_ls_inp_rows,
-                        results_rows=_ls_res_rows,
-                        extra_tables=[{
-                            "title": "DN Sizing Table",
-                            "headers": ["DN","ID (mm)","v (m/s)","Re","Regime",
-                                        "ΔP/100m (kPa)","v ✓","ΔP ✓","Adequate"],
-                            "data": _ls_table_data,
-                            "col_widths": [0.55, 0.6, 0.65, 0.7, 0.75, 0.85, 0.4, 0.4, 0.55],
-                        }],
-                        fig=_fig_ls,
-                        fig_caption_text="Velocity and ΔP/100m vs pipe size.",
-                        fig_height=340,
+                        legend=dict(orientation="h", y=-0.25),
+                        height=320, margin=dict(l=10, r=10, t=20, b=10),
                     )
-                    st.download_button(
-                        "Export Word (.docx)",
-                        _ls_rpt,
-                        file_name=f"linesize_{_ls_fluid_lbl.replace(' ','_')}_{_ls_pn}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True,
-                        key="ls_dl_w",
+                    st.plotly_chart(_fig_ls, use_container_width=True)
+
+                    # ── Export buttons ────────────────────────────────────────────
+                    st.divider()
+                    _ls_fluid_lbl = (
+                        f"KOH {_ls_koh_c} wt%"
+                        if _ls_phase == "Liquid" and _ls_liq_src == "KOH solution"
+                        else (_ls_cp_fluid if _ls_phase == "Liquid" else _ls_gas)
                     )
-                with _ls_exp_c2:
-                    import io as _ls_io
-                    _ls_xl_buf = _ls_io.BytesIO()
-                    with pd.ExcelWriter(_ls_xl_buf, engine="openpyxl") as _ls_xw:
-                        _ls_info = pd.DataFrame([
-                            ["Phase",        _ls_phase],
-                            ["Fluid",        _ls_fluid_lbl],
-                            ["Temperature",  f"{_ls_T:.1f} °C"],
-                            ["Pressure",     f"{_ls_P:.3f} bara"],
-                            ["Density",      f"{_ls_rho:.4f} kg/m³"],
-                            ["Viscosity",    f"{_ls_mu*1e3:.4f} mPa·s" if _ls_phase == "Liquid"
-                                             else f"{_ls_mu*1e6:.2f} μPa·s"],
-                            ["Flow rate",    f"{_ls_m_kgh:.2f} kg/h"],
-                            ["Flow rate",    f"{_ls_Q_m3h:.4f} m³/h"],
-                            ["PN rating",    _ls_pn],
-                            ["Material",     _ls_mat],
-                            ["Service",      _ls_preset],
-                            ["Min velocity", f"{_ls_v_min:.2f} m/s"],
-                            ["Max velocity", f"{_ls_v_max:.2f} m/s"],
-                            ["Max ΔP/100m",  f"{_ls_dp_max:.2f} kPa"],
-                            ["Recommended",  _ls_recommended or "None"],
-                        ], columns=["Parameter", "Value"])
-                        _ls_info.to_excel(_ls_xw, sheet_name="Inputs", index=False)
-                        pd.DataFrame(_ls_rows).to_excel(
-                            _ls_xw, sheet_name="DN Sizing Table", index=False)
-                    _ls_xl_buf.seek(0)
-                    st.download_button(
-                        "Export Excel (.xlsx)",
-                        _ls_xl_buf,
-                        file_name=f"linesize_{_ls_fluid_lbl.replace(' ','_')}_{_ls_pn}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                        key="ls_dl_x",
+                    _ls_criteria_str = (
+                        f"v = {_ls_v_min}–{_ls_v_max} m/s  |  ΔP/100m ≤ {_ls_dp_max} kPa  |  {_ls_preset}"
                     )
+                    _ls_inp_rows = [
+                        ("Phase",              _ls_phase),
+                        ("Fluid",              _ls_fluid_lbl),
+                        ("Temperature",        f"{_ls_T:.1f} °C"),
+                        ("Pressure",           f"{_ls_P:.3f} bara"),
+                        ("Density ρ",          f"{_ls_rho:.4f} kg/m³"),
+                        ("Viscosity μ",        f"{_ls_mu*1e6:.2f} μPa·s" if _ls_phase == "Gas"
+                                               else f"{_ls_mu*1e3:.4f} mPa·s"),
+                        ("Flow rate",          f"{_ls_m_kgh:.2f} kg/h  ({_ls_Q_m3h:.4f} m³/h)"),
+                        ("PN rating",          _ls_pn),
+                        ("Material",           _ls_mat),
+                        ("DN range",           f"{_ls_dn_min} – {_ls_dn_max}"),
+                        ("Service preset",     _ls_preset),
+                        ("Min velocity",       f"{_ls_v_min:.2f} m/s"),
+                        ("Max velocity",       f"{_ls_v_max:.2f} m/s"),
+                        ("Max ΔP/100m",        f"{_ls_dp_max:.2f} kPa"),
+                    ]
+                    _ls_res_rows = [
+                        ("Recommended DN",     _ls_recommended if _ls_recommended else "None in range"),
+                        ("Sizing criteria",    _ls_criteria_str),
+                    ]
+                    _ls_table_data = [
+                        [r["DN"], str(r["ID (mm)"]), f"{r['v (m/s)']:.3f}",
+                         f"{r['Re']:,}", r["Regime"], f"{r['ΔP/100m (kPa)']:.2f}",
+                         r["v ✓"], r["ΔP ✓"], r["Adequate"]]
+                        for r in _ls_rows
+                    ]
+                    _ls_exp_c1, _ls_exp_c2 = st.columns(2)
+                    with _ls_exp_c1:
+                        _ls_rpt = report_generator.generate_calculator_report(
+                            tool_name="Line Size",
+                            subtitle=f"{_ls_phase}  ·  {_ls_fluid_lbl}  ·  {_ls_Q_m3h:.3f} m³/h",
+                            method_text=(
+                                "Darcy-Weisbach friction pressure drop per 100 m of straight pipe, "
+                                "evaluated for each DN in the selected range. "
+                                "Friction factor from Churchill (1977) covering laminar, transitional, "
+                                "and turbulent regimes. Velocity computed from volumetric flow rate "
+                                "and pipe bore area. The recommended DN is the smallest that meets "
+                                "both the velocity band and the ΔP/100m limit simultaneously."
+                            ),
+                            inputs_rows=_ls_inp_rows,
+                            results_rows=_ls_res_rows,
+                            extra_tables=[{
+                                "title": "DN Sizing Table",
+                                "headers": ["DN","ID (mm)","v (m/s)","Re","Regime",
+                                            "ΔP/100m (kPa)","v ✓","ΔP ✓","Adequate"],
+                                "data": _ls_table_data,
+                                "col_widths": [0.55, 0.6, 0.65, 0.7, 0.75, 0.85, 0.4, 0.4, 0.55],
+                            }],
+                            fig=_fig_ls,
+                            fig_caption_text="Velocity and ΔP/100m vs pipe size.",
+                            fig_height=340,
+                        )
+                        st.download_button(
+                            "Export Word (.docx)",
+                            _ls_rpt,
+                            file_name=f"linesize_{_ls_fluid_lbl.replace(' ','_')}_{_ls_pn}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                            key="ls_dl_w",
+                        )
+                    with _ls_exp_c2:
+                        import io as _ls_io
+                        _ls_xl_buf = _ls_io.BytesIO()
+                        with pd.ExcelWriter(_ls_xl_buf, engine="openpyxl") as _ls_xw:
+                            _ls_info = pd.DataFrame([
+                                ["Phase",        _ls_phase],
+                                ["Fluid",        _ls_fluid_lbl],
+                                ["Temperature",  f"{_ls_T:.1f} °C"],
+                                ["Pressure",     f"{_ls_P:.3f} bara"],
+                                ["Density",      f"{_ls_rho:.4f} kg/m³"],
+                                ["Viscosity",    f"{_ls_mu*1e3:.4f} mPa·s" if _ls_phase == "Liquid"
+                                                 else f"{_ls_mu*1e6:.2f} μPa·s"],
+                                ["Flow rate",    f"{_ls_m_kgh:.2f} kg/h"],
+                                ["Flow rate",    f"{_ls_Q_m3h:.4f} m³/h"],
+                                ["PN rating",    _ls_pn],
+                                ["Material",     _ls_mat],
+                                ["Service",      _ls_preset],
+                                ["Min velocity", f"{_ls_v_min:.2f} m/s"],
+                                ["Max velocity", f"{_ls_v_max:.2f} m/s"],
+                                ["Max ΔP/100m",  f"{_ls_dp_max:.2f} kPa"],
+                                ["Recommended",  _ls_recommended or "None"],
+                            ], columns=["Parameter", "Value"])
+                            _ls_info.to_excel(_ls_xw, sheet_name="Inputs", index=False)
+                            pd.DataFrame(_ls_rows).to_excel(
+                                _ls_xw, sheet_name="DN Sizing Table", index=False)
+                        _ls_xl_buf.seek(0)
+                        st.download_button(
+                            "Export Excel (.xlsx)",
+                            _ls_xl_buf,
+                            file_name=f"linesize_{_ls_fluid_lbl.replace(' ','_')}_{_ls_pn}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            key="ls_dl_x",
+                        )
 
 
