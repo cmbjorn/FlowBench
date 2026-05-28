@@ -87,6 +87,9 @@ def compute_pipeline_case(
     """
     current_P   = P_bara * 1e5
     current_T_C = T_C if T_C is not None else 25.0
+    # Track current VLE specific enthalpy so heat exchangers properly advance
+    # the quality (isenthalpic flash at each downstream pressure).
+    _vle_h = vle_h_inlet   # updated when an HX segment adds/removes heat
 
     grid_records         = []
     stream_records       = []
@@ -106,7 +109,7 @@ def compute_pipeline_case(
         if is_vle:
             return engine.calculate_vle_properties(
                 vle_fluid_id, max(1000.0, current_P) / 1e5,
-                vle_x, vle_m_kgs, h_spec=vle_h_inlet)
+                vle_x, vle_m_kgs, h_spec=_vle_h)
         return engine.calculate_two_phase_properties(
             max(1000.0, current_P) / 1e5, current_T_C,
             eff_gas_flows, eff_liq_type, eff_q_lye,
@@ -229,10 +232,17 @@ def compute_pipeline_case(
             _delta_T  = 0.0
             if _hx_duty != 0.0:
                 _hp = _props_at_current()
-                _Cp = engine.estimate_mixture_cp(
-                    _hp, current_T_C + 273.15, max(1000.0, current_P))
-                if _hp["m_total_kgs"] > 0 and _Cp > 0:
-                    _delta_T = (_hx_duty * 1000.0) / (_hp["m_total_kgs"] * _Cp)
+                if is_vle:
+                    # VLE mode: advance enthalpy directly so downstream flash
+                    # gives the correct quality (no Cp estimation needed).
+                    if vle_m_kgs and vle_m_kgs > 0:
+                        _vle_h = (_vle_h or 0.0) + (_hx_duty * 1000.0) / vle_m_kgs
+                        _delta_T = 0.0  # VLE T is set by saturation; display only
+                else:
+                    _Cp = engine.estimate_mixture_cp(
+                        _hp, current_T_C + 273.15, max(1000.0, current_P))
+                    if _hp["m_total_kgs"] > 0 and _Cp > 0:
+                        _delta_T = (_hx_duty * 1000.0) / (_hp["m_total_kgs"] * _Cp)
             current_T_C += _delta_T
             _hx_sign = f"+{_hx_duty:.1f}" if _hx_duty >= 0 else f"{_hx_duty:.1f}"
             grid_records.append(SegmentRow(
@@ -272,7 +282,7 @@ def compute_pipeline_case(
         if is_vle:
             props_seg = engine.calculate_vle_properties(
                 vle_fluid_id, current_P / 1e5, vle_x, vle_m_kgs,
-                h_spec=vle_h_inlet)
+                h_spec=_vle_h)
         else:
             props_seg = engine.calculate_two_phase_properties(
                 current_P / 1e5, current_T_C,

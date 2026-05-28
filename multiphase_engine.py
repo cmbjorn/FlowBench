@@ -765,6 +765,15 @@ def calculate_two_phase_properties(
             P_sat_H2O = _as_w.p()
         except Exception:
             P_sat_H2O = 0.1 * P_pa
+        # KOH activity correction: water vapour pressure is suppressed by ionic
+        # dissociation (K⁺ + OH⁻).  Use same Raoult/dissociation formula as pump_engine.
+        _koh_wt = (custom_liquid or {}).get("koh_conc_wt")
+        if _koh_wt and _koh_wt > 0:
+            _w   = min(40.0, float(_koh_wt)) / 100.0
+            _nk  = _w / 0.0561           # mol KOH per kg solution
+            _nh  = (1.0 - _w) / 0.018015 # mol H₂O per kg solution
+            _xi  = 2.0 * _nk / (2.0 * _nk + _nh)
+            P_sat_H2O *= max(0.3, 1.0 - _xi)
         if P_sat_H2O >= P_pa:
             P_sat_H2O = P_pa * 0.95
         y_H2O = P_sat_H2O / P_pa
@@ -1245,20 +1254,16 @@ def calculate_segment_pressure_drop(
 
         # ── Frictional component + total ─────────────────────────────────────
         if correlation == "Beggs-Brill":
-            # Use direct Beggs_Brill for total (gravity already included).
+            # Beggs-Brill returns total dP (friction + gravity internally).
             dP_total = Beggs_Brill(
                 m=m, x=x, rhol=rhol, rhog=rhog,
                 mul=mul, mug=mug, sigma=sigma, P=P_pa,
                 D=D_inner, angle=angle_deg, roughness=roughness, L=L_eff,
             )
-            # Friction-only: same correlation at horizontal (angle=0).
-            dP_fric_Pa = Beggs_Brill(
-                m=m, x=x, rhol=rhol, rhog=rhog,
-                mul=mul, mug=mug, sigma=sigma, P=P_pa,
-                D=D_inner, angle=0.0, roughness=roughness, L=L_eff,
-            )
-            # Acceleration is the residual (includes B&B inclination correction).
-            dP_accel_Pa = dP_total - dP_fric_Pa - dP_grav_Pa
+            # Friction component = total minus the separately computed gravity term.
+            # Acceleration is negligible for subsonic adiabatic flow.
+            dP_fric_Pa  = dP_total - dP_grav_Pa
+            dP_accel_Pa = 0.0
         else:
             # Other correlations: two_phase_dP is friction-only by design.
             dP_fric_Pa = two_phase_dP(
