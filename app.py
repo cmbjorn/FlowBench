@@ -1465,12 +1465,50 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
         # ── Slug Flow Dynamics ────────────────────────────────────────────────
         if slug_records:
+            _sf = pd.DataFrame(slug_records)
+            _worst_sev = max(
+                _sf["Severity"],
+                key=lambda s: {"Low": 0, "Moderate": 1, "Severe": 2, "High": 2}.get(s, 0)
+            )
+            _sev_icon = {"Low": "🟢", "Moderate": "🟡", "Severe": "🔴", "High": "🔴"}.get(_worst_sev, "")
             with st.expander(
-                f"Slug Flow Dynamics — {len(slug_records)} slug segment(s) detected",
+                f"Slug Flow Dynamics — {len(slug_records)} slug segment(s)  {_sev_icon} worst: {_worst_sev}",
                 expanded=False,
             ):
-                _sf = pd.DataFrame(slug_records)
-                st.dataframe(_sf.set_index("Seg"), use_container_width=True)
+                # Validity warning
+                if any("extrapolated" in str(r.get("Freq valid?", "")) for r in slug_records):
+                    st.warning(
+                        "⚠ **Frequency result extrapolated** — Gregory-Scott (1969) validated "
+                        "for D ≈ 25–50 mm and Vsl ≤ 1.0 m/s. One or more segments are outside "
+                        "this range; treat frequency values as indicative only."
+                    )
+
+                # Styled dataframe — colour Severity column
+                _SEV_COLS = ["Severity", "Sev (momentum)", "Sev (ΔP%)", "Sev (freq)"]
+                def _slug_colour(val):
+                    return {
+                        "Low":      "background-color:#D1FAE5; color:#065F46",
+                        "Moderate": "background-color:#FEF3C7; color:#92400E",
+                        "Severe":   "background-color:#FEE2E2; color:#991B1B",
+                        "High":     "background-color:#FEE2E2; color:#991B1B",
+                    }.get(val, "")
+
+                _disp_cols = ["DN", "Regime", "Severity",
+                              "f_slug (Hz)", "f_slug (slugs/min)", "Freq valid?",
+                              "V_slug (m/s)", "H_Ls", "L_slug (m)",
+                              "ρV² (kg/m/s²)", "ΔP/P (%)",
+                              "ΔP_pulse (kPa)", "ΔP_design (kPa)",
+                              "F_elbow (N)", "F_design (N)"]
+                _avail = [c for c in _disp_cols if c in _sf.columns]
+                _sev_avail = [c for c in _SEV_COLS if c in _sf.columns]
+                _styled = (
+                    _sf[_avail]
+                    .set_index(_sf["Seg"])
+                    .style
+                    .map(_slug_colour, subset=_sev_avail if _sev_avail else _avail[:1])
+                )
+                st.dataframe(_styled, use_container_width=True)
+
                 st.divider()
                 _sc1, _sc2, _sc3, _sc4 = st.columns(4)
                 _sc1.metric(
@@ -1492,15 +1530,43 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                     f"{_sf['F_elbow (N)'].max():.0f} N",
                     f"Design: {_sf['F_design (N)'].max():.0f} N",
                 )
+
+                # Reference tables
+                with st.expander("Severity Criteria & References", expanded=False):
+                    st.markdown("**A. Momentum Flux — ρ_L × V_slug²** *(NORSOK P-001)*")
+                    st.table(pd.DataFrame([
+                        ["🟢 Low",      "< 50,000",          "Standard supports adequate"],
+                        ["🟡 Moderate", "50,000 – 150,000",  "Dynamic support design recommended"],
+                        ["🔴 Severe",   "> 150,000",         "Structural analysis required"],
+                    ], columns=["Severity", "ρ_L × V_slug² (kg/m/s²)", "Action"]))
+
+                    st.markdown("**B. Pressure Pulse as % of Operating Pressure** *(ASME B31.3)*")
+                    st.table(pd.DataFrame([
+                        ["🟢 Low",      "< 5 %",    "Negligible pressure transient"],
+                        ["🟡 Moderate", "5 – 15 %", "Check flange and valve ratings"],
+                        ["🔴 Severe",   "> 15 %",   "Formal occasional-load check required"],
+                    ], columns=["Severity", "ΔP_pulse / P_operating", "Action"]))
+
+                    st.markdown("**C. Frequency vs Resonance Risk** *(structural dynamics)*")
+                    st.table(pd.DataFrame([
+                        ["🟢 Low",      "< 0.5 Hz",   "Well below structural resonance range"],
+                        ["🟡 Moderate", "0.5 – 2 Hz", "Verify support spacing"],
+                        ["🔴 High",     "> 2 Hz",     "Resonance risk — structural assessment needed"],
+                    ], columns=["Severity", "f_slug", "Action"]))
+
+                    st.caption(
+                        "Momentum flux thresholds adapted from NORSOK P-001 (ρV² < 200,000 kg/m/s² design limit). "
+                        "ΔP% thresholds based on ASME B31.3 occasional-load framework (33% allowable stress increase). "
+                        "Frequency bands based on typical unsupported pipe span natural frequencies (2–10 Hz). "
+                        "Overall Severity = worst of A, B, C."
+                    )
+
                 st.caption(
-                    "**Slug frequency:** Gregory-Scott (1969) — horizontal empirical correlation. "
+                    "**Slug frequency:** Gregory-Scott (1969) — horizontal empirical (validated D ≈ 25–50 mm, Vsl ≤ 1.0 m/s). "
                     "**Slug velocity:** Bendiksen (1984) — generalised for pipe inclination. "
-                    "**Liquid holdup in slug body:** Gregory et al. (1978). "
-                    "**Slug length:** Brill & Mukherjee 30D rule-of-thumb (literature range 16D–60D; "
-                    "use for indicative pipe-support spacing only). "
-                    "**ΔP pulse / elbow force:** momentum balance at 90° bend; design values apply "
-                    "Dynamic Load Factor 2.0 per ASME B31.3 occasional-load provisions. "
-                    "Frequency correlation developed for horizontal flow — treat inclined results as indicative."
+                    "**Liquid holdup:** Gregory et al. (1978). "
+                    "**Slug length:** Brill & Mukherjee 30D rule-of-thumb (literature range 16D–60D). "
+                    "**ΔP pulse / force:** momentum balance at 90° bend, DLF 2.0 per ASME B31.3."
                 )
 
         # ── Valve Sizing Results ──────────────────────────────────────────────

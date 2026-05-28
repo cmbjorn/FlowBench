@@ -647,14 +647,17 @@ def generate_report(
             "assessment; ±30 % accuracy is typical for empirical slug correlations."
         )
         doc.add_paragraph()
+        _SEV_COLOURS = {"Low": "D1FAE5", "Moderate": "FEF3C7",
+                        "Severe": "FEE2E2", "High": "FEE2E2"}
         _SLUG_COLS = [
-            "Seg", "DN", "Regime",
+            "Seg", "DN", "Regime", "Severity",
             "f_slug (Hz)", "f_slug (slugs/min)",
             "V_slug (m/s)", "H_Ls", "L_slug (m)",
             "ΔP_pulse (kPa)", "ΔP_design (kPa)",
             "F_elbow (N)", "F_design (N)",
         ]
-        _SLUG_W = [0.28, 0.38, 0.90, 0.52, 0.72, 0.58, 0.38, 0.55, 0.68, 0.72, 0.58, 0.62]
+        _SLUG_W = [0.28, 0.38, 0.90, 0.68, 0.52, 0.72, 0.58, 0.38, 0.55, 0.68, 0.72, 0.58, 0.62]
+        _sev_col_idx = _SLUG_COLS.index("Severity")
         tbl_slug = doc.add_table(rows=len(slug_records) + 1, cols=len(_SLUG_COLS))
         tbl_slug.style = "Table Grid"
         _style_header(tbl_slug.rows[0], font_size=8)
@@ -668,6 +671,9 @@ def generate_report(
             for j, col in enumerate(_SLUG_COLS):
                 row.cells[j].text = str(rec.get(col, ""))
                 _cell_font(row.cells[j], size_pt=8)
+            sev_val = rec.get("Severity", "")
+            if sev_val in _SEV_COLOURS:
+                _shd(row.cells[_sev_col_idx], _SEV_COLOURS[sev_val])
         _set_col_widths(tbl_slug, _SLUG_W)
         doc.add_paragraph()
         # Summary row
@@ -677,6 +683,10 @@ def generate_report(
         _max_design = max(r["ΔP_design (kPa)"]   for r in slug_records)
         _max_fe     = max(r["F_elbow (N)"]        for r in slug_records)
         _max_fd     = max(r["F_design (N)"]       for r in slug_records)
+        _worst_sev  = next(
+            (s for s in ("Severe", "High", "Moderate", "Low")
+             if any(r.get("Severity") == s for r in slug_records)), "—"
+        )
         _kv_table(doc, [
             ("Max slug frequency",               f"{_max_freq:.3f} Hz"),
             ("Max slug velocity",                f"{_max_vel:.2f} m/s"),
@@ -684,14 +694,47 @@ def generate_report(
             ("Max ΔP design (DLF 2.0)",          f"{_max_design:.2f} kPa"),
             ("Max elbow force",                  f"{_max_fe:.1f} N"),
             ("Max elbow force — design (DLF 2)", f"{_max_fd:.1f} N"),
+            ("Overall severity",                 _worst_sev),
         ])
+        doc.add_paragraph()
+        # Severity criteria reference tables
+        _body("Severity Criteria")
+        _kv_n_table(doc,
+            ["Criterion A — Momentum Flux  ρ_L × V_slug²  (NORSOK P-001)",
+             "Threshold", "Action"],
+            [("Low",      "< 50,000 kg/m/s²",         "Standard supports adequate"),
+             ("Moderate", "50,000 – 150,000 kg/m/s²", "Dynamic support design recommended"),
+             ("Severe",   "> 150,000 kg/m/s²",        "Structural analysis required")],
+            col_widths=[1.0, 1.6, 3.87]
+        )
+        doc.add_paragraph()
+        _kv_n_table(doc,
+            ["Criterion B — ΔP Pulse / P_operating  (ASME B31.3)",
+             "Threshold", "Action"],
+            [("Low",      "< 5 %",    "Negligible pressure transient"),
+             ("Moderate", "5 – 15 %", "Check flange and valve ratings"),
+             ("Severe",   "> 15 %",   "Formal occasional-load check required")],
+            col_widths=[1.0, 1.6, 3.87]
+        )
+        doc.add_paragraph()
+        _kv_n_table(doc,
+            ["Criterion C — Frequency vs Resonance  (structural dynamics)",
+             "Threshold", "Action"],
+            [("Low",      "< 0.5 Hz",   "Well below structural resonance range"),
+             ("Moderate", "0.5 – 2 Hz", "Verify support spacing"),
+             ("High",     "> 2 Hz",     "Resonance risk — structural assessment needed")],
+            col_widths=[1.0, 1.6, 3.87]
+        )
         doc.add_paragraph()
         slug_note = doc.add_paragraph(
             "References: Gregory-Scott (1969) slug frequency (horizontal empirical); "
             "Bendiksen (1984) slug translational velocity; Gregory et al. (1978) slug body "
             "liquid holdup; Brill & Mukherjee 30D slug length rule-of-thumb. "
             "Pressure pulse: momentum balance at 90° bend. "
-            "Design values: ASME B31.3 DLF = 2.0 occasional-load provision."
+            "Design values: ASME B31.3 DLF = 2.0 occasional-load provision. "
+            "Momentum flux thresholds: NORSOK P-001. "
+            "ΔP% thresholds: ASME B31.3 occasional-load framework. "
+            "Overall severity = worst of criteria A, B, C."
         )
         if slug_note.runs:
             slug_note.runs[0].font.size      = Pt(8)
@@ -1120,10 +1163,13 @@ def generate_comparison_report(
         if _pslug.runs:
             _pslug.runs[0].font.size = Pt(9)
         doc.add_paragraph()
-        _SCOLS = ["Seg","DN","Regime","f_slug (Hz)","f_slug (slugs/min)",
+        _SEV_COLOURS_CMP = {"Low": "D1FAE5", "Moderate": "FEF3C7",
+                            "Severe": "FEE2E2", "High": "FEE2E2"}
+        _SCOLS = ["Seg","DN","Regime","Severity","f_slug (Hz)","f_slug (slugs/min)",
                   "V_slug (m/s)","H_Ls","L_slug (m)",
                   "ΔP_pulse (kPa)","ΔP_design (kPa)","F_elbow (N)","F_design (N)"]
-        _SW = [0.28,0.38,0.90,0.52,0.72,0.58,0.38,0.55,0.68,0.72,0.58,0.62]
+        _SW = [0.28,0.38,0.90,0.68,0.52,0.72,0.58,0.38,0.55,0.68,0.72,0.58,0.62]
+        _sev_idx_cmp = _SCOLS.index("Severity")
         def _slug_tbl(doc, records):
             if not records:
                 doc.add_paragraph("No slug segments in this case.")
@@ -1141,6 +1187,9 @@ def generate_comparison_report(
                 for j, col in enumerate(_SCOLS):
                     row.cells[j].text = str(rec.get(col, ""))
                     _cell_font(row.cells[j], size_pt=8)
+                sev_val = rec.get("Severity", "")
+                if sev_val in _SEV_COLOURS_CMP:
+                    _shd(row.cells[_sev_idx_cmp], _SEV_COLOURS_CMP[sev_val])
             _set_col_widths(tbl, _SW)
         doc.add_heading(f"{label_a} — Slug Segments", level=2)
         _slug_tbl(doc, _slug_a)
@@ -2087,10 +2136,13 @@ def generate_combined_report(
         if _pb2.runs:
             _pb2.runs[0].font.size = Pt(9)
         doc.add_paragraph()
-        _SCOLS2 = ["Seg","DN","Regime","f_slug (Hz)","f_slug (slugs/min)",
+        _SEV_COLOURS2 = {"Low": "D1FAE5", "Moderate": "FEF3C7",
+                         "Severe": "FEE2E2", "High": "FEE2E2"}
+        _SCOLS2 = ["Seg","DN","Regime","Severity","f_slug (Hz)","f_slug (slugs/min)",
                    "V_slug (m/s)","H_Ls","L_slug (m)",
                    "ΔP_pulse (kPa)","ΔP_design (kPa)","F_elbow (N)","F_design (N)"]
-        _SW2 = [0.28,0.38,0.90,0.52,0.72,0.58,0.38,0.55,0.68,0.72,0.58,0.62]
+        _SW2 = [0.28,0.38,0.90,0.68,0.52,0.72,0.58,0.38,0.55,0.68,0.72,0.58,0.62]
+        _sev_idx2 = _SCOLS2.index("Severity")
         def _slug_tbl2(doc, records):
             tbl = doc.add_table(rows=len(records)+1, cols=len(_SCOLS2))
             tbl.style = "Table Grid"
@@ -2105,6 +2157,9 @@ def generate_combined_report(
                 for j, col in enumerate(_SCOLS2):
                     row.cells[j].text = str(rec.get(col, ""))
                     _cell_font(row.cells[j], size_pt=8)
+                sev_val = rec.get("Severity", "")
+                if sev_val in _SEV_COLOURS2:
+                    _shd(row.cells[_sev_idx2], _SEV_COLOURS2[sev_val])
             _set_col_widths(tbl, _SW2)
         for _sc, _slbl in _slug_branch_pairs:
             doc.add_heading(_slbl, level=2)

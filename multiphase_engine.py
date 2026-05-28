@@ -1281,7 +1281,7 @@ def calculate_segment_pressure_drop(
 
         _slug_info = None
         if "slug" in regime or "intermittent" in regime:
-            _slug_info = slug_dynamics(Vsl, Vsg, D_inner, rhol, angle_rad)
+            _slug_info = slug_dynamics(Vsl, Vsg, D_inner, rhol, angle_rad, P_pa=props.get("P_pa"))
 
         return {
             "dP_Pa":       dP_total,
@@ -1306,16 +1306,18 @@ def calculate_segment_pressure_drop(
 # 5A. SLUG FLOW DYNAMICS
 # ============================================================================
 
-def slug_dynamics(Vsl: float, Vsg: float, D: float, rho_l: float, theta_rad: float):
+def slug_dynamics(Vsl: float, Vsg: float, D: float, rho_l: float, theta_rad: float,
+                  P_pa: float = None):
     """
     Slug flow characterisation for one pipe segment.
 
     Correlations:
-      Frequency  : Gregory-Scott (1969) — horizontal empirical
+      Frequency  : Gregory-Scott (1969) — horizontal empirical (validated D≈25–50mm, Vsl≤1 m/s)
       Velocity   : Bendiksen (1984) — generalised for inclination
       Holdup     : Gregory et al. (1978) — slug body liquid holdup
       Length     : Brill & Mukherjee 30D rule-of-thumb
       Pulse/force: Momentum balance at 90° elbow, DLF=2 per ASME B31.3
+      Severity   : NORSOK P-001 momentum flux; ASME B31.3 ΔP%; structural resonance frequency
 
     Returns dict of slug properties, or None if inputs are non-physical.
     """
@@ -1327,6 +1329,9 @@ def slug_dynamics(Vsl: float, Vsg: float, D: float, rho_l: float, theta_rad: flo
 
     # Slug frequency — Gregory-Scott (1969)
     slug_freq_hz = 0.0226 * (Vm / D) * (Vsl / math.sqrt(g * D)) ** 1.2
+
+    # Frequency validity flag (outside correlation's validated range)
+    freq_extrapolated = D < 0.025 or Vsl > 1.0
 
     # Slug translational velocity — Bendiksen (1984)
     Vd     = (0.54 * math.cos(theta_rad) + 0.35 * math.sin(theta_rad)) * math.sqrt(g * D)
@@ -1350,9 +1355,45 @@ def slug_dynamics(Vsl: float, Vsg: float, D: float, rho_l: float, theta_rad: flo
     # Dynamic pressure reference (lower bound)
     q_Pa = 0.5 * rho_l * V_slug ** 2
 
+    # ── Severity classification ───────────────────────────────────────────────
+    # A. Momentum flux — NORSOK P-001 (ρV² design limit 200,000 kg/m/s²)
+    momentum_flux = rho_l * V_slug ** 2
+    if momentum_flux < 50_000:
+        sev_momentum = "Low"
+    elif momentum_flux < 150_000:
+        sev_momentum = "Moderate"
+    else:
+        sev_momentum = "Severe"
+
+    # B. ΔP pulse as % of operating pressure — ASME B31.3 occasional-load framework
+    if P_pa and P_pa > 0:
+        dp_pct = dP_pulse_Pa / P_pa * 100.0
+        if dp_pct < 5.0:
+            sev_dp = "Low"
+        elif dp_pct < 15.0:
+            sev_dp = "Moderate"
+        else:
+            sev_dp = "Severe"
+    else:
+        dp_pct = None
+        sev_dp = "—"
+
+    # C. Frequency vs resonance risk (typical pipe natural frequencies 2–10 Hz)
+    if slug_freq_hz < 0.5:
+        sev_freq = "Low"
+    elif slug_freq_hz < 2.0:
+        sev_freq = "Moderate"
+    else:
+        sev_freq = "High"
+
+    # Overall: worst of A, B, C  (High ranks same as Severe)
+    _rank   = {"Low": 0, "Moderate": 1, "Severe": 2, "High": 2, "—": 0}
+    severity = max([sev_momentum, sev_dp, sev_freq], key=lambda s: _rank.get(s, 0))
+
     return {
         "slug_freq_hz":      slug_freq_hz,
         "slug_freq_per_min": slug_freq_hz * 60.0,
+        "freq_extrapolated": freq_extrapolated,
         "V_slug_ms":         V_slug,
         "H_Ls":              H_Ls,
         "L_slug_m":          L_slug_m,
@@ -1361,6 +1402,12 @@ def slug_dynamics(Vsl: float, Vsg: float, D: float, rho_l: float, theta_rad: flo
         "F_elbow_N":         F_elbow_N,
         "F_design_N":        F_design_N,
         "q_dyn_kPa":         q_Pa / 1000.0,
+        "momentum_flux":     momentum_flux,
+        "dp_pct_P":          dp_pct,
+        "sev_momentum":      sev_momentum,
+        "sev_dp":            sev_dp,
+        "sev_freq":          sev_freq,
+        "severity":          severity,
     }
 
 
