@@ -1464,6 +1464,15 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
                        f"V_m/V_e = **{_max_ratio:.2f}** (API RP 14E, limit = 1.0).")
 
         # ── Slug Flow Dynamics ────────────────────────────────────────────────
+        if flow_mode in ("gas_liquid", "vle") and not slug_records:
+            with st.expander("Slug Flow Dynamics — no slug segments detected", expanded=False):
+                st.info(
+                    "No segments were classified as slug or intermittent flow under the "
+                    "current conditions. Slug dynamics are calculated automatically whenever "
+                    "the Beggs-Brill / Taitel-Dukler regime map identifies a segment as slug "
+                    "or intermittent. Adjust flow rates, pipe diameter, or inclination to "
+                    "explore slug conditions."
+                )
         if slug_records:
             _sf = pd.DataFrame(slug_records)
             if "Severity" in _sf.columns:
