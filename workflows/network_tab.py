@@ -708,7 +708,14 @@ def _generate_harp_report(
     doc.add_paragraph()  # small spacer
 
     # ── Configuration table (4-column: param | value | param | value) ─────────
-    _ch_desc = (f"{N}×{k} = {N*k} ch/harp" if k > 1 else f"{N} ch/harp")
+    _n_harps  = 2 if series else 1
+    _total_ch = N * k * _n_harps
+    if k > 1:
+        _ch_desc = (f"{N}×{k} = {N*k} ch/harp"
+                    + (f"  ×2 harps = {_total_ch} total" if series else ""))
+    else:
+        _ch_desc = (f"{N} ch/harp"
+                    + (f"  ×2 harps = {_total_ch} total" if series else ""))
     _harp_count = "2 (series)" if series else "1"
     c_er  = solve_res.edge_results.get("connector", {})
     c_dP  = c_er.get("dP_Pa", None)
