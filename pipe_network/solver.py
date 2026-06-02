@@ -36,6 +36,7 @@ SI throughout: Pa, m, kg/s, °C.
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -413,4 +414,219 @@ def solve_network(
         net=net,
         edge_results=edge_results,
         warnings=warnings,
+    )
+
+
+# ── Hardy-Cross solver ────────────────────────────────────────────────────────
+
+def _hc_propagate_pressures(
+    net: Network, outlet_node_id: str, P_outlet_pa: float
+) -> None:
+    """
+    Assign nodal pressures by BFS integration from the pinned outlet.
+
+    Uses the sign convention: P_from − P_to = e.dP_Pa (always true,
+    regardless of flow direction).  Each node is visited once; pressures
+    in loops are self-consistent only to the extent the loop energy is
+    balanced — call this after Hardy-Cross has converged.
+    """
+    net.node(outlet_node_id).P_pa = P_outlet_pa
+    visited: set[str] = {outlet_node_id}
+    queue: deque[str] = deque([outlet_node_id])
+
+    while queue:
+        nid = queue.popleft()
+        P_nid = net.node(nid).P_pa
+        # Edges pointing INTO nid: P_from = P_to + dP_Pa
+        for e in net.edges_to(nid):
+            if e.from_node not in visited:
+                net.node(e.from_node).P_pa = P_nid + e.dP_Pa
+                visited.add(e.from_node)
+                queue.append(e.from_node)
+        # Edges pointing OUT of nid: P_to = P_from - dP_Pa
+        for e in net.edges_from(nid):
+            if e.to_node not in visited:
+                net.node(e.to_node).P_pa = P_nid - e.dP_Pa
+                visited.add(e.to_node)
+                queue.append(e.to_node)
+
+
+def solve_network_hardy_cross(
+    net: Network,
+    *,
+    gas_flows_kgh: dict[str, float],
+    liquid_type: str,
+    q_lye_m3h: float | None = None,
+    liquid_flows_kgh: dict[str, float] | None = None,
+    custom_gas: dict | None = None,
+    custom_liquid: dict | None = None,
+    inlet_node_id: str,
+    outlet_node_id: str,
+    m_total_kgs: float,
+    P_outlet_pa: float | None = None,
+    max_iter: int = 300,
+    tol_rel: float = 1e-4,
+    relax: float = 0.5,
+) -> SolveResult:
+    """
+    Hardy-Cross loop-balancing solver (Hardy Cross, 1936).
+
+    Iteratively corrects flow in each independent loop until the head
+    imbalance around every loop is below the tolerance.  Converges
+    linearly — typically 20–100 iterations vs 2–5 for GGA.
+
+    Loop correction formula (turbulent, n = 2)
+    ------------------------------------------
+        ΔQ = − Σ(dP_e · dir_e)  /  [ 2 · Σ(|dP_e| / |m_e|) ]
+
+    Boundary conditions
+    -------------------
+    Same as GGA: outlet pressure pinned; inlet carries m_total.
+    Pressures are back-calculated from the outlet after flow convergence.
+    """
+    from multiphase_engine import calculate_two_phase_properties
+
+    warnings_list: list[str] = []
+    P_inlet = net.node(inlet_node_id).P_pa
+
+    if P_outlet_pa is None:
+        P_outlet_pa = 0.95 * P_inlet
+    net.node(outlet_node_id).P_pa = P_outlet_pa
+
+    x_inlet = net.node(inlet_node_id).x_gas
+    _inlet_props = calculate_two_phase_properties(
+        max(P_inlet / 1e5, 0.01), net.node(inlet_node_id).T_C,
+        gas_flows_kgh=gas_flows_kgh, liquid_type=liquid_type,
+        q_lye_m3h=q_lye_m3h or 0.0, custom_gas=custom_gas,
+        custom_liquid=custom_liquid, liquid_flows_kgh=liquid_flows_kgh,
+    )
+    rho_l_cached = float(_inlet_props.get("rho_l", 1000.0))
+
+    _fluid_kw = dict(
+        m_total_kgs=m_total_kgs, x_inlet=x_inlet,
+        gas_flows_kgh=gas_flows_kgh, liquid_type=liquid_type,
+        q_lye_m3h=q_lye_m3h, liquid_flows_kgh=liquid_flows_kgh,
+        custom_gas=custom_gas, custom_liquid=custom_liquid,
+        rho_l_cached=rho_l_cached,
+    )
+
+    # ── Initial flow: route m_total along spanning-tree path inlet→outlet ─────
+    tree_eids, _ = net.spanning_tree_and_cotree(inlet_node_id)
+    _tadj: dict[str, list] = {n.node_id: [] for n in net.all_nodes()}
+    for eid in tree_eids:
+        e = net.edge(eid)
+        _tadj[e.from_node].append((e.to_node, eid, +1))
+        _tadj[e.to_node  ].append((e.from_node, eid, -1))
+
+    _par: dict[str, tuple] = {inlet_node_id: (None, None, 0)}
+    _bq: deque[str] = deque([inlet_node_id])
+    while _bq:
+        _cur = _bq.popleft()
+        if _cur == outlet_node_id:
+            break
+        for _nbr, _eid, _sgn in _tadj[_cur]:
+            if _nbr not in _par:
+                _par[_nbr] = (_cur, _eid, _sgn)
+                _bq.append(_nbr)
+
+    _path: dict[str, float] = {}
+    _nd = outlet_node_id
+    while _par.get(_nd, (None, None, 0))[0] is not None:
+        _pv, _eid, _sgn = _par[_nd]
+        if _eid:
+            _path[_eid] = _sgn * m_total_kgs
+        _nd = _pv
+
+    for e in net.all_edges():
+        e.m_kgs = _path.get(e.edge_id, 0.0) or _M_MIN
+
+    # ── Fundamental loops ─────────────────────────────────────────────────────
+    loops = net.find_fundamental_loops(inlet_node_id)
+
+    if not loops:
+        warnings_list.append(
+            "No independent loops — network is a tree; Hardy-Cross trivially converged."
+        )
+        _quality_bfs(net, inlet_node_id, x_inlet)
+        edge_results: dict[str, dict] = {}
+        for e in net.all_edges():
+            _, dP_u = _compute_props_and_dp(e, net, **_fluid_kw)
+            e.dP_Pa = dP_u * (1.0 if e.m_kgs >= 0 else -1.0)
+            edge_results[e.edge_id] = {
+                "dP_Pa": dP_u, "dP_fric_Pa": dP_u, "dP_grav_Pa": 0.0,
+                "dP_accel_Pa": 0.0, "Vsg": e.Vsg, "Vsl": e.Vsl,
+                "alpha": e.alpha, "regime": e.regime,
+            }
+        _hc_propagate_pressures(net, outlet_node_id, P_outlet_pa)
+        return SolveResult(True, 0, 0.0, net, edge_results, warnings_list)
+
+    # ── Hardy-Cross iteration ─────────────────────────────────────────────────
+    converged = False
+    residual  = float("inf")
+    edge_results = {}
+    iteration = 0
+
+    for iteration in range(1, max_iter + 1):
+
+        # A. Propagate gas quality
+        _quality_bfs(net, inlet_node_id, x_inlet)
+
+        # B. Compute dP for every edge
+        for e in net.all_edges():
+            _, dP_u = _compute_props_and_dp(e, net, **_fluid_kw)
+            e.dP_Pa = dP_u * (1.0 if e.m_kgs >= 0 else -1.0)
+            edge_results[e.edge_id] = {
+                "dP_Pa": dP_u, "Vsg": e.Vsg, "Vsl": e.Vsl,
+                "alpha": e.alpha, "regime": e.regime,
+            }
+
+        # C. Sequential loop corrections
+        max_dQ = 0.0
+        for loop in loops:
+            # Head imbalance around loop
+            numer = sum(dir_e * net.edge(eid).dP_Pa for eid, dir_e in loop)
+            # 2 × Σ(|dP/m|) — derivative for turbulent quadratic resistance
+            denom = 2.0 * sum(
+                abs(net.edge(eid).dP_Pa) / max(abs(net.edge(eid).m_kgs), _M_MIN)
+                for eid, _ in loop
+            )
+            if abs(denom) < _R_MIN:
+                continue
+            dQ = -(numer / denom)
+            max_dQ = max(max_dQ, abs(dQ))
+            for eid, dir_e in loop:
+                net.edge(eid).m_kgs += relax * dir_e * dQ
+
+        # D. Convergence
+        residual = max_dQ / max(m_total_kgs, 1e-12)
+        if residual < tol_rel:
+            converged = True
+            break
+
+    # ── Final pass: compute dP, back-propagate pressures ─────────────────────
+    _quality_bfs(net, inlet_node_id, x_inlet)
+    for e in net.all_edges():
+        _, dP_u = _compute_props_and_dp(e, net, **_fluid_kw)
+        e.dP_Pa = dP_u * (1.0 if e.m_kgs >= 0 else -1.0)
+        edge_results[e.edge_id] = {
+            "dP_Pa": dP_u, "dP_fric_Pa": dP_u, "dP_grav_Pa": 0.0,
+            "dP_accel_Pa": 0.0, "Vsg": e.Vsg, "Vsl": e.Vsl,
+            "alpha": e.alpha, "regime": e.regime,
+        }
+    _hc_propagate_pressures(net, outlet_node_id, P_outlet_pa)
+
+    if not converged:
+        warnings_list.append(
+            f"Hardy-Cross did not converge after {max_iter} iterations "
+            f"(residual = {residual:.3e}, tol = {tol_rel:.3e}). "
+            "Try increasing max iterations or reducing relaxation."
+        )
+
+    return SolveResult(
+        converged=converged,
+        iterations=iteration,
+        residual=residual,
+        net=net,
+        edge_results=edge_results,
+        warnings=warnings_list,
     )

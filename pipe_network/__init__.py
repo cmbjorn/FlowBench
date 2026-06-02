@@ -5,7 +5,8 @@ Public API
 ----------
 build_harp(N, ...)            Build a single harp manifold.
 build_series_harp(N, ...)     Build two harps connected in series.
-solve_network(net, ...)       Hardy-Cross solver.
+solve_network(net, ...)       GGA (Newton-Raphson) solver.
+solve_network_hardy_cross(net, ...) Hardy-Cross loop-balancing solver.
 check_starvation(result, ...) Post-solve liquid starvation diagnostics.
 format_report(report, ...)    Text summary of a StarvationReport.
 
@@ -20,7 +21,7 @@ from .diagnostics import (
     check_starvation, check_all_edges, format_report,
 )
 from .graph import Edge, HarpTopology, Network, Node
-from .solver import SolveResult, solve_network
+from .solver import SolveResult, solve_network, solve_network_hardy_cross
 from .topology import (
     build_harp, build_series_harp,
     build_center_fed_harp, build_biinlet_harp,
@@ -37,7 +38,7 @@ __all__ = [
     "build_network_from_spec", "validate_network",
     "template_harp", "template_ring",
     # solver
-    "solve_network", "SolveResult",
+    "solve_network", "solve_network_hardy_cross", "SolveResult",
     # diagnostics
     "check_starvation", "check_all_edges",
     "StarvationReport", "ChannelResult", "format_report",

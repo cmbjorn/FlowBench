@@ -21,7 +21,7 @@ import multiphase_engine as engine
 from pipe_network import (
     HarpTopology, SolveResult, StarvationReport,
     build_harp, build_series_harp,
-    check_starvation, solve_network,
+    check_starvation, solve_network, solve_network_hardy_cross,
 )
 from pipe_network.topology import build_center_fed_harp, build_biinlet_harp
 from standards.piping import MATERIAL_ROUGHNESS, PIPE_DATABASE
@@ -1308,16 +1308,34 @@ def render_harp_network_tab() -> None:
 
         # ── Solver settings ───────────────────────────────────────────────────
         with st.expander("Solver settings", expanded=False):
+            solver_method = st.radio(
+                "Solver method",
+                ["GGA (Newton-Raphson)", "Hardy-Cross (classic)"],
+                index=0 if st.session_state.get(_k("solver_method"), "GGA") == "GGA" else 1,
+                horizontal=True,
+                key=_k("solver_method"),
+                help=(
+                    "**GGA**: Global Gradient Algorithm — simultaneous Newton-Raphson "
+                    "for all pressures and flows. Quadratic convergence, ~2–5 iterations. "
+                    "Recommended for production use.\n\n"
+                    "**Hardy-Cross**: Sequential loop-balancing (1936 method). "
+                    "Linear convergence, ~20–100 iterations. "
+                    "Useful for validation and comparison."
+                ),
+            )
+            use_hardy_cross = solver_method.startswith("Hardy")
             corr = st.selectbox("Correlation", engine.TWO_PHASE_CORRELATIONS,
                                  index=0, key=_k("corr"))
             void = st.selectbox("Void-fraction model", engine.VOIDAGE_METHODS,
                                  index=0, key=_k("void"))
             sc1, sc2 = st.columns(2)
+            _relax_default = 0.5 if use_hardy_cross else 1.0
             relax    = sc1.number_input("Relaxation", 0.1, 1.0,
-                                         value=float(st.session_state.get(_k("relax"), 1.0)),
+                                         value=float(st.session_state.get(_k("relax"), _relax_default)),
                                          step=0.1, format="%.2f", key=_k("relax"))
-            max_iter = sc2.number_input("Max iterations", 10, 200,
-                                         value=int(st.session_state.get(_k("max_iter"), 50)),
+            _iter_default = 300 if use_hardy_cross else 50
+            max_iter = sc2.number_input("Max iterations", 10, 500,
+                                         value=int(st.session_state.get(_k("max_iter"), _iter_default)),
                                          step=10, key=_k("max_iter"))
 
         solve_clicked = st.button("▶  Solve network", use_container_width=True, type="primary")
@@ -1341,6 +1359,7 @@ def render_harp_network_tab() -> None:
         rect_h=st.session_state.get(_k("rect_h"), 0),
         corr=corr, void=void, relax=relax, max_iter=max_iter,
         solve_mode=solve_mode, goal_seek=goal_seek, P_inlet_target=P_inlet_target,
+        solver_method=solver_method,
     )
     _inputs_hash = hashlib.md5(
         json.dumps(_inputs_dict, sort_keys=True).encode()
@@ -1426,6 +1445,12 @@ def render_harp_network_tab() -> None:
                             _n, _t1 = build_harp(N, harp_type=harp_type_str, **_common)
                             return _n, _t1, None, _t1.inlet_node_id, _t1.outlet_node_id
 
+                    def _run_solver(_net, _m_kgs):
+                        if use_hardy_cross:
+                            return solve_network_hardy_cross(
+                                _net, m_total_kgs=_m_kgs, **_solve_kwargs)
+                        return solve_network(_net, m_total_kgs=_m_kgs, **_solve_kwargs)
+
                     if goal_seek and P_inlet_target is not None:
                         # Outer loop: adjust m_total so P_inlet_result ≈ P_inlet_target
                         # Uses dP ∝ m^n scaling (n≈2 turbulent) for fast convergence.
@@ -1433,7 +1458,7 @@ def render_harp_network_tab() -> None:
                         _gs_warnings = []
                         for _gs_iter in range(6):
                             _gn, _gt1, _gt2, _gi, _go = _rebuild_net()
-                            _sr = solve_network(_gn, m_total_kgs=_m, **_solve_kwargs)
+                            _sr = _run_solver(_gn, _m)
                             _P_in = _gn.node(_gi).P_pa / 1e5
                             _dP_result = _P_in - P_outlet
                             _dP_target = P_inlet_target - P_outlet
@@ -1456,7 +1481,7 @@ def render_harp_network_tab() -> None:
                     else:
                         _net_b, topo1, topo2, inlet_id, outlet_id = _rebuild_net()
                         net = _net_b
-                        solve_res = solve_network(net, m_total_kgs=m_total, **_solve_kwargs)
+                        solve_res = _run_solver(net, m_total)
                         _found_m_kgs = m_total
 
                     rep1 = check_starvation(solve_res, topo1.channel_edge_ids,
@@ -1506,7 +1531,8 @@ def render_harp_network_tab() -> None:
                         / (_rho_approx * _ch_A) if _ch_A > 0 else 0.0
 
         bc = st.columns(5)
-        bc[0].metric("Solver", f"{'✅' if solve_res.converged else '⚠️'} {solve_res.iterations} iters")
+        _solver_lbl = "Hardy-Cross" if use_hardy_cross else "GGA"
+        bc[0].metric("Solver", f"{'✅' if solve_res.converged else '⚠️'} {_solver_lbl} · {solve_res.iterations} iters")
 
         if cached_mode == _MODE_DP:
             bc[1].metric("Total flow (result)", f"{found_kgh:.1f} kg/h")
