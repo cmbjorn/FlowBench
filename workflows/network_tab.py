@@ -24,12 +24,13 @@ from pipe_network import (
     check_starvation, solve_network, solve_network_hardy_cross,
 )
 from pipe_network.topology import build_center_fed_harp, build_biinlet_harp
-from standards.piping import MATERIAL_ROUGHNESS, PIPE_DATABASE
+from standards.piping import MATERIAL_ROUGHNESS, PIPE_DATABASE, TUBING_DATABASE, TUBING_ROUGHNESS
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-_DN_OPTIONS = list(PIPE_DATABASE.keys())
-_PN_OPTIONS = ["PN20", "PN25", "PN40"]
+_DN_OPTIONS    = list(PIPE_DATABASE.keys())
+_PN_OPTIONS    = ["PN20", "PN25", "PN40"]
+_TUBING_OPTIONS = list(TUBING_DATABASE.keys())  # T6 … T38
 _LIQUID_OPTIONS = list(engine.LIQUID_COOLPROP_ID.keys())
 
 _PRESETS = {
@@ -73,11 +74,18 @@ def _k(name: str) -> str:
 
 # ── Pipe section widget ────────────────────────────────────────────────────────
 
+_PIPE_MODE_PIPE   = "Standard pipe (DN/PN)"
+_PIPE_MODE_TUBING = "Swagelok tubing (T-size)"
+_PIPE_MODE_CUSTOM = "Custom ID"
+_PIPE_MODES = [_PIPE_MODE_PIPE, _PIPE_MODE_TUBING, _PIPE_MODE_CUSTOM]
+
+
 def _pipe_section(
     title: str, kp: str,
     def_dn: str = "DN50", def_pn: str = "PN40",
     def_len_m: float = 0.15,
     def_id_mm: float = 50.0, def_rough_mm: float = 0.046,
+    def_tubing: str = "T18",
     show_angle: bool = False,
     expanded: bool = True,
     length_label: str = "Length",
@@ -86,16 +94,25 @@ def _pipe_section(
     """
     Render an expandable pipe section.
     Returns (D_inner_m, roughness_m, length_m [, angle_rad]).
-    Supports both standard DN/PN lookup and custom inner diameter in mm.
+    Supports standard DN/PN pipe, Swagelok T-size tubing, or custom ID.
     Length can be entered in m or mm.
     """
     with st.expander(title, expanded=expanded):
-        use_custom = st.toggle(
-            "Custom internal diameter",
-            value=st.session_state.get(f"{kp}_custom", False),
-            key=f"{kp}_custom",
+        # Legacy bool session state (use_custom=True) maps to Custom mode
+        _legacy = st.session_state.get(f"{kp}_custom", False)
+        _default_mode = _PIPE_MODE_CUSTOM if _legacy else _PIPE_MODE_PIPE
+        pipe_mode = st.radio(
+            "Type",
+            _PIPE_MODES,
+            index=_PIPE_MODES.index(
+                st.session_state.get(f"{kp}_mode", _default_mode)
+            ),
+            horizontal=True,
+            key=f"{kp}_mode",
+            label_visibility="collapsed",
         )
-        if not use_custom:
+
+        if pipe_mode == _PIPE_MODE_PIPE:
             sc1, sc2 = st.columns(2)
             dn = sc1.selectbox("DN", _DN_OPTIONS,
                                index=_DN_OPTIONS.index(st.session_state.get(f"{kp}_dn", def_dn)),
@@ -106,7 +123,35 @@ def _pipe_section(
             D_m   = PIPE_DATABASE[dn][pn]
             eps_m = MATERIAL_ROUGHNESS["SS316L"]
             st.caption(f"ID = {D_m*1000:.1f} mm")
-        else:
+
+        elif pipe_mode == _PIPE_MODE_TUBING:
+            tc1, tc2 = st.columns(2)
+            # Default to T18 or the first size ≥ T18 if def_tubing not present
+            _t_def = def_tubing if def_tubing in _TUBING_OPTIONS else "T18"
+            t_size = tc1.selectbox(
+                "OD size",
+                _TUBING_OPTIONS,
+                index=_TUBING_OPTIONS.index(
+                    st.session_state.get(f"{kp}_t_size", _t_def)
+                ),
+                key=f"{kp}_t_size",
+            )
+            _wall_opts = list(TUBING_DATABASE[t_size].keys())
+            t_wall = tc2.selectbox(
+                "Wall",
+                _wall_opts,
+                index=_wall_opts.index(
+                    st.session_state.get(f"{kp}_t_wall", _wall_opts[0])
+                ) if st.session_state.get(f"{kp}_t_wall", _wall_opts[0]) in _wall_opts else 0,
+                key=f"{kp}_t_wall",
+            )
+            D_m   = TUBING_DATABASE[t_size][t_wall]
+            eps_m = TUBING_ROUGHNESS
+            _od_mm = int(t_size[1:])
+            st.caption(f"OD {_od_mm} mm × {t_wall}  →  ID = {D_m*1000:.1f} mm  "
+                       f"(ε = {eps_m*1e6:.1f} µm, seamless SS)")
+
+        else:  # Custom ID
             ic1, ic2 = st.columns(2)
             id_mm = ic1.number_input(
                 "ID (mm)", min_value=0.1, max_value=2000.0,
@@ -117,7 +162,7 @@ def _pipe_section(
                 "Roughness (mm)", min_value=0.0, max_value=5.0,
                 value=float(st.session_state.get(f"{kp}_rough_mm", def_rough_mm)),
                 step=0.001, format="%.4f", key=f"{kp}_rough_mm",
-                help="SS316L ≈ 0.046 mm",
+                help="SS316L pipe ≈ 0.015 mm  |  seamless tubing ≈ 0.0015 mm",
             )
             D_m   = id_mm / 1000.0
             eps_m = rough_mm / 1000.0
@@ -1426,15 +1471,19 @@ def render_harp_network_tab() -> None:
                     "for all pressures and flows. Quadratic convergence, ~2–5 iterations. "
                     "Recommended for production use.\n\n"
                     "**Hardy-Cross**: Sequential loop-balancing (1936 method). "
-                    "Linear convergence, ~20–100 iterations. "
                     "Useful for validation and comparison."
                 ),
             )
             use_hardy_cross = solver_method.startswith("Hardy")
-            corr = st.selectbox("Correlation", engine.TWO_PHASE_CORRELATIONS,
-                                 index=0, key=_k("corr"))
-            void = st.selectbox("Void-fraction model", engine.VOIDAGE_METHODS,
-                                 index=0, key=_k("void"))
+            if single_phase:
+                corr = "Darcy-Weisbach (Churchill)"
+                void = "Homogeneous"
+                st.caption("Single-phase: Darcy-Weisbach / Churchill friction (two-phase correlations not shown).")
+            else:
+                corr = st.selectbox("Correlation", engine.TWO_PHASE_CORRELATIONS,
+                                     index=0, key=_k("corr"))
+                void = st.selectbox("Void-fraction model", engine.VOIDAGE_METHODS,
+                                     index=0, key=_k("void"))
             sc1, sc2 = st.columns(2)
             _relax_default = 0.5 if use_hardy_cross else 1.0
             relax    = sc1.number_input("Relaxation", 0.1, 1.0,
@@ -1445,7 +1494,15 @@ def render_harp_network_tab() -> None:
                                          value=int(st.session_state.get(_k("max_iter"), _iter_default)),
                                          step=10, key=_k("max_iter"))
 
-        solve_clicked = st.button("▶  Solve network", use_container_width=True, type="primary")
+        sb1, sb2 = st.columns([3, 1])
+        solve_clicked  = sb1.button("▶  Solve network", use_container_width=True, type="primary")
+        restart_clicked = sb2.button("↺  Reset", use_container_width=True,
+                                      help="Clear cached results and force a fresh solve.")
+        if restart_clicked:
+            st.session_state.pop(_k("result_cache"), None)
+            st.session_state.pop(_k("result_hash"), None)
+            st.session_state.pop(_k("report_bytes"), None)
+            st.rerun()
 
     # ── Run solver ────────────────────────────────────────────────────────────
     _cache_key = _k("result_cache")

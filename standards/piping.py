@@ -24,6 +24,28 @@ PIPE_DATABASE: dict[str, dict[str, float]] = {
     "DN250": {"PN20": 0.2545, "PN25": 0.2545, "PN40": 0.2429},
 }
 
+# ── Swagelok metric SS tubing (316/316L seamless, OD × wall → ID) ────────────
+# Inner diameters in metres.  Wall thicknesses per Swagelok catalog MS-01-140.
+# Sizes T18 and above are typical connector / inter-harp tubing.
+TUBING_DATABASE: dict[str, dict[str, float]] = {
+    "T6":  {"1.0 mm wall": 0.004},
+    "T8":  {"1.0 mm wall": 0.006},
+    "T10": {"1.0 mm wall": 0.008},
+    "T12": {"1.0 mm wall": 0.010},
+    "T14": {"1.5 mm wall": 0.011, "2.0 mm wall": 0.010},
+    "T16": {"1.5 mm wall": 0.013, "2.0 mm wall": 0.012},
+    "T18": {"1.5 mm wall": 0.015, "2.0 mm wall": 0.014},
+    "T20": {"1.5 mm wall": 0.017, "2.0 mm wall": 0.016},
+    "T25": {"1.5 mm wall": 0.022, "2.0 mm wall": 0.021},
+    "T28": {"1.5 mm wall": 0.025, "2.0 mm wall": 0.024},
+    "T32": {"2.0 mm wall": 0.028, "3.0 mm wall": 0.026},
+    "T38": {"2.0 mm wall": 0.034, "3.0 mm wall": 0.032},
+}
+
+# Absolute roughness (m) for seamless drawn SS instrument tubing.
+# Swagelok SS-T catalog: Ra ≤ 0.8 µm → ε ≈ 1.5 µm (approx. 10× smoother than pipe).
+TUBING_ROUGHNESS: float = 1.5e-6
+
 # ── Absolute roughness (m) — Crane TP-410 / ASHRAE ──────────────────────────
 MATERIAL_ROUGHNESS: dict[str, float] = {
     "SS316L":            1.5e-5,

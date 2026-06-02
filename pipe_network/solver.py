@@ -510,35 +510,59 @@ def solve_network_hardy_cross(
         rho_l_cached=rho_l_cached,
     )
 
-    # ── Initial flow: route m_total along spanning-tree path inlet→outlet ─────
+    # ── Initial flow: balanced uniform + continuity correction ────────────────
+    # Start with equal flow on every edge, then push continuity violations
+    # upward through the spanning tree (post-order).  For a harp this yields
+    # roughly equal flow per channel — far better than routing all flow through
+    # the single spanning-tree path (which causes very slow convergence).
     tree_eids, _ = net.spanning_tree_and_cotree(inlet_node_id)
-    _tadj: dict[str, list] = {n.node_id: [] for n in net.all_nodes()}
-    for eid in tree_eids:
-        e = net.edge(eid)
-        _tadj[e.from_node].append((e.to_node, eid, +1))
-        _tadj[e.to_node  ].append((e.from_node, eid, -1))
+    _tree_set = set(tree_eids)
 
+    _n_edges = sum(1 for _ in net.all_edges())
+    _q0 = m_total_kgs / max(_n_edges, 1)
+    for e in net.all_edges():
+        e.m_kgs = _q0
+
+    # Build spanning-tree parent map (BFS order)
     _par: dict[str, tuple] = {inlet_node_id: (None, None, 0)}
+    _bfs_order: list[str]   = [inlet_node_id]
     _bq: deque[str] = deque([inlet_node_id])
     while _bq:
         _cur = _bq.popleft()
-        if _cur == outlet_node_id:
-            break
-        for _nbr, _eid, _sgn in _tadj[_cur]:
-            if _nbr not in _par:
-                _par[_nbr] = (_cur, _eid, _sgn)
+        for _e in net.edges_incident(_cur):
+            _nbr = _e.to_node if _e.from_node == _cur else _e.from_node
+            if _e.edge_id in _tree_set and _nbr not in _par:
+                _sgn = +1 if _e.from_node == _cur else -1
+                _par[_nbr] = (_cur, _e.edge_id, _sgn)
+                _bfs_order.append(_nbr)
                 _bq.append(_nbr)
 
-    _path: dict[str, float] = {}
-    _nd = outlet_node_id
-    while _par.get(_nd, (None, None, 0))[0] is not None:
-        _pv, _eid, _sgn = _par[_nd]
-        if _eid:
-            _path[_eid] = _sgn * m_total_kgs
-        _nd = _pv
+    # Post-order: push continuity imbalance to parent tree edge
+    for _nd in reversed(_bfs_order):
+        _net_in = (sum(_e.m_kgs for _e in net.edges_to(_nd)) -
+                   sum(_e.m_kgs for _e in net.edges_from(_nd)))
+        _ext = (m_total_kgs  if _nd == inlet_node_id  else
+                -m_total_kgs if _nd == outlet_node_id else 0.0)
+        _imbal = _net_in - _ext
+        _pt = _par.get(_nd)
+        if _pt and _pt[0] is not None:
+            _, _pid, _psgn = _pt
+            # d(net_in_at_nd) = _psgn * δ  →  δ = −imbal * _psgn (since psgn²=1)
+            net.edge(_pid).m_kgs -= _psgn * _imbal
 
+    # The outlet's large external demand (−m_total) can push a huge negative
+    # correction that propagates backwards and reverses all flow signs.
+    # Detect this and flip if the inlet ends up receiving net inflow (wrong).
+    _inlet_net_in = (sum(_e.m_kgs for _e in net.edges_to(inlet_node_id)) -
+                     sum(_e.m_kgs for _e in net.edges_from(inlet_node_id)))
+    if _inlet_net_in > 0:           # flows are reversed
+        for e in net.all_edges():
+            e.m_kgs = -e.m_kgs
+
+    # Small floor for numerical stability in dP computation
     for e in net.all_edges():
-        e.m_kgs = _path.get(e.edge_id, 0.0) or _M_MIN
+        if abs(e.m_kgs) < _M_MIN:
+            e.m_kgs = _M_MIN
 
     # ── Fundamental loops ─────────────────────────────────────────────────────
     loops = net.find_fundamental_loops(inlet_node_id)
@@ -560,18 +584,16 @@ def solve_network_hardy_cross(
         _hc_propagate_pressures(net, outlet_node_id, P_outlet_pa)
         return SolveResult(True, 0, 0.0, net, edge_results, warnings_list)
 
-    # ── Hardy-Cross iteration ─────────────────────────────────────────────────
+    # ── Hardy-Cross iteration (Gauss-Seidel: update dP after each loop) ───────
     converged = False
     residual  = float("inf")
-    edge_results = {}
+    edge_results: dict[str, dict] = {}
     iteration = 0
 
     for iteration in range(1, max_iter + 1):
 
-        # A. Propagate gas quality
+        # A. Quality BFS and full dP refresh at the start of every iteration
         _quality_bfs(net, inlet_node_id, x_inlet)
-
-        # B. Compute dP for every edge
         for e in net.all_edges():
             _, dP_u = _compute_props_and_dp(e, net, **_fluid_kw)
             e.dP_Pa = dP_u * (1.0 if e.m_kgs >= 0 else -1.0)
@@ -580,12 +602,10 @@ def solve_network_hardy_cross(
                 "alpha": e.alpha, "regime": e.regime,
             }
 
-        # C. Sequential loop corrections
+        # B. Sequential loop corrections with per-loop dP refresh (Gauss-Seidel)
         max_dQ = 0.0
         for loop in loops:
-            # Head imbalance around loop
             numer = sum(dir_e * net.edge(eid).dP_Pa for eid, dir_e in loop)
-            # 2 × Σ(|dP/m|) — derivative for turbulent quadratic resistance
             denom = 2.0 * sum(
                 abs(net.edge(eid).dP_Pa) / max(abs(net.edge(eid).m_kgs), _M_MIN)
                 for eid, _ in loop
@@ -596,8 +616,20 @@ def solve_network_hardy_cross(
             max_dQ = max(max_dQ, abs(dQ))
             for eid, dir_e in loop:
                 net.edge(eid).m_kgs += relax * dir_e * dQ
+            # Gauss-Seidel: refresh dP for the just-corrected edges so the
+            # next loop sees updated values (avoids stale-dP divergence).
+            for eid, _ in loop:
+                e = net.edge(eid)
+                if abs(e.m_kgs) < _M_MIN:
+                    e.m_kgs = _M_MIN
+                _, dP_u = _compute_props_and_dp(e, net, **_fluid_kw)
+                e.dP_Pa = dP_u * (1.0 if e.m_kgs >= 0 else -1.0)
+                edge_results[eid] = {
+                    "dP_Pa": dP_u, "Vsg": e.Vsg, "Vsl": e.Vsl,
+                    "alpha": e.alpha, "regime": e.regime,
+                }
 
-        # D. Convergence
+        # C. Convergence
         residual = max_dQ / max(m_total_kgs, 1e-12)
         if residual < tol_rel:
             converged = True
