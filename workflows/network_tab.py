@@ -1296,6 +1296,9 @@ def render_harp_network_tab() -> None:
                                               step=0.005, format="%.4f", key=_k("vsl_thr"))
             st.caption(f"= {Vsl_threshold * _vsl_to_lh:.3f} L/h  (ID = {c_D*1000:.1f} mm)")
 
+        # Effective threshold for equivalent pipe (V_eq = V_per_ch × k^0.2)
+        Vsl_threshold_eff = Vsl_threshold * (channels_per_branch ** 0.2)
+
         # ── Solver settings ───────────────────────────────────────────────────
         with st.expander("Solver settings", expanded=False):
             corr = st.selectbox("Correlation", engine.TWO_PHASE_CORRELATIONS,
@@ -1357,10 +1360,6 @@ def render_harp_network_tab() -> None:
                         correlation=corr, voidage_method=void,
                         P_inlet_pa=P_bara * 1e5, T_C=T_C, x_inlet=x_inlet,
                     )
-                    # Starvation threshold scaled for equivalent pipe:
-                    # V_eq = V_per_ch × k^0.2, so threshold_eff = threshold × k^0.2
-                    _k_exp = channels_per_branch ** 0.2
-                    Vsl_threshold_eff = Vsl_threshold * _k_exp
 
                     effective_series = series_mode and harp_type_str in ("Z", "U")
 
