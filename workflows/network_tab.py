@@ -631,7 +631,7 @@ def _generate_harp_report(
     fig_pressure: "go.Figure",
 ) -> bytes:
     """
-    Generate a compact 1–2 page Word report for the harp solve result.
+    Generate a polished 1–2 page Word report for the harp solve result.
     Returns bytes suitable for st.download_button.
     """
     from io import BytesIO
@@ -654,33 +654,105 @@ def _generate_harp_report(
     P_out        = inputs.get("P_outlet", 0.0)
     dP_bar       = P_in_result - P_out
     dP_str       = f"{dP_bar*1000:.1f} mbar" if dP_bar < 1 else f"{dP_bar:.3f} bar"
-
     _type_str    = inputs.get("harp_type_str", "Z")
-    _type_labels = {"Z": "Z-manifold", "U": "U-manifold", "I": "I-manifold", "DI": "Double-inlet Z"}
+    _type_labels = {"Z": "Z-manifold", "U": "U-manifold",
+                    "I": "I-manifold (center-fed)", "DI": "Double-inlet Z"}
     series       = topo2 is not None
     use_rect     = inputs.get("use_rect", False)
     rect_w       = inputs.get("rect_w", 0.0)
     rect_h       = inputs.get("rect_h", 0.0)
+    _n_harps     = 2 if series else 1
+    _total_ch    = N * k * _n_harps
+    c_er         = solve_res.edge_results.get("connector", {})
+    c_dP         = c_er.get("dP_Pa", None)
+    _ori_mm      = inputs.get("orifice_d_mm", 0.0)
+    if _ori_mm > 0:
+        _beta_r = _ori_mm / max(c_D * 1000, 0.001)
+        _k_ori  = (1 - _beta_r ** 4) / ((0.61 * _beta_r ** 2) ** 2)
+    else:
+        _beta_r = _k_ori = 0.0
 
-    # ── Helper: shade a table row ──────────────────────────────────────────────
-    def _shade_row(row, hex_color: str) -> None:
+    fluid_str = inputs.get("liq_type", "—")
+    if not single_phase:
+        fluid_str += f" / {inputs.get('gas_lbl', '—')}"
+
+    _reps = [(rep1, "H1", topo1)] + ([(rep2, "H2", topo2)] if rep2 else [])
+
+    # ── Colour palette ─────────────────────────────────────────────────────────
+    _NAVY  = RGBColor(0x1E, 0x3A, 0x5F)
+    _GREY  = RGBColor(0x64, 0x74, 0x8B)
+    _WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+    _DARK  = RGBColor(0x1E, 0x29, 0x3B)
+
+    _GRADE_FILL = {
+        "Excellent":  ("22C55E", _WHITE),
+        "Acceptable": ("F59E0B", _WHITE),
+        "Poor":       ("FB923C", _WHITE),
+        "Critical":   ("EF4444", _WHITE),
+    }
+
+    def _grade_label(mdi: float) -> str:
+        if mdi < 0.05:  return "Excellent"
+        if mdi < 0.20:  return "Acceptable"
+        if mdi < 0.50:  return "Poor"
+        return "Critical"
+
+    # ── Document helpers ───────────────────────────────────────────────────────
+    def _shade_cell(cell, hex6: str) -> None:
+        tcPr = cell._tc.get_or_add_tcPr()
+        shd  = OxmlElement("w:shd")
+        shd.set(qn("w:val"),   "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"),  hex6)
+        tcPr.append(shd)
+
+    def _shade_row(row, hex6: str) -> None:
         for cell in row.cells:
-            tc   = cell._tc
-            tcPr = tc.get_or_add_tcPr()
-            shd  = OxmlElement("w:shd")
-            shd.set(qn("w:val"),   "clear")
-            shd.set(qn("w:color"), "auto")
-            shd.set(qn("w:fill"),  hex_color)
-            tcPr.append(shd)
+            _shade_cell(cell, hex6)
 
-    def _set_col_width(table, col_idx: int, width_in: float) -> None:
-        for row in table.rows:
-            row.cells[col_idx].width = Inches(width_in)
+    def _tw(cell, text: str, bold=False, size=9,
+            color: RGBColor | None = None,
+            align=WD_ALIGN_PARAGRAPH.LEFT) -> None:
+        """Set cell text with formatting."""
+        cell.text = text
+        p = cell.paragraphs[0]
+        run = p.runs[0] if p.runs else p.add_run(text)
+        run.bold = bold
+        run.font.size = Pt(size)
+        if color:
+            run.font.color.rgb = color
+        p.alignment = align
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after  = Pt(2)
 
-    def _cell_pt(cell, size: int) -> None:
-        for p in cell.paragraphs:
-            for run in p.runs:
-                run.font.size = Pt(size)
+    def _section_rule(text: str) -> None:
+        """Add a small ALL-CAPS label with a navy bottom rule."""
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(7)
+        p.paragraph_format.space_after  = Pt(2)
+        run = p.add_run(text.upper())
+        run.bold = True
+        run.font.size  = Pt(8)
+        run.font.color.rgb = _NAVY
+        pPr  = p._p.get_or_add_pPr()
+        pBdr = OxmlElement("w:pBdr")
+        bot  = OxmlElement("w:bottom")
+        bot.set(qn("w:val"),   "single")
+        bot.set(qn("w:sz"),    "4")
+        bot.set(qn("w:space"), "1")
+        bot.set(qn("w:color"), "1E3A5F")
+        pBdr.append(bot)
+        pPr.append(pBdr)
+
+    def _bullet(text: str, bold_part: str = "") -> None:
+        p = doc.add_paragraph(style="List Bullet")
+        p.paragraph_format.space_after = Pt(2)
+        if bold_part:
+            rb = p.add_run(bold_part)
+            rb.bold = True
+            rb.font.size = Pt(9)
+            p.add_run("  ").font.size = Pt(9)
+        p.add_run(text).font.size = Pt(9)
 
     # ── Document skeleton ──────────────────────────────────────────────────────
     doc = Document()
@@ -692,181 +764,244 @@ def _generate_harp_report(
     sec.top_margin    = Inches(0.65)
     sec.bottom_margin = Inches(0.65)
 
-    # ── Title block ────────────────────────────────────────────────────────────
-    title = doc.add_heading("Harp Manifold — Flow Distribution Report", level=1)
-    title.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    title.runs[0].font.size = Pt(14)
+    # ── Title banner ───────────────────────────────────────────────────────────
+    banner = doc.add_table(rows=1, cols=1)
+    banner.style = "Table Grid"
+    bc = banner.rows[0].cells[0]
+    _shade_cell(bc, "1E3A5F")
+    bc.paragraphs[0].clear()
+    tr = bc.paragraphs[0].add_run("HARP MANIFOLD — FLOW DISTRIBUTION REPORT")
+    tr.bold = True
+    tr.font.size = Pt(13)
+    tr.font.color.rgb = _WHITE
+    bc.paragraphs[0].paragraph_format.space_before = Pt(5)
+    bc.paragraphs[0].paragraph_format.space_after  = Pt(5)
+    bc.paragraphs[0].paragraph_format.left_indent  = Inches(0.1)
 
-    meta = doc.add_paragraph(
-        f"{datetime.now().strftime('%Y-%m-%d %H:%M')}   ·   "
-        f"{solver_name}   ·   "
-        f"Converged {'✓' if solve_res.converged else '✗'}  "
-        f"({solve_res.iterations} iter, ε = {solve_res.residual:.1e})"
+    # Subtitle: type · channels · fluid · temperature
+    sub_text = "   ·   ".join([
+        _type_labels.get(_type_str, _type_str),
+        f"{_total_ch} channels",
+        fluid_str,
+        f"T = {inputs.get('T_C', 0):.0f} °C",
+    ])
+    sub = doc.add_paragraph(sub_text)
+    sub.paragraph_format.space_before = Pt(3)
+    sub.paragraph_format.space_after  = Pt(1)
+    sub.runs[0].font.size = Pt(9)
+    sub.runs[0].font.color.rgb = _GREY
+
+    # Meta line: date | solver | convergence
+    conv_str = "Converged" if solve_res.converged else "NOT CONVERGED"
+    meta_str = (
+        f"{datetime.now().strftime('%Y-%m-%d  %H:%M')}   |   "
+        f"{solver_name}   |   "
+        f"{conv_str}  ({solve_res.iterations} iter,  ε = {solve_res.residual:.1e})"
     )
+    meta = doc.add_paragraph(meta_str)
+    meta.paragraph_format.space_before = Pt(0)
+    meta.paragraph_format.space_after  = Pt(6)
     meta.runs[0].font.size = Pt(8)
-    meta.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
-    doc.add_paragraph()  # small spacer
+    meta.runs[0].font.color.rgb = _GREY
 
-    # ── Configuration table (4-column: param | value | param | value) ─────────
-    _n_harps  = 2 if series else 1
-    _total_ch = N * k * _n_harps
-    if k > 1:
-        _ch_desc = (f"{N}×{k} = {N*k} ch/harp"
-                    + (f"  ×2 harps = {_total_ch} total" if series else ""))
-    else:
-        _ch_desc = (f"{N} ch/harp"
-                    + (f"  ×2 harps = {_total_ch} total" if series else ""))
-    _harp_count = "2 (series)" if series else "1"
-    c_er  = solve_res.edge_results.get("connector", {})
-    c_dP  = c_er.get("dP_Pa", None)
+    # ── Configuration table ────────────────────────────────────────────────────
+    _section_rule("Configuration")
 
     if use_rect:
-        _ch_id_label = "Channel D_h"
-        _ch_id_val   = (f"{c_D*1000:.2f} mm  "
-                        f"(rect {rect_w:.1f}×{rect_h:.1f} mm, "
-                        f"A = {rect_w*rect_h:.1f} mm²)")
+        _ch_id_lbl = "Channel D_h"
+        _ch_id_val = (f"{c_D*1000:.2f} mm  "
+                      f"(rect {rect_w:.1f} × {rect_h:.1f} mm,  "
+                      f"A = {rect_w*rect_h:.1f} mm²)")
     else:
-        _ch_id_label = "Channel ID"
-        _ch_id_val   = f"{c_D*1000:.1f} mm"
+        _ch_id_lbl = "Channel ID"
+        _ch_id_val = f"{c_D*1000:.1f} mm"
 
-    _ori_mm = inputs.get("orifice_d_mm", 0.0)
-    if _ori_mm > 0:
-        _beta_r = _ori_mm / max(c_D * 1000, 0.001)
-        _k_ori  = (1 - _beta_r**4) / ((0.61 * _beta_r**2) ** 2)
-        _ori_str = f"{_ori_mm:.2f} mm  (β = {_beta_r:.3f}, K ≈ {_k_ori:.1f})"
-    else:
-        _ori_str = None
+    _ch_desc = (
+        (f"{N}×{k} = {N*k} ch/harp" if k > 1 else f"{N} ch/harp")
+        + (f"  ×2 = {_total_ch} total" if series else "")
+    )
 
-    left_rows = [
+    _left_cfg = [
         ("Type",           _type_labels.get(_type_str, _type_str)),
-        ("Harps",          _harp_count),
+        ("Harps",          "2 (series)" if series else "1"),
         ("Channels",       _ch_desc),
         ("Header ID",      f"{inputs.get('h_D', 0)*1000:.1f} mm"),
-        (_ch_id_label,     _ch_id_val),
+        (_ch_id_lbl,       _ch_id_val),
         ("Channel length", f"{inputs.get('c_len', 0)*1000:.0f} mm"),
     ]
-    right_rows = [
-        ("Fluid",         inputs.get("liq_type", "—") + ("" if single_phase else f" / {inputs.get('gas_lbl','—')}")),
-        ("Flow",          f"{found_m_kgs*3600:.1f} kg/h"),
-        ("x_inlet",       "—" if single_phase else f"{inputs.get('x_inlet',0):.4f}"),
-        ("P_outlet",      f"{P_out:.2f} bara"),
-        ("P_inlet",       f"{P_in_result:.3f} bara"),
-        ("ΔP total",      dP_str + ("" if c_dP is None else f"  (connector {c_dP/1e3:.2f} kPa)")),
+    _right_cfg = [
+        ("Fluid",     fluid_str),
+        ("Flow",      f"{found_m_kgs*3600:.1f} kg/h"),
+        ("x_inlet",   "—" if single_phase else f"{inputs.get('x_inlet', 0):.4f}"),
+        ("P_outlet",  f"{P_out:.2f} bara"),
+        ("P_inlet",   f"{P_in_result:.3f} bara"),
+        ("ΔP total",  dP_str + ("" if c_dP is None else
+                                f"  (connector {c_dP/1e3:.2f} kPa)")),
     ]
-    if _ori_str:
-        left_rows.append(("Orifice ID", _ori_str))
-    # Pair rows; if left has an extra row (e.g. orifice), pad right with empty
-    _nrows = max(len(left_rows), len(right_rows))
-    while len(left_rows)  < _nrows: left_rows.append(("", ""))
-    while len(right_rows) < _nrows: right_rows.append(("", ""))
+    if _ori_mm > 0:
+        _left_cfg.append(("Orifice ID",
+                          f"{_ori_mm:.2f} mm  (β = {_beta_r:.3f},  K ≈ {_k_ori:.1f})"))
 
-    cfg = doc.add_table(rows=_nrows, cols=4)
+    _nr = max(len(_left_cfg), len(_right_cfg))
+    while len(_left_cfg)  < _nr: _left_cfg.append(("", ""))
+    while len(_right_cfg) < _nr: _right_cfg.append(("", ""))
+
+    cfg = doc.add_table(rows=_nr, cols=4)
     cfg.style = "Table Grid"
-    for i, ((lp, lv), (rp, rv)) in enumerate(zip(left_rows, right_rows)):
-        r = cfg.rows[i]
-        r.cells[0].text = lp;  r.cells[1].text = lv
-        r.cells[2].text = rp;  r.cells[3].text = rv
-        for ci in (0, 2):
-            if r.cells[ci].paragraphs[0].runs:
-                r.cells[ci].paragraphs[0].runs[0].bold = True
-        for ci in range(4):
-            _cell_pt(r.cells[ci], 9)
-    _shade_row(cfg.rows[0], "E2E8F0")
-    _set_col_width(cfg, 0, 1.1); _set_col_width(cfg, 1, 2.2)
-    _set_col_width(cfg, 2, 1.1); _set_col_width(cfg, 3, 2.2)
-    doc.add_paragraph()
+    for i, ((lp, lv), (rp, rv)) in enumerate(zip(_left_cfg, _right_cfg)):
+        row = cfg.rows[i]
+        _tw(row.cells[0], lp, bold=True)
+        _tw(row.cells[1], lv)
+        _tw(row.cells[2], rp, bold=True)
+        _tw(row.cells[3], rv)
+        if i % 2 == 1:
+            _shade_row(row, "F8FAFC")
+    for row in cfg.rows:
+        row.cells[0].width = Inches(1.1)
+        row.cells[1].width = Inches(2.2)
+        row.cells[2].width = Inches(1.1)
+        row.cells[3].width = Inches(2.2)
 
-    # ── Results summary line(s) ────────────────────────────────────────────────
-    for rep, label in [(rep1, "H1")] + ([(rep2, "H2")] if rep2 else []):
-        mdi   = rep.maldistribution_index
-        grade = _er_grade(mdi).replace("✅","✓").replace("🟡","~").replace("🟠","!").replace("🔴","✗")
-        n_low = rep.n_channels_starved
-        p = doc.add_paragraph()
-        r0 = p.add_run(f"{label}  ")
-        r0.bold = True; r0.font.size = Pt(10)
-        p.add_run(
-            f"Grade: {grade}   MDI = {mdi:.4f}   "
-            f"Low-flow: {n_low}/{rep.n_channels_total}   "
-            f"Mean: {rep.mean_m_kgs*1000:.2f} g/s/branch"
-            + (f"  ({rep.mean_m_kgs*1000/k:.2f} g/s/ch)" if k > 1 else "")
-        ).font.size = Pt(9)
+    # ── Results table ──────────────────────────────────────────────────────────
+    _section_rule("Results")
 
-    doc.add_paragraph()
+    _res_cols = ["Harp", "Grade", "MDI", "Low-flow",
+                 f"Mean ({'g/s/ch' if k > 1 else 'g/s'})", "Harp ΔP"]
+    res_tbl = doc.add_table(rows=1 + len(_reps), cols=len(_res_cols))
+    res_tbl.style = "Table Grid"
+
+    for ci, h in enumerate(_res_cols):
+        _tw(res_tbl.rows[0].cells[ci], h, bold=True, size=9, color=_WHITE)
+    _shade_row(res_tbl.rows[0], "1E3A5F")
+
+    for ri, (rep, lbl, topo) in enumerate(_reps):
+        mdi    = rep.maldistribution_index
+        grade  = _grade_label(mdi)
+        bg, fc = _GRADE_FILL[grade]
+        row    = res_tbl.rows[ri + 1]
+
+        _P_hi = solve_res.net.node(topo.inlet_node_id).P_pa
+        _P_ho = solve_res.net.node(topo.outlet_node_id).P_pa
+        _hdP  = (_P_hi - _P_ho) / 1e5
+        _hdP_s = f"{_hdP*1000:.1f} mbar" if _hdP < 1 else f"{_hdP:.3f} bar"
+        _mean = rep.mean_m_kgs * 1000 / k
+
+        row_vals = [
+            lbl, grade, f"{mdi:.4f}",
+            f"{rep.n_channels_starved}/{rep.n_channels_total}",
+            f"{_mean:.2f}", _hdP_s,
+        ]
+        for ci, val in enumerate(row_vals):
+            if ci == 1:
+                _tw(row.cells[ci], val, bold=True, size=9, color=fc)
+                _shade_cell(row.cells[ci], bg)
+            else:
+                _tw(row.cells[ci], val, size=9)
+                if ri % 2 == 1:
+                    _shade_cell(row.cells[ci], "F8FAFC")
+
+    # Column widths for results table
+    _rcw = [0.45, 0.95, 0.65, 0.75, 1.45, 1.0]
+    for row in res_tbl.rows:
+        for ci, w in enumerate(_rcw):
+            row.cells[ci].width = Inches(w)
 
     # ── Network diagram ────────────────────────────────────────────────────────
     import plotly.io as pio
+    _section_rule("Network diagram")
     try:
         _diag_h = int(getattr(fig_diagram.layout, "height", None) or (680 if series else 380))
         buf_diag = BytesIO(pio.to_image(fig_diagram, format="png",
-                                        width=860, height=_diag_h, scale=2))
+                                        width=880, height=_diag_h, scale=2))
         doc.add_picture(buf_diag, width=Inches(6.5))
     except Exception:
-        doc.add_paragraph("[Diagram unavailable — install kaleido: pip install kaleido]")
+        p = doc.add_paragraph("[Diagram unavailable — install kaleido]")
+        p.runs[0].font.size = Pt(9)
+        p.runs[0].font.color.rgb = _GREY
 
-    # ── Flow distribution bar chart ────────────────────────────────────────────
+    # ── Flow distribution ──────────────────────────────────────────────────────
+    _section_rule("Flow distribution")
     try:
-        buf_bar = BytesIO(pio.to_image(fig_bar, format="png", width=860, height=240, scale=2))
+        buf_bar = BytesIO(pio.to_image(fig_bar, format="png",
+                                       width=880, height=230, scale=2))
         doc.add_picture(buf_bar, width=Inches(6.5))
     except Exception:
-        doc.add_paragraph("[Flow bar chart unavailable]")
+        p = doc.add_paragraph("[Chart unavailable]")
+        p.runs[0].font.size = Pt(9)
+        p.runs[0].font.color.rgb = _GREY
 
-    # ── Key findings ───────────────────────────────────────────────────────────
-    doc.add_paragraph()
-    kf_head = doc.add_paragraph("Key findings")
-    kf_head.runs[0].bold = True
-    kf_head.runs[0].font.size = Pt(10)
+    # ── Findings ───────────────────────────────────────────────────────────────
+    _section_rule("Findings")
 
-    def _findings(topo: HarpTopology, rep: StarvationReport, label: str) -> None:
+    multi = len(_reps) > 1
+    for rep, lbl, topo in _reps:
         mdi = rep.maldistribution_index
         n   = rep.n_channels_total
-        k_  = k
+        prefix = f"{lbl}:" if multi else ""
 
-        # Pattern
         if n >= 2:
-            pattern, _, def_first, def_last, _ = _er_pattern(rep.channel_results, topo.harp_type)
+            pattern, _, df, dl, _ = _er_pattern(rep.channel_results, topo.harp_type)
         else:
-            pattern = "uniform"
-            def_first = def_last = 0.0
+            pattern, df, dl = "uniform", 0.0, 0.0
 
-        grade_txt = _er_grade(mdi).replace("✅","").replace("🟡","").replace("🟠","").replace("🔴","").strip()
-        p = doc.add_paragraph(style="List Bullet")
-        p.add_run(f"{label}: {grade_txt}, MDI = {mdi:.4f}").font.size = Pt(9)
+        _bullet(f"{_grade_label(mdi)},  MDI = {mdi:.4f}.", bold_part=prefix)
+
         if rep.n_channels_starved:
-            p2 = doc.add_paragraph(style="List Bullet")
-            p2.add_run(
-                f"  {rep.n_channels_starved} low-flow {'branches' if k_>1 else 'channels'} "
-                f"below starvation threshold."
-            ).font.size = Pt(9)
-        if pattern not in ("uniform",):
-            p3 = doc.add_paragraph(style="List Bullet")
-            desc = {
-                "inlet-starved":  f"Near-inlet channels receive ≈{def_first:.0%} less flow (Z-pattern).",
-                "outlet-starved": f"Far-end channels receive ≈{def_last:.0%} less flow.",
+            noun = "branches" if k > 1 else "channels"
+            _bullet(
+                f"{rep.n_channels_starved} {noun} below starvation threshold."
+                + (f"  ({lbl})" if multi else "")
+            )
+
+        if pattern != "uniform":
+            _pattern_desc = {
+                "inlet-starved":  f"Near-inlet channels carry ≈{df:.0%} less than mean — Z-pattern header momentum.",
+                "outlet-starved": f"Far-end channels carry ≈{dl:.0%} less than mean.",
                 "end-starved":    "End channels under-fed relative to centre.",
                 "centre-starved": "Centre channels under-fed relative to ends.",
-            }.get(pattern, f"Non-uniform pattern: {pattern}.")
-            p3.add_run(f"  Distribution: {desc}").font.size = Pt(9)
+            }.get(pattern, f"Non-uniform pattern ({pattern}).")
+            _bullet(_pattern_desc + (f"  ({lbl})" if multi else ""))
 
-        # Header-to-channel ratio
         R, dP_hdr, dP_ch = _er_header_ratio(solve_res.net, topo)
         if R < 5:
-            p4 = doc.add_paragraph(style="List Bullet")
-            p4.add_run(
-                f"  Header ΔP ({dP_hdr*1000:.1f} mbar) is {R:.1f}× channel ΔP "
+            _bullet(
+                f"Header ΔP ({dP_hdr*1000:.1f} mbar) is only {R:.1f}× channel ΔP "
                 f"({dP_ch*1000:.1f} mbar) — header resistance dominates; "
-                "consider larger header DN."
-            ).font.size = Pt(9)
-
-    _findings(topo1, rep1, "H1")
-    if rep2:
-        _findings(topo2, rep2, "H2")
+                "consider a larger header DN."
+                + (f"  ({lbl})" if multi else "")
+            )
 
     if series and c_dP is not None:
-        p_c = doc.add_paragraph(style="List Bullet")
-        p_c.add_run(
-            f"  Connector ΔP = {c_dP/1e3:.2f} kPa "
-            f"({c_dP/(dP_bar*1e5)*100:.1f}% of total ΔP)."
-        ).font.size = Pt(9)
+        _bullet(
+            f"Connector ΔP = {c_dP/1e3:.2f} kPa  "
+            f"({c_dP / (dP_bar * 1e5) * 100:.1f}% of total)."
+        )
+
+    if _ori_mm > 0:
+        _bullet(
+            f"Orifice restriction active:  ID = {_ori_mm:.2f} mm,  "
+            f"β = {_beta_r:.3f},  K ≈ {_k_ori:.1f}  (ISO 5167, Cd = 0.61)."
+        )
+
+    # ── Footer ─────────────────────────────────────────────────────────────────
+    footer_para = doc.sections[0].footer.paragraphs[0]
+    footer_para.clear()
+    fr = footer_para.add_run(
+        f"FlowBench   ·   {datetime.now().strftime('%Y-%m-%d')}   ·   Page "
+    )
+    fr.font.size = Pt(8)
+    fr.font.color.rgb = _GREY
+    # PAGE field — each piece is a separate run element appended to the paragraph
+    run_pg = footer_para.add_run()
+    run_pg.font.size = Pt(8)
+    run_pg.font.color.rgb = _GREY
+    fc_begin = OxmlElement("w:fldChar"); fc_begin.set(qn("w:fldCharType"), "begin")
+    instr    = OxmlElement("w:instrText"); instr.text = "PAGE"
+    fc_end   = OxmlElement("w:fldChar"); fc_end.set(qn("w:fldCharType"), "end")
+    run_pg._r.append(fc_begin)
+    run_pg._r.append(instr)
+    run_pg._r.append(fc_end)
+    footer_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
     buf = BytesIO()
     doc.save(buf)
