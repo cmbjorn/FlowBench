@@ -231,14 +231,13 @@ def compute_pipeline_case(
             _hx_end_P = current_P - _hx_dP_Pa
             _delta_T  = 0.0
             if _hx_duty != 0.0:
-                _hp = _props_at_current()
                 if is_vle:
                     # VLE mode: advance enthalpy directly so downstream flash
                     # gives the correct quality (no Cp estimation needed).
                     if vle_m_kgs and vle_m_kgs > 0:
                         _vle_h = (_vle_h or 0.0) + (_hx_duty * 1000.0) / vle_m_kgs
-                        _delta_T = 0.0  # VLE T is set by saturation; display only
                 else:
+                    _hp = _props_at_current()
                     _Cp = engine.estimate_mixture_cp(
                         _hp, current_T_C + 273.15, max(1000.0, current_P))
                     if _hp["m_total_kgs"] > 0 and _Cp > 0:

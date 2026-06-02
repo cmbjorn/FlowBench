@@ -178,10 +178,27 @@ def _apply_save_state(data: dict) -> None:
 # ============================================================================
 with st.sidebar:
     st.header("FlowBench")
+
+    # Quick navigation
+    st.caption("Quick access")
+    _qnav_cols = st.columns(2)
+    if _qnav_cols[0].button("Pipeline Cases", use_container_width=True, key="sb_goto_pipe"):
+        st.session_state["main_group"] = "Pipeline Cases"
+        st.rerun()
+    if _qnav_cols[1].button("Network Solver", use_container_width=True, key="sb_goto_harp"):
+        st.session_state["main_group"] = "Network Solver"
+        st.rerun()
+    if st.button("Engineering Tools", use_container_width=True, key="sb_goto_eng"):
+        st.session_state["main_group"] = "Engineering Tools"
+        st.rerun()
+
+    st.divider()
+
     with st.expander("About & Capabilities", expanded=False):
         st.markdown("""
         Engineering workbench for steady-state flow calculations — pipe hydraulics,
-        equipment sizing, and fluid thermodynamics in a single browser-based tool.
+        network distribution analysis, equipment sizing, and fluid thermodynamics
+        in a single browser-based tool.
 
         ---
         **Pipeline Hydraulics** (tabs A / B, Header A / B, Compare, Goal Seek)
@@ -214,6 +231,23 @@ with st.sidebar:
         Carbon Steel, Hastelloy C-276, Titanium Gr. 2), optional fluoropolymer liner
         (PTFE, FEP, PFA, PVDF). 17 fitting types (Crane TP-410). Inline components:
         control valves (Kv or ΔP mode), heat exchangers.
+
+        ---
+        **Network Solver Solver**
+
+        Steady-state two-phase flow distribution in harp manifolds — two parallel
+        headers (A/B) connected by N identical channels, with optional second harp
+        in series. Uses a Hardy-Cross iterative solver on the N−1 independent
+        rectangular loop equations formed by the capped-header topology.
+
+        | Feature | Detail |
+        |---|---|
+        | Topology | Single harp or two harps in series with connector pipe |
+        | Channels | 2–20 per harp; any DN/PN; horizontal or inclined |
+        | Fluid | Two-phase gas/liquid (same correlations as Pipeline Hydraulics) |
+        | Phase split | Homogeneous mixing at junctions (Azzopardi extension planned) |
+        | Diagnostics | Per-channel V_sl / x_gas · maldistribution index (MDI) · starvation flag |
+        | Output | Network diagram · flow distribution bar chart · header pressure profiles |
 
         ---
         **Engineering Calculators**
@@ -1478,15 +1512,15 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
             grid_records         = _lc["grid_records"]
             stream_records       = _lc["stream_records"]
             valve_sizing         = _lc["valve_sizing"]
-            slug_records         = _lc.get("slug_records", [])
+            slug_records         = _lc.get("slug_records",         [])
             cumulative_distance  = _lc["cumulative_distance"]
-            cumulative_positions = _lc["cumulative_positions"]
-            pressure_profile_x   = _lc["pressure_profile_x"]
-            pressure_profile_y   = _lc["pressure_profile_y"]
-            regime_bands         = _lc["regime_bands"]
-            total_dp_fric_kpa    = _lc["total_dp_fric_kpa"]
-            total_dp_grav_kpa    = _lc["total_dp_grav_kpa"]
-            total_dp_accel_kpa   = _lc["total_dp_accel_kpa"]
+            cumulative_positions = _lc.get("cumulative_positions",  [])
+            pressure_profile_x   = _lc.get("pressure_profile_x",   [])
+            pressure_profile_y   = _lc.get("pressure_profile_y",   [])
+            regime_bands         = _lc.get("regime_bands",          [])
+            total_dp_fric_kpa    = _lc.get("total_dp_fric_kpa",    0.0)
+            total_dp_grav_kpa    = _lc.get("total_dp_grav_kpa",    0.0)
+            total_dp_accel_kpa   = _lc.get("total_dp_accel_kpa",   0.0)
         # ─────────────────────────────────────────────────────────────────────
 
         # Erosion — only banner on actionable conditions; OK is shown inline in table
@@ -3520,12 +3554,16 @@ _lc = f"Header {_la}"
 _ld = f"Header {_lb}"
 
 _group = st.segmented_control(
-    "Workspace", ["Pipeline Cases", "Engineering Tools"],
+    "Workspace", ["Pipeline Cases", "Engineering Tools", "Network Solver"],
     default="Pipeline Cases", label_visibility="collapsed",
     key="main_group",
 )
 
-if _group != "Engineering Tools":
+if _group == "Network Solver":
+    from workflows.network_tab import render_network_solver_tab
+    render_network_solver_tab()
+
+elif _group != "Engineering Tools":
     tab_a, tab_b, tab_c, tab_d, tab_cmp, tab_gs = st.tabs(
         [_la, _lb, _lc, _ld, "Compare", "Goal Seek"])
 
@@ -4619,9 +4657,9 @@ if _group != "Engineering Tools":
                             )
 
 
-else:  # Engineering Tools
-    tab_fanno, tab_ro, tab_psv, tab_cv, tab_dg, tab_pump, tab_ls = st.tabs(
-        ["Fanno Flow", "RO", "PSV", "Control Valve", "Dissolved Gas Flash", "Pump", "Line Size"]
+else:  # Engineering Tools (also contains Network Solver tab for discoverability)
+    tab_fanno, tab_ro, tab_psv, tab_cv, tab_dg, tab_pump, tab_ls, tab_harp = st.tabs(
+        ["Fanno Flow", "RO", "PSV", "Control Valve", "Dissolved Gas Flash", "Pump", "Line Size", "Network Solver"]
     )
     import dissolution_engine as dg
 
@@ -7508,4 +7546,10 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                             key="ls_dl_x",
                         )
 
+    # =========================================================================
+    # Tab: Network Solver Solver
+    # =========================================================================
+    with tab_harp:
+        from workflows.network_tab import render_network_solver_tab
+        render_network_solver_tab()
 

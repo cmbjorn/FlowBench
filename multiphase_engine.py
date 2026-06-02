@@ -1260,9 +1260,11 @@ def calculate_segment_pressure_drop(
                 mul=mul, mug=mug, sigma=sigma, P=P_pa,
                 D=D_inner, angle=angle_deg, roughness=roughness, L=L_eff,
             )
-            # Friction component = total minus the separately computed gravity term.
-            # Acceleration is negligible for subsonic adiabatic flow.
-            dP_fric_Pa  = dP_total - dP_grav_Pa
+            # Friction residual: total minus the external gravity term.
+            # B&B computes gravity with its own holdup, so this residual absorbs
+            # any holdup-model difference — an accepted decomposition approximation.
+            # Clamp to zero so the display column is never negative.
+            dP_fric_Pa  = max(0.0, dP_total - dP_grav_Pa)
             dP_accel_Pa = 0.0
         else:
             # Other correlations: two_phase_dP is friction-only by design.
@@ -1461,9 +1463,22 @@ def run_sensitivity(
         for void in VOIDAGE_METHODS:
             try:
                 current_P   = P_bara * 1e5
+                _h          = _vle_h_spec   # per-run enthalpy, advanced by HX segments
                 total_dp    = 0.0
                 seg_regimes = []
                 for seg in segments:
+                    # Heat-exchanger segments: advance enthalpy (VLE) and apply
+                    # their fixed pressure drop, then skip the pipe-flow calculation.
+                    if seg.get("type") == "heat_exchanger":
+                        duty_kw = float(seg.get("duty_kw", 0.0))
+                        if vle_fluid is not None and vle_m_total_kgs and duty_kw:
+                            _h = (_h or 0.0) + (duty_kw * 1000.0) / vle_m_total_kgs
+                        hx_dp = float(seg.get("dp_kpa", 0.0)) * 1000.0
+                        total_dp  += hx_dp
+                        current_P -= hx_dp
+                        current_P  = max(1e4, current_P)
+                        continue
+
                     D_seg     = PIPE_DATABASE[seg["dn"]][seg["pn"]]
                     lined     = seg.get("lined", False)
                     lthk_m    = seg.get("liner_thickness_mm", 1.0) / 1000.0
@@ -1474,7 +1489,7 @@ def run_sensitivity(
                     if vle_fluid is not None:
                         props_seg = calculate_vle_properties(
                             vle_fluid, current_P / 1e5, vle_x_mass, vle_m_total_kgs,
-                            h_spec=_vle_h_spec)
+                            h_spec=_h)
                     else:
                         props_seg = calculate_two_phase_properties(
                             current_P / 1e5, T_C, gas_flows_kgh, liquid_type, q_lye_m3h,
