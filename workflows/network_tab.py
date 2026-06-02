@@ -691,6 +691,317 @@ def _generate_harp_report(
     return buf.read()
 
 
+# ── Expert review helpers ──────────────────────────────────────────────────────
+
+def _er_grade(mdi: float) -> str:
+    if mdi < 0.05:  return "✅ Excellent"
+    if mdi < 0.20:  return "🟡 Acceptable"
+    if mdi < 0.50:  return "🟠 Poor"
+    return "🔴 Critical"
+
+
+def _er_pattern(
+    channel_results: list,
+    harp_type: str,
+) -> tuple:
+    """Return (label, pearson_r, def_first, def_last, def_centre)."""
+    flows = [r.m_kgs for r in channel_results]
+    n = len(flows)
+    if n < 2:
+        return ("uniform", 0.0, 0.0, 0.0, 0.0)
+
+    mean_f = sum(flows) / n
+    if mean_f < 1e-12:
+        return ("uniform", 0.0, 0.0, 0.0, 0.0)
+
+    std_f = math.sqrt(sum((f - mean_f) ** 2 for f in flows) / n)
+    if std_f < 1e-12 * mean_f:
+        return ("uniform", 0.0, 0.0, 0.0, 0.0)
+
+    third = max(1, n // 3)
+    first_mean  = sum(flows[:third]) / third
+    last_mean   = sum(flows[n - third:]) / third
+    mid_slice   = flows[third: n - third]
+    centre_mean = sum(mid_slice) / max(len(mid_slice), 1) if mid_slice else mean_f
+
+    def_first  = (mean_f - first_mean)  / mean_f
+    def_last   = (mean_f - last_mean)   / mean_f
+    def_centre = (mean_f - centre_mean) / mean_f
+
+    xs = list(range(n))
+    mx = (n - 1) / 2.0
+    std_x = math.sqrt(sum((x - mx) ** 2 for x in xs) / n)
+    cov   = sum((xs[i] - mx) * (flows[i] - mean_f) for i in range(n)) / n
+    r     = cov / max(std_x * std_f, 1e-12)
+
+    if harp_type == "I":
+        # Centre-fed: centre should be high, ends low → "end-starved" is normal
+        if max(abs(def_first), abs(def_last)) > 0.10:
+            return ("end-starved", r, def_first, def_last, def_centre)
+        return ("uniform", r, def_first, def_last, def_centre)
+
+    if abs(r) < 0.3 and max(abs(def_first), abs(def_last), abs(def_centre)) < 0.10:
+        return ("uniform", r, def_first, def_last, def_centre)
+
+    if harp_type in ("Z", "DI"):
+        if r > 0.4:    return ("inlet-starved",  r, def_first, def_last, def_centre)
+        if r < -0.4:   return ("outlet-starved", r, def_first, def_last, def_centre)
+    elif harp_type == "U":
+        if def_first > 0.10 and def_last > 0.10:
+            return ("end-starved",    r, def_first, def_last, def_centre)
+        if def_centre > 0.10:
+            return ("centre-starved", r, def_first, def_last, def_centre)
+
+    return ("mixed", r, def_first, def_last, def_centre)
+
+
+def _er_header_ratio(net, topo) -> tuple:
+    """Return (R, dP_header_Pa, dP_ch_mean_Pa)."""
+    a_ids = topo.header_A_node_ids
+    if topo.harp_type in ("I", "DI"):
+        centre = len(a_ids) // 2
+        dP_hdr = abs(net.node(a_ids[centre]).P_pa - net.node(a_ids[0]).P_pa)
+    else:
+        dP_hdr = abs(net.node(a_ids[0]).P_pa - net.node(a_ids[-1]).P_pa)
+
+    ch_dps     = [abs(net.edge(eid).dP_Pa) for eid in topo.channel_edge_ids]
+    dP_ch_mean = sum(ch_dps) / max(len(ch_dps), 1)
+    R          = dP_hdr / max(dP_ch_mean, 1.0)
+    return R, dP_hdr, dP_ch_mean
+
+
+def _er_type_recs(harp_type: str, mdi: float, N: int) -> list:
+    recs = []
+    if harp_type == "Z":
+        if mdi > 0.20 and N < 10:
+            recs.append("Switch to **Double-inlet Z**: feeds both header ends simultaneously, "
+                        "halving the header pressure gradient.")
+        elif mdi > 0.20 and N >= 10:
+            recs.append("Switch to **U-manifold** (reverse-return): header pressure gradients "
+                        "partially cancel, typically halving MDI for this geometry.")
+        if mdi > 0.30 and N >= 20:
+            recs.append("Or consider **I-manifold** (center-fed): inlet at header midpoint "
+                        "makes distribution symmetric — best uniformity for N > 20.")
+    elif harp_type == "U":
+        if mdi > 0.30:
+            recs.append("Consider **I-manifold** (center-fed) or **Double-inlet Z** "
+                        "for better uniformity at this channel count.")
+    elif harp_type in ("I", "DI"):
+        if mdi > 0.30:
+            recs.append("Distribution topology is already near-optimal; "
+                        "focus on increasing the header ID (see above).")
+    return recs
+
+
+def _er_channel_count_rec(N: int, R: float, mdi: float):
+    if mdi > 0.20 and R > 0.20:
+        N_crit = int(N * math.sqrt(0.20 / R))
+        if N_crit < int(0.70 * N) and N_crit >= 2:
+            return N_crit
+    return None
+
+
+def _er_two_phase(channel_results: list, net, ch_edge_ids: list) -> list:
+    notes = []
+    x_vals = [r.x_gas for r in channel_results]
+    mean_x = sum(x_vals) / max(len(x_vals), 1)
+
+    if mean_x > 1e-4:
+        std_x = math.sqrt(sum((x - mean_x) ** 2 for x in x_vals) / max(len(x_vals), 1))
+        cv    = std_x / max(mean_x, 1e-12)
+        if cv > 0.15:
+            notes.append(
+                f"Gas quality varies across channels (CV = {cv:.0%}) — "
+                "phase maldistribution: gas-rich channels may trend toward dry-out "
+                "or flow reversal at higher total flow."
+            )
+
+    n_rev = sum(1 for eid in ch_edge_ids if net.edge(eid).m_kgs < -1e-8)
+    if n_rev:
+        notes.append(
+            f"⚠ **{n_rev} channel(s) have reversed flow** — liquid is being pushed "
+            "backward by the header pressure gradient. "
+            "Increase total flow or widen the header."
+        )
+
+    from collections import Counter
+    regimes = [r.regime for r in channel_results if r.regime]
+    if regimes:
+        counts = Counter(regimes)
+        majority, maj_count = counts.most_common(1)[0]
+        n_mixed = len(regimes) - maj_count
+        if n_mixed > 0:
+            minority = [rg for rg, _ in counts.most_common() if rg != majority]
+            notes.append(
+                f"Mixed flow regimes: {n_mixed} channel(s) in "
+                f"**{', '.join(minority)}**, majority in **{majority}** — "
+                "channels are near a regime-transition boundary."
+            )
+
+    return notes
+
+
+def _er_series_note(solve_res, topo1, topo2, rep1, rep2) -> list:
+    lines = []
+    P_h1_out = solve_res.net.node(topo1.outlet_node_id).P_pa / 1e5
+    P_h2_in  = solve_res.net.node(topo2.inlet_node_id).P_pa  / 1e5
+    dP_conn  = (P_h1_out - P_h2_in) * 1e5
+    lines.append(
+        f"Connector ΔP = **{dP_conn:.0f} Pa** "
+        f"({P_h1_out:.4f} → {P_h2_in:.4f} bara)"
+    )
+    mdi1, mdi2 = rep1.maldistribution_index, rep2.maldistribution_index
+    if mdi2 > mdi1 * 1.5 and mdi1 > 0.02:
+        lines.append(
+            f"Second harp shows significantly worse distribution "
+            f"(MDI H2 = {mdi2:.3f} vs H1 = {mdi1:.3f}) — "
+            "the connector pipe pressure drop may be insufficient to equalise "
+            "inlet conditions. Consider increasing connector pipe ID."
+        )
+    return lines
+
+
+def _expert_review(
+    solve_res: SolveResult,
+    topo1: HarpTopology,
+    topo2: HarpTopology | None,
+    rep1: StarvationReport,
+    rep2: StarvationReport | None,
+    N: int,
+    h_D: float,
+    c_D: float,
+    c_len: float,
+    h_len: float,
+    P_outlet: float,
+    single_phase: bool,
+) -> str:
+    net = solve_res.net
+
+    if not solve_res.converged:
+        return "*Solver did not converge — expert review unavailable.*"
+    if rep1.n_channels_total < 1:
+        return "*No channel data available.*"
+
+    def _harp_section(topo: HarpTopology, rep: StarvationReport, label: str) -> str:
+        lines = []
+        mdi   = rep.maldistribution_index
+        grade = _er_grade(mdi)
+        n_ch  = rep.n_channels_total
+
+        lines.append(f"#### {label}")
+        lines.append(f"**Grade:** {grade} &nbsp;·&nbsp; MDI = {mdi:.3f} &nbsp;·&nbsp; "
+                     f"mean channel flow = {rep.mean_m_kgs*1000:.1f} g/s")
+
+        # ── Pattern ──────────────────────────────────────────────────────────
+        if n_ch >= 2:
+            pattern, r, def_first, def_last, def_centre = _er_pattern(
+                rep.channel_results, topo.harp_type)
+            third = max(1, n_ch // 3)
+
+            if pattern == "uniform":
+                lines.append("**Pattern:** Uniform distribution — no significant positional bias.")
+            elif pattern == "inlet-starved":
+                lines.append(
+                    f"**Pattern:** Near-inlet channels (ch0–ch{third-1}) receive "
+                    f"**{def_first:.0%} less** flow than far-end channels — "
+                    "classic Z-manifold header-momentum pattern."
+                )
+            elif pattern == "outlet-starved":
+                lines.append(
+                    f"**Pattern:** Far-end channels (ch{n_ch-third}–ch{n_ch-1}) receive "
+                    f"**{def_last:.0%} less** flow than near-inlet channels."
+                )
+            elif pattern == "end-starved":
+                lines.append(
+                    f"**Pattern:** End channels receive less flow than central channels "
+                    f"(first-third deficit {def_first:.0%}, last-third deficit {def_last:.0%}) — "
+                    "consistent with U-manifold reverse-return behaviour."
+                )
+            elif pattern == "centre-starved":
+                lines.append(
+                    f"**Pattern:** Central channels receive **{def_centre:.0%} less** flow "
+                    "than end channels."
+                )
+            elif pattern == "end-starved" and topo.harp_type == "I":
+                lines.append(
+                    f"**Pattern:** End channels receive less flow than the centre-fed "
+                    f"region (end deficit {max(def_first, def_last):.0%}) — "
+                    "expected for I-manifold; reduce only if unacceptable."
+                )
+            else:
+                lines.append(
+                    f"**Pattern:** Irregular distribution (Pearson r = {r:.2f}) — "
+                    "no single dominant positional trend."
+                )
+
+        # ── Root cause ────────────────────────────────────────────────────────
+        R, dP_hdr, dP_ch = _er_header_ratio(net, topo)
+        dP_hdr_mbar = dP_hdr / 100.0
+        dP_ch_mbar  = dP_ch  / 100.0
+        if R > 0.50:
+            cause_label = "Header-dominated"
+        elif R > 0.20:
+            cause_label = "Moderate header effect"
+        else:
+            cause_label = "Channel-dominated (uniform by design)"
+
+        lines.append(
+            f"**Root cause:** Supply header ΔP = {dP_hdr_mbar:.1f} mbar = "
+            f"**{R:.2f}×** channel ΔP ({dP_ch_mbar:.1f} mbar) — {cause_label}."
+        )
+
+        # ── Recommendations ───────────────────────────────────────────────────
+        recs = []
+
+        if R > 0.20:
+            D_rec = h_D * (R / 0.10) ** 0.25
+            recs.append(
+                f"🔧 Increase header ID from **{h_D*1000:.0f} mm** to "
+                f"**{D_rec*1000:.0f} mm** — reduces header/channel ΔP ratio "
+                f"from {R:.2f} to 0.10."
+            )
+
+        for tr in _er_type_recs(topo.harp_type, mdi, n_ch):
+            emoji = "🔄" if "U-manifold" in tr or "Double-inlet" in tr else "⚙️"
+            recs.append(f"{emoji} {tr}")
+
+        N_crit = _er_channel_count_rec(n_ch, R, mdi)
+        if N_crit is not None:
+            recs.append(
+                f"⚙️ Reduce channel count from **{n_ch}** to **{N_crit}** "
+                "to lower per-channel header velocity and reduce header ΔP."
+            )
+
+        if recs:
+            lines.append("**Recommendations:**")
+            for i, rec in enumerate(recs, 1):
+                lines.append(f"{i}. {rec}")
+        elif mdi < 0.05:
+            lines.append("No geometry changes needed — distribution is within ±5% of mean.")
+
+        # ── Two-phase notes ───────────────────────────────────────────────────
+        if not single_phase:
+            tp = _er_two_phase(rep.channel_results, net, topo.channel_edge_ids)
+            if tp:
+                lines.append("\n*Two-phase notes:*")
+                for note in tp:
+                    lines.append(f"- {note}")
+
+        return "\n\n".join(lines)
+
+    parts = [_harp_section(topo1, rep1, "Harp 1")]
+
+    if topo2 is not None and rep2 is not None:
+        parts.append("---")
+        parts.append(_harp_section(topo2, rep2, "Harp 2"))
+        series_lines = _er_series_note(solve_res, topo1, topo2, rep1, rep2)
+        if series_lines:
+            parts.append("---")
+            parts.append("#### Series connector\n\n" + "\n\n".join(series_lines))
+
+    return "\n\n".join(parts)
+
+
 # ── Main render ────────────────────────────────────────────────────────────────
 
 def render_harp_network_tab() -> None:
@@ -1127,8 +1438,13 @@ def render_harp_network_tab() -> None:
             st.info("Configure the manifold and click **▶ Solve network**.")
         return
 
-    solve_res, topo1, topo2, rep1, rep2, found_m_kgs, cached_mode = \
-        st.session_state[_cache_key]
+    _cached = st.session_state[_cache_key]
+    if len(_cached) != 7:
+        st.session_state.pop(_cache_key, None)
+        with col_out:
+            st.info("Cache format updated — please click **▶ Solve network** to re-run.")
+        return
+    solve_res, topo1, topo2, rep1, rep2, found_m_kgs, cached_mode = _cached
 
     with col_out:
         total_starved = rep1.n_channels_starved + (rep2.n_channels_starved if rep2 else 0)
@@ -1244,6 +1560,14 @@ def render_harp_network_tab() -> None:
             with dt2: _build_table(rep2, "H2")
         else:
             _build_table(rep1, "H1")
+
+        # ── Expert Review ─────────────────────────────────────────────────
+        with st.expander("Expert Review", expanded=True):
+            st.markdown(_expert_review(
+                solve_res, topo1, topo2, rep1, rep2,
+                N=N, h_D=h_D, c_D=c_D, c_len=c_len, h_len=h_len,
+                P_outlet=P_outlet, single_phase=single_phase,
+            ))
 
         # ── Export report ──────────────────────────────────────────────────
         st.markdown("##### Export")
