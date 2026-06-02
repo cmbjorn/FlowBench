@@ -214,6 +214,11 @@ def _ch_color(r, Vsl_threshold: float, single_phase: bool,
     return _OK_COLOR
 
 
+_SERIES_GAP   = 0.7   # data-coordinate gap between the two harps
+_H2_Y_TOP     = -_SERIES_GAP          # top of harp 2 headers
+_H2_Y_BOT     = -_SERIES_GAP - 1.0   # bot of harp 2 headers
+
+
 def _make_harp_diagram(
     N: int,
     solve_res: SolveResult,
@@ -224,20 +229,13 @@ def _make_harp_diagram(
     Vsl_threshold: float,
     single_phase: bool,
 ) -> go.Figure:
-    from plotly.subplots import make_subplots
-
     net    = solve_res.net
     series = topo2 is not None and rep2 is not None
-
-    if series:
-        fig = make_subplots(rows=2, cols=1, vertical_spacing=0.08)
-    else:
-        fig = go.Figure()
+    fig    = go.Figure()
 
     def _draw(topo: HarpTopology, report: StarvationReport,
               x_offset: float, y_top: float = 1.0, y_bot: float = 0.0,
-              hide_inlet: bool = False, hide_outlet: bool = False,
-              row: int = 1) -> None:
+              hide_inlet: bool = False, hide_outlet: bool = False) -> None:
         n     = len(topo.channel_edge_ids)
         is_u  = (topo.harp_type == "U")
         is_i  = (topo.harp_type == "I")
@@ -246,27 +244,14 @@ def _make_harp_diagram(
         a_pres = [net.node(nid).P_pa / 1e5 for nid in topo.header_A_node_ids]
         b_pres = [net.node(nid).P_pa / 1e5 for nid in topo.header_B_node_ids]
 
-        # Axis references change for subplot row 2
-        xax = f"x{'' if row == 1 else row}"
-        yax = f"y{'' if row == 1 else row}"
-
         def _at(trace):
-            if series:
-                fig.add_trace(trace, row=row, col=1)
-            else:
-                fig.add_trace(trace)
+            fig.add_trace(trace)
 
         def _aa(**kw):
-            if series:
-                fig.add_annotation(xref=xax, yref=yax, **kw)
-            else:
-                fig.add_annotation(**kw)
+            fig.add_annotation(**kw)
 
         def _as(**kw):
-            if series:
-                fig.add_shape(xref=xax, yref=yax, **kw)
-            else:
-                fig.add_shape(**kw)
+            fig.add_shape(**kw)
 
         # ── Headers ──────────────────────────────────────────────────────────
         _at(go.Scatter(
@@ -483,16 +468,59 @@ def _make_harp_diagram(
 
     # ── Draw harps ────────────────────────────────────────────────────────────
     if series:
-        _draw(topo1, rep1, x_offset=0.0, hide_outlet=True,  row=1)
-        _draw(topo2, rep2, x_offset=0.0, hide_inlet=True,   row=2)
-        # Connector label floats in the spacing band between subplots
-        fig.add_annotation(
-            x=0.5, y=0.5, xref="paper", yref="paper",
-            text=f"↕  connector",
-            showarrow=False,
-            font=dict(size=10, color=_CONN_COLOR),
-            bgcolor="rgba(255,255,255,0.85)", borderpad=3,
+        _draw(topo1, rep1, x_offset=0.0,
+              y_top=1.0, y_bot=0.0, hide_outlet=True)
+        _draw(topo2, rep2, x_offset=0.0,
+              y_top=_H2_Y_TOP, y_bot=_H2_Y_BOT, hide_inlet=True)
+
+        # ── Connector pipe between H1 outlet and H2 inlet ─────────────────
+        is_u = (topo1.harp_type == "U")
+        # H1 outlet: bottom-left for U, bottom-right for Z
+        cx1 = 0.0 if is_u else float(N)
+        cy1 = 0.0          # y_bot of H1
+        # H2 inlet: top-left for both Z and U
+        cx2 = 0.0
+        cy2 = _H2_Y_TOP    # y_top of H2
+        mid_y = (cy1 + cy2) / 2.0
+
+        # Connector path: elbow from H1 outlet down to mid, across, up to H2 inlet
+        conn_x = [cx1, cx1, cx2, cx2]
+        conn_y = [cy1, mid_y, mid_y, cy2]
+
+        # Pressure drop across connector
+        c_er   = solve_res.edge_results.get("connector", {})
+        c_dP   = c_er.get("dP_Pa", 0.0)
+        c_m    = net.edge("connector").m_kgs
+        conn_hover = (
+            f"<b>Connector</b><br>"
+            f"ΔP = {c_dP/1e3:.3f} kPa<br>"
+            f"ṁ = {c_m*1000:.1f} g/s"
         )
+
+        fig.add_trace(go.Scatter(
+            x=conn_x, y=conn_y, mode="lines",
+            line=dict(color=_CONN_COLOR, width=4, dash="dash"),
+            hovertemplate=conn_hover + "<extra></extra>",
+            showlegend=False,
+        ))
+        # Arrow at H2 inlet end
+        fig.add_trace(go.Scatter(
+            x=[cx2], y=[cy2], mode="markers",
+            marker=dict(size=14, color=_CONN_COLOR, symbol="arrow-down",
+                        line=dict(color="white", width=1)),
+            hoverinfo="skip", showlegend=False,
+        ))
+        # Label at the midpoint of the connector
+        fig.add_annotation(
+            x=(cx1 + cx2) / 2, y=mid_y,
+            text=(f"<b>connector</b>  ΔP = {c_dP/1e3:.2f} kPa"),
+            showarrow=False,
+            xanchor="center", yanchor="middle",
+            font=dict(size=10, color=_CONN_COLOR),
+            bgcolor="rgba(255,255,255,0.90)", borderpad=3,
+            xshift=40 if cx1 == cx2 else 0,
+        )
+
     else:
         _draw(topo1, rep1, x_offset=0.0)
 
@@ -506,18 +534,16 @@ def _make_harp_diagram(
                                   name=label, showlegend=True))
 
     _ax_kw = dict(showgrid=False, zeroline=False, showticklabels=False)
-    _y_kw  = dict(**_ax_kw, range=[-0.55, 1.65])
+    _y_range = [-0.55 - _SERIES_GAP - 1.0, 1.65] if series else [-0.55, 1.65]
     layout_kw: dict = dict(
         template="plotly_white",
-        height=640 if series else 380,
+        height=680 if series else 380,
         margin=dict(l=60, r=30, t=35, b=55),
-        yaxis=_y_kw, xaxis=_ax_kw,
+        yaxis=dict(**_ax_kw, range=_y_range),
+        xaxis=_ax_kw,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hoverlabel=dict(bgcolor="white", font_size=11),
     )
-    if series:
-        layout_kw["yaxis2"] = _y_kw
-        layout_kw["xaxis2"] = _ax_kw
     fig.update_layout(**layout_kw)
     return fig
 
