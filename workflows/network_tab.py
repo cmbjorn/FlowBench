@@ -247,36 +247,43 @@ def _make_harp_diagram(
         ))
 
         # ── Channels ─────────────────────────────────────────────────────────
+        # Group by colour → 3 traces max regardless of N (was 1 trace per channel).
         mean_m = report.mean_m_kgs
-        if n <= 200:
+        if n <= 500:
+            _seg_x:  dict[str, list] = {}
+            _seg_y:  dict[str, list] = {}
+            _seg_ht: dict[str, list] = {}
+            _seg_w:  dict[str, list] = {}
             for idx, r in enumerate(report.channel_results):
                 xc    = x_offset + idx * n / max(n, 1)
                 color = _ch_color(r, Vsl_threshold, single_phase, mean_m)
                 w     = max(1, min(8, int(r.m_kgs / max(mean_m, 1e-12) * 4)))
+                ht    = (
+                    f"<b>ch{idx}</b><br>"
+                    f"m = {r.m_kgs*1000:.2f} g/s<br>"
+                    f"Vsl = {r.Vsl:.4f} m/s<br>"
+                    + (f"Vsg = {r.Vsg:.4f} m/s<br>x = {r.x_gas:.4f}<br>"
+                       if not single_phase else "")
+                    + f"{'⚠ LOW' if r.starved else '✓ OK'}"
+                )
+                if color not in _seg_x:
+                    _seg_x[color]  = []
+                    _seg_y[color]  = []
+                    _seg_ht[color] = []
+                    _seg_w[color]  = []
+                _seg_x[color].extend([xc, xc, None])
+                _seg_y[color].extend([y_bot, y_top, None])
+                _seg_ht[color].extend([ht, ht, None])
+                _seg_w[color].append(w)
+            for color in _seg_x:
+                avg_w = max(1, int(sum(_seg_w[color]) / len(_seg_w[color])))
                 _at(go.Scatter(
-                    x=[xc, xc], y=[y_bot, y_top], mode="lines",
-                    line=dict(color=color, width=w),
-                    hovertemplate=(
-                        f"<b>ch{idx}</b><br>"
-                        f"m = {r.m_kgs*1000:.2f} g/s<br>"
-                        f"Vsl = {r.Vsl:.4f} m/s<br>"
-                        + (f"Vsg = {r.Vsg:.4f} m/s<br>x = {r.x_gas:.4f}<br>"
-                           if not single_phase else "")
-                        + f"{'⚠ LOW' if r.starved else '✓ OK'}"
-                        "<extra></extra>"
-                    ),
+                    x=_seg_x[color], y=_seg_y[color], mode="lines",
+                    line=dict(color=color, width=avg_w),
+                    text=_seg_ht[color],
+                    hovertemplate="%{text}<extra></extra>",
                     showlegend=False,
                 ))
-        else:
-            xs = [x_offset + idx * n / max(n, 1) for idx in range(n)]
-            for xi, col in zip(xs, [_ch_color(r, Vsl_threshold, single_phase, mean_m)
-                                     for r in report.channel_results]):
-                _as(type="rect",
-                    x0=xi, x1=xi + n / max(n, 1),
-                    y0=y_bot, y1=y_top,
-                    fillcolor=col, opacity=0.6,
-                    line=dict(width=0),
-                )
 
         # ── Visual constants ──────────────────────────────────────────────────
         P_in  = net.node(topo.inlet_node_id).P_pa / 1e5
