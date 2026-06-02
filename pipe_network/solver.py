@@ -154,13 +154,23 @@ def _compute_props_and_dp(
     )
     dP = float(res["dP_Pa"])
 
+    rho_mix = props.get("rho_hom", props.get("rho_l", 1000.0))
+
     # T-junction K-factor (§B): direction-dependent, applied to mass flux
     K_junc = e.junction_K_fwd if e.m_kgs >= 0 else e.junction_K_rev
     if K_junc > 0.0:
-        A_e    = math.pi * e.D_inner ** 2 / 4.0
-        G_e    = m_abs / max(A_e, 1e-12)                    # kg/(m²·s)
-        rho_mix = props.get("rho_hom", props.get("rho_l", 1000.0))
-        dP    += K_junc * G_e ** 2 / (2.0 * max(rho_mix, 1.0))
+        A_e = math.pi * e.D_inner ** 2 / 4.0
+        G_e = m_abs / max(A_e, 1e-12)                       # kg/(m²·s)
+        dP += K_junc * G_e ** 2 / (2.0 * max(rho_mix, 1.0))
+
+    # Sharp-edged orifice restriction (ISO 5167, Cd = 0.61)
+    if e.orifice_D > 0.0:
+        A_o  = math.pi * e.orifice_D ** 2 / 4.0
+        beta = min(e.orifice_D / max(e.D_inner, 1e-6), 0.999)
+        Cd   = 0.61
+        dP  += m_abs ** 2 * (1.0 - beta ** 4) / (
+            2.0 * max(rho_mix, 1.0) * (Cd * A_o) ** 2
+        )
 
     # Write regime info to edge
     e.Vsg   = res["Vsg"]

@@ -77,6 +77,7 @@ def build_harp(
     header_roughness_m: float | None = None,
     channel_D_inner_m: float | None = None,
     channel_roughness_m: float | None = None,
+    channel_orifice_D: float = 0.0,
 ) -> tuple[Network, HarpTopology]:
     """
     Build a single harp manifold with *N* channels.
@@ -203,6 +204,7 @@ def build_harp(
             # may experience reversed flow, so K_rev applies there.
             junction_K_fwd=0.5,
             junction_K_rev=0.3,
+            orifice_D=channel_orifice_D,
         ))
 
     # ── Header-B edges ────────────────────────────────────────────────────────
@@ -287,6 +289,7 @@ def build_series_harp(
     channel_roughness_m: float | None = None,
     connector_D_inner_m: float | None = None,
     connector_roughness_m: float | None = None,
+    channel_orifice_D: float = 0.0,
 ) -> tuple[Network, HarpTopology, HarpTopology]:
     """
     Build two identical harps in series, joined by a single connector pipe.
@@ -314,6 +317,7 @@ def build_series_harp(
         harp_type=harp_type,
         header_D_inner_m=header_D_inner_m, header_roughness_m=header_roughness_m,
         channel_D_inner_m=channel_D_inner_m, channel_roughness_m=channel_roughness_m,
+        channel_orifice_D=channel_orifice_D,
     )
     net1, topo1 = build_harp(N, harp_id="H1", **_harp_kwargs)
     net2, topo2 = build_harp(N, harp_id="H2", **_harp_kwargs)
@@ -379,6 +383,7 @@ def build_center_fed_harp(
     header_roughness_m: float | None = None,
     channel_D_inner_m: float | None = None,
     channel_roughness_m: float | None = None,
+    channel_orifice_D: float = 0.0,
 ) -> tuple["Network", HarpTopology]:
     """
     **I-manifold (center-fed)**: inlet at the centre of header A, outlet at the
@@ -461,7 +466,8 @@ def build_center_fed_harp(
                           D_inner=c_D, roughness=c_eps,
                           L_pipe=channel_length, L_fittings=channel_fittings_le,
                           angle_rad=channel_angle_rad, m_kgs=0.0,
-                          junction_K_fwd=0.5, junction_K_rev=0.3, **_ekw))
+                          junction_K_fwd=0.5, junction_K_rev=0.3,
+                          orifice_D=channel_orifice_D, **_ekw))
 
     # Header B segments (B_i → B_{i+1}, both ends capped)
     hb_ids = []
@@ -511,6 +517,7 @@ def build_biinlet_harp(
     header_roughness_m: float | None = None,
     channel_D_inner_m: float | None = None,
     channel_roughness_m: float | None = None,
+    channel_orifice_D: float = 0.0,
 ) -> tuple["Network", HarpTopology]:
     """
     **Double-inlet Z-manifold**: flow enters at **both** ends of the supply header
@@ -591,7 +598,8 @@ def build_biinlet_harp(
                           D_inner=c_D, roughness=c_eps,
                           L_pipe=channel_length, L_fittings=channel_fittings_le,
                           angle_rad=channel_angle_rad, m_kgs=0.0,
-                          junction_K_fwd=0.5, junction_K_rev=0.3, **_ekw))
+                          junction_K_fwd=0.5, junction_K_rev=0.3,
+                          orifice_D=channel_orifice_D, **_ekw))
 
     # Header B (Z-style: B_0 → B_N, outlet at B_N)
     hb_ids = []

@@ -729,6 +729,14 @@ def _generate_harp_report(
         _ch_id_label = "Channel ID"
         _ch_id_val   = f"{c_D*1000:.1f} mm"
 
+    _ori_mm = inputs.get("orifice_d_mm", 0.0)
+    if _ori_mm > 0:
+        _beta_r = _ori_mm / max(c_D * 1000, 0.001)
+        _k_ori  = (1 - _beta_r**4) / ((0.61 * _beta_r**2) ** 2)
+        _ori_str = f"{_ori_mm:.2f} mm  (β = {_beta_r:.3f}, K ≈ {_k_ori:.1f})"
+    else:
+        _ori_str = None
+
     left_rows = [
         ("Type",           _type_labels.get(_type_str, _type_str)),
         ("Harps",          _harp_count),
@@ -745,14 +753,22 @@ def _generate_harp_report(
         ("P_inlet",       f"{P_in_result:.3f} bara"),
         ("ΔP total",      dP_str + ("" if c_dP is None else f"  (connector {c_dP/1e3:.2f} kPa)")),
     ]
-    cfg = doc.add_table(rows=len(left_rows), cols=4)
+    if _ori_str:
+        left_rows.append(("Orifice ID", _ori_str))
+    # Pair rows; if left has an extra row (e.g. orifice), pad right with empty
+    _nrows = max(len(left_rows), len(right_rows))
+    while len(left_rows)  < _nrows: left_rows.append(("", ""))
+    while len(right_rows) < _nrows: right_rows.append(("", ""))
+
+    cfg = doc.add_table(rows=_nrows, cols=4)
     cfg.style = "Table Grid"
     for i, ((lp, lv), (rp, rv)) in enumerate(zip(left_rows, right_rows)):
         r = cfg.rows[i]
         r.cells[0].text = lp;  r.cells[1].text = lv
         r.cells[2].text = rp;  r.cells[3].text = rv
         for ci in (0, 2):
-            r.cells[ci].paragraphs[0].runs[0].bold = True
+            if r.cells[ci].paragraphs[0].runs:
+                r.cells[ci].paragraphs[0].runs[0].bold = True
         for ci in range(4):
             _cell_pt(r.cells[ci], 9)
     _shade_row(cfg.rows[0], "E2E8F0")
@@ -1269,6 +1285,40 @@ def render_harp_network_tab() -> None:
             else:
                 rect_w = rect_h = 0.0
 
+        # Channel orifice restriction
+        with st.expander("Channel orifice restriction (optional)", expanded=False):
+            use_orifice = st.toggle(
+                "Add orifice to each channel",
+                key=_k("use_orifice"),
+                value=st.session_state.get(_k("use_orifice"), False),
+                help="Inserts a sharp-edged orifice plate at each channel inlet. "
+                     "Increases resistance uniformly across all channels, "
+                     "which improves flow distribution at the cost of higher ΔP.",
+            )
+            if use_orifice:
+                _max_ori = c_D * 1000 * 0.99
+                orifice_d_mm = st.number_input(
+                    "Orifice ID (mm)",
+                    min_value=0.1, max_value=float(f"{_max_ori:.2f}"),
+                    value=float(st.session_state.get(
+                        _k("orifice_d_mm"),
+                        round(min(c_D * 1000 * 0.5, _max_ori), 2),
+                    )),
+                    step=0.1, format="%.2f", key=_k("orifice_d_mm"),
+                    help="Must be smaller than the channel ID.",
+                )
+                _beta = orifice_d_mm / (c_D * 1000)
+                st.caption(
+                    f"β = d/D = {_beta:.3f}   "
+                    f"(orifice {orifice_d_mm:.2f} mm / channel {c_D*1000:.2f} mm)   "
+                    f"K ≈ {(1-_beta**4)/((0.61*_beta**2)**2):.1f}  "
+                    f"[ISO 5167, Cd = 0.61]"
+                )
+                channel_orifice_D = orifice_d_mm / 1000.0
+            else:
+                orifice_d_mm   = 0.0
+                channel_orifice_D = 0.0
+
         # Parallel channels per branch
         channels_per_branch = int(st.number_input(
             "Channels per branch", min_value=1, max_value=8,
@@ -1529,6 +1579,7 @@ def render_harp_network_tab() -> None:
         use_rect=st.session_state.get(_k("use_rect"), False),
         rect_w=st.session_state.get(_k("rect_w"), 0),
         rect_h=st.session_state.get(_k("rect_h"), 0),
+        orifice_d_mm=orifice_d_mm,
         corr=corr, void=void, relax=relax, max_iter=max_iter,
         solve_mode=solve_mode, goal_seek=goal_seek, P_inlet_target=P_inlet_target,
         solver_method=solver_method,
@@ -1557,6 +1608,7 @@ def render_harp_network_tab() -> None:
                         channel_length=c_len, channel_angle_rad=c_angle,
                         correlation=corr, voidage_method=void,
                         P_inlet_pa=P_bara * 1e5, T_C=T_C, x_inlet=x_inlet,
+                        channel_orifice_D=channel_orifice_D,
                     )
 
                     effective_series = series_mode and harp_type_str in ("Z", "U")
@@ -1846,6 +1898,7 @@ def render_harp_network_tab() -> None:
                             N=N, h_D=h_D, c_D=c_D, c_len=c_len, h_len=h_len,
                             channels_per_branch=channels_per_branch,
                             use_rect=use_rect, rect_w=rect_w, rect_h=rect_h,
+                            orifice_d_mm=orifice_d_mm,
                             liq_type=liq_type, gas_lbl=_gas_lbl,
                             m_total=m_total, found_m_kgs=found_m_kgs,
                             x_inlet=x_inlet,

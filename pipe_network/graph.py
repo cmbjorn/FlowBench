@@ -38,6 +38,9 @@ class Edge:
     # The correct K is chosen each iteration based on sign(m_kgs) — §B constraint.
     junction_K_fwd: float = 0.0   # m_kgs >= 0: dividing T (flow into branch)
     junction_K_rev: float = 0.0   # m_kgs <  0: combining T (flow from branch)
+    # Sharp-edged orifice restriction (0 = disabled).
+    # ΔP_orifice added on top of pipe friction using ISO 5167 Cd = 0.61.
+    orifice_D:      float = 0.0   # m — orifice bore diameter
     # Quantities written by the solver each iteration:
     dP_Pa:   float = 0.0
     Vsg:     float = 0.0
