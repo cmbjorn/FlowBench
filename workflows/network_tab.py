@@ -658,6 +658,9 @@ def _generate_harp_report(
     _type_str    = inputs.get("harp_type_str", "Z")
     _type_labels = {"Z": "Z-manifold", "U": "U-manifold", "I": "I-manifold", "DI": "Double-inlet Z"}
     series       = topo2 is not None
+    use_rect     = inputs.get("use_rect", False)
+    rect_w       = inputs.get("rect_w", 0.0)
+    rect_h       = inputs.get("rect_h", 0.0)
 
     # ── Helper: shade a table row ──────────────────────────────────────────────
     def _shade_row(row, hex_color: str) -> None:
@@ -710,13 +713,22 @@ def _generate_harp_report(
     c_er  = solve_res.edge_results.get("connector", {})
     c_dP  = c_er.get("dP_Pa", None)
 
+    if use_rect:
+        _ch_id_label = "Channel D_h"
+        _ch_id_val   = (f"{c_D*1000:.2f} mm  "
+                        f"(rect {rect_w:.1f}×{rect_h:.1f} mm, "
+                        f"A = {rect_w*rect_h:.1f} mm²)")
+    else:
+        _ch_id_label = "Channel ID"
+        _ch_id_val   = f"{c_D*1000:.1f} mm"
+
     left_rows = [
-        ("Type",          _type_labels.get(_type_str, _type_str)),
-        ("Harps",         _harp_count),
-        ("Channels",      _ch_desc),
-        ("Header ID",     f"{inputs.get('h_D', 0)*1000:.1f} mm"),
-        ("Channel ID",    f"{c_D*1000:.1f} mm"),
-        ("Channel L",     f"{inputs.get('c_len', 0)*1000:.0f} mm"),
+        ("Type",           _type_labels.get(_type_str, _type_str)),
+        ("Harps",          _harp_count),
+        ("Channels",       _ch_desc),
+        ("Header ID",      f"{inputs.get('h_D', 0)*1000:.1f} mm"),
+        (_ch_id_label,     _ch_id_val),
+        ("Channel length", f"{inputs.get('c_len', 0)*1000:.0f} mm"),
     ]
     right_rows = [
         ("Fluid",         inputs.get("liq_type", "—") + ("" if single_phase else f" / {inputs.get('gas_lbl','—')}")),
@@ -1826,6 +1838,7 @@ def render_harp_network_tab() -> None:
                             harp_type_str=harp_type_str, series_mode=series_mode,
                             N=N, h_D=h_D, c_D=c_D, c_len=c_len, h_len=h_len,
                             channels_per_branch=channels_per_branch,
+                            use_rect=use_rect, rect_w=rect_w, rect_h=rect_h,
                             liq_type=liq_type, gas_lbl=_gas_lbl,
                             m_total=m_total, found_m_kgs=found_m_kgs,
                             x_inlet=x_inlet,
