@@ -874,6 +874,7 @@ def _expert_review(
     h_len: float,
     P_outlet: float,
     single_phase: bool,
+    channels_per_branch: int = 1,
 ) -> str:
     net = solve_res.net
 
@@ -882,15 +883,24 @@ def _expert_review(
     if rep1.n_channels_total < 1:
         return "*No channel data available.*"
 
+    k = channels_per_branch
+
     def _harp_section(topo: HarpTopology, rep: StarvationReport, label: str) -> str:
         lines = []
         mdi   = rep.maldistribution_index
         grade = _er_grade(mdi)
         n_ch  = rep.n_channels_total
+        mean_per_ch = rep.mean_m_kgs / k
 
+        ch_desc = (f"{n_ch} branches × {k} ch = {n_ch*k} physical channels"
+                   if k > 1 else f"{n_ch} channels")
         lines.append(f"#### {label}")
-        lines.append(f"**Grade:** {grade} &nbsp;·&nbsp; MDI = {mdi:.3f} &nbsp;·&nbsp; "
-                     f"mean channel flow = {rep.mean_m_kgs*1000:.1f} g/s")
+        lines.append(
+            f"**Grade:** {grade} &nbsp;·&nbsp; MDI = {mdi:.3f} &nbsp;·&nbsp; "
+            f"{ch_desc} &nbsp;·&nbsp; "
+            f"mean {'branch' if k>1 else 'channel'} flow = {rep.mean_m_kgs*1000:.1f} g/s"
+            + (f" ({mean_per_ch*1000:.1f} g/s per physical channel)" if k > 1 else "")
+        )
 
         # ── Pattern ──────────────────────────────────────────────────────────
         if n_ch >= 2:
@@ -1091,6 +1101,25 @@ def render_harp_network_tab() -> None:
                 c_D = Dh  # override diameter used in builder
             else:
                 rect_w = rect_h = 0.0
+
+        # Parallel channels per branch
+        channels_per_branch = int(st.number_input(
+            "Channels per branch", min_value=1, max_value=8,
+            value=int(st.session_state.get(_k("cpb"), 1)), step=1,
+            key=_k("cpb"),
+            help="Number of parallel, identical channels at each header tap. "
+                 "2 = two channels side-by-side at every branch point. "
+                 "The solver uses an equivalent diameter; results are shown "
+                 "per physical channel.",
+        ))
+        # Equivalent diameter for k parallel channels (turbulent Darcy-Weisbach):
+        # resistance R ∝ 1/D^5; k parallel pipes → R_eq = R/k²  → D_eq = D·k^0.4
+        c_D_eff = c_D * (channels_per_branch ** 0.4) if channels_per_branch > 1 else c_D
+        if channels_per_branch > 1:
+            st.caption(
+                f"{channels_per_branch} ch/branch → equivalent channel ID "
+                f"{c_D_eff*1000:.1f} mm  (physical ID {c_D*1000:.1f} mm)"
+            )
         if series_mode:
             k_D, k_eps, k_len = _pipe_section(
                 "Connector pipe", "hn_k",
@@ -1212,28 +1241,30 @@ def render_harp_network_tab() -> None:
             pc1, pc2 = st.columns([3, 1])
             _ch_unit = pc2.selectbox("", ["L/h", "m/s"], key=_k("ch_unit"),
                                       label_visibility="hidden")
+            _ch_label_in = "per physical channel" if channels_per_branch > 1 else "per channel"
             if _ch_unit == "L/h":
                 _ch_target = pc1.number_input(
-                    "Liquid flow per channel (L/h)",
+                    f"Liquid flow {_ch_label_in} (L/h)",
                     min_value=0.0, max_value=1_000_000.0,
                     value=float(st.session_state.get(_k("ch_target_lh"), 100.0)),
                     step=1.0, format="%.1f", key=_k("ch_target_lh"),
                 )
-                liq_kgh = _ch_target * N          # ≈ ρ=1 kg/L
+                liq_kgh = _ch_target * N * channels_per_branch   # total = per-ch × branches × k
                 _ch_vsl = (_ch_target / 3600.0 / 1000.0) / _ch_A if _ch_A > 0 else 0
             else:
                 _ch_target = pc1.number_input(
-                    "V_sl per channel (m/s)",
+                    f"V_sl {_ch_label_in} (m/s)",
                     min_value=0.0, max_value=20.0,
                     value=float(st.session_state.get(_k("ch_target_vsl"), 0.5)),
                     step=0.05, format="%.3f", key=_k("ch_target_vsl"),
                 )
-                liq_kgh = _ch_target * _ch_A * _rho_approx * N * 3600.0
+                liq_kgh = _ch_target * _ch_A * _rho_approx * N * channels_per_branch * 3600.0
                 _ch_vsl = _ch_target
             P_bara = P_outlet + 1.0
+            _total_ch_count = N * channels_per_branch
             st.caption(
                 f"Total: **{liq_kgh:.0f} kg/h** = "
-                f"**{liq_kgh/max(N,1):.1f} L/h** × {N} channels "
+                f"**{_ch_target:.1f} {_ch_unit}** × {_total_ch_count} physical channels "
                 f"(V_sl ≈ {_ch_vsl:.3f} m/s)"
             )
 
@@ -1289,6 +1320,7 @@ def render_harp_network_tab() -> None:
         N=N, series_mode=series_mode, harp_type=harp_type_str,
         h_D=h_D, h_eps=h_eps, h_len=h_len,
         c_D=c_D, c_eps=c_eps, c_len=c_len, c_angle=c_angle,
+        channels_per_branch=channels_per_branch,
         k_D=k_D, k_eps=k_eps, k_len=k_len,
         P_bara=P_bara, T_C=T_C, P_outlet=P_outlet,
         gas_lbl=_gas_lbl, gas_kgh=gas_kgh,
@@ -1319,12 +1351,16 @@ def render_harp_network_tab() -> None:
 
                     _common = dict(
                         header_D_inner_m=h_D, header_roughness_m=h_eps,
-                        channel_D_inner_m=c_D, channel_roughness_m=c_eps,
+                        channel_D_inner_m=c_D_eff, channel_roughness_m=c_eps,
                         header_segment_length=h_len,
                         channel_length=c_len, channel_angle_rad=c_angle,
                         correlation=corr, voidage_method=void,
                         P_inlet_pa=P_bara * 1e5, T_C=T_C, x_inlet=x_inlet,
                     )
+                    # Starvation threshold scaled for equivalent pipe:
+                    # V_eq = V_per_ch × k^0.2, so threshold_eff = threshold × k^0.2
+                    _k_exp = channels_per_branch ** 0.2
+                    Vsl_threshold_eff = Vsl_threshold * _k_exp
 
                     effective_series = series_mode and harp_type_str in ("Z", "U")
 
@@ -1418,9 +1454,9 @@ def render_harp_network_tab() -> None:
                         _found_m_kgs = m_total
 
                     rep1 = check_starvation(solve_res, topo1.channel_edge_ids,
-                                             Vsl_threshold=Vsl_threshold)
+                                             Vsl_threshold=Vsl_threshold_eff)
                     rep2 = (check_starvation(solve_res, topo2.channel_edge_ids,
-                                              Vsl_threshold=Vsl_threshold)
+                                              Vsl_threshold=Vsl_threshold_eff)
                             if topo2 else None)
 
                     st.session_state[_cache_key] = (
@@ -1455,11 +1491,13 @@ def render_harp_network_tab() -> None:
         P_in_result  = solve_res.net.node(topo1.inlet_node_id).P_pa / 1e5
         dP_bar       = P_in_result - P_outlet
         dP_str       = f"{dP_bar*1000:.1f} mbar" if dP_bar < 1 else f"{dP_bar:.4f} bar"
-        found_kgh    = found_m_kgs * 3600.0
+        found_kgh     = found_m_kgs * 3600.0
         n_total_harps = 2 if topo2 else 1
-        found_ch_lh  = found_kgh / max(N * n_total_harps, 1)
-        found_ch_vsl = (found_m_kgs / max(N * n_total_harps, 1)) / (_rho_approx * _ch_A) \
-                       if _ch_A > 0 else 0.0
+        # Per-physical-channel values (branch flow ÷ channels_per_branch)
+        _n_branches   = N * n_total_harps
+        found_ch_lh   = found_kgh / max(_n_branches * channels_per_branch, 1)
+        found_ch_vsl  = (found_m_kgs / max(_n_branches * channels_per_branch, 1)) \
+                        / (_rho_approx * _ch_A) if _ch_A > 0 else 0.0
 
         bc = st.columns(5)
         bc[0].metric("Solver", f"{'✅' if solve_res.converged else '⚠️'} {solve_res.iterations} iters")
@@ -1478,10 +1516,11 @@ def render_harp_network_tab() -> None:
         bc[4].metric("MDI", f"{mdi_combined:.4f}")
 
         # Per-channel summary line beneath metrics
+        _ch_label = "per physical channel" if channels_per_branch > 1 else "per channel"
         st.caption(
             f"P_inlet = **{P_in_result:.4f} bara** — "
             f"total **{found_kgh:.1f} kg/h** — "
-            f"**{found_ch_lh:.1f} L/h** per channel (V_sl ≈ {found_ch_vsl:.3f} m/s)"
+            f"**{found_ch_lh:.1f} L/h** {_ch_label} (V_sl ≈ {found_ch_vsl:.3f} m/s)"
         )
 
         if not solve_res.converged:
@@ -1492,13 +1531,16 @@ def render_harp_network_tab() -> None:
                 st.caption(f"ℹ {w}")
 
         st.markdown("##### Network diagram")
+        _cpb = channels_per_branch
         st.caption(
-            f"{N} ch/harp · {'single-phase' if single_phase else 'two-phase'}"
+            f"{N} branches"
+            + (f" × {_cpb} ch/branch = {N*_cpb} physical channels" if _cpb > 1 else f" · {N} channels")
+            + f" · {'single-phase' if single_phase else 'two-phase'}"
             + (" · 2 harps in series" if topo2 else "")
             + " — hover for detail"
         )
         fig_diag = _make_harp_diagram(N, solve_res, topo1, topo2, rep1, rep2,
-                                       Vsl_threshold, single_phase)
+                                       Vsl_threshold_eff, single_phase)
         st.plotly_chart(fig_diag, use_container_width=True,
                         config={"displayModeBar": False})
 
@@ -1506,7 +1548,7 @@ def render_harp_network_tab() -> None:
         with dc1:
             st.markdown("##### Channel flow distribution")
             reports_bar = [(rep1, "H1")] + ([(rep2, "H2")] if rep2 else [])
-            st.plotly_chart(_make_flow_bar_chart(reports_bar, Vsl_threshold, single_phase),
+            st.plotly_chart(_make_flow_bar_chart(reports_bar, Vsl_threshold_eff, single_phase),
                             use_container_width=True, config={"displayModeBar": False})
         with dc2:
             st.markdown("##### Header pressure profile")
@@ -1518,28 +1560,36 @@ def render_harp_network_tab() -> None:
         import pandas as pd
 
         def _build_table(report: StarvationReport, label: str) -> None:
+            k   = channels_per_branch
+            A_s = math.pi * c_D ** 2 / 4.0   # physical single-channel area
             rows = []
             for r in report.channel_results:
+                # Per-physical-channel values (branch values ÷ k)
+                m_ch  = r.m_kgs / k
+                vsl_ch = m_ch / max(1000.0 * A_s, 1e-12)   # ρ≈1000 approximation
                 if single_phase:
                     frac = r.m_kgs / max(report.mean_m_kgs, 1e-12)
                     status = ("🔴 LOW" if frac < 0.7 else
                               "🟡" if frac < 0.9 else "🟢 OK")
                 else:
                     status = ("🔴 STARVED" if r.starved else
-                              "🟡 Low" if r.Vsl < 2 * Vsl_threshold else "🟢 OK")
-                row = {"Ch": r.channel_index,
-                       "m (g/s)": round(r.m_kgs * 1000, 2),
-                       "V_sl (m/s)": round(r.Vsl, 4)}
+                              "🟡 Low" if vsl_ch < 2 * Vsl_threshold else "🟢 OK")
+                col_m   = "m/ch (g/s)" if k > 1 else "m (g/s)"
+                col_vsl = "V_sl/ch (m/s)" if k > 1 else "V_sl (m/s)"
+                row = {"Branch": r.channel_index,
+                       col_m:   round(m_ch * 1000, 2),
+                       col_vsl: round(vsl_ch, 4)}
                 if not single_phase:
-                    row["V_sg (m/s)"] = round(r.Vsg, 4)
+                    row["V_sg (m/s)"] = round(r.Vsg / max(k ** 0.2, 1), 4)
                     row["x_gas"]      = round(r.x_gas, 4)
                     row["Regime"]     = r.regime
                 row["Status"] = status
                 rows.append(row)
             df = pd.DataFrame(rows)
 
+            vsl_col = "V_sl/ch (m/s)" if k > 1 else "V_sl (m/s)"
             def _style(row):
-                v = row.get("V_sl (m/s)", 1)
+                v = row.get(vsl_col, 1)
                 if v < Vsl_threshold:
                     return ["background-color:#fee2e2;font-weight:bold"] * len(row)
                 if v < 2 * Vsl_threshold:
@@ -1548,7 +1598,8 @@ def render_harp_network_tab() -> None:
 
             caption = (f"{label} — MDI = {report.maldistribution_index:.4f}"
                        + (f"  ⚠ {report.n_channels_starved} low-flow"
-                          if report.n_channels_starved else ""))
+                          if report.n_channels_starved else "")
+                       + (f"  · values per physical channel (branch ÷ {k})" if k > 1 else ""))
             st.caption(caption)
             h = min(420, 52 + len(rows) * 36)
             st.dataframe(df.style.apply(_style, axis=1),
@@ -1567,6 +1618,7 @@ def render_harp_network_tab() -> None:
                 solve_res, topo1, topo2, rep1, rep2,
                 N=N, h_D=h_D, c_D=c_D, c_len=c_len, h_len=h_len,
                 P_outlet=P_outlet, single_phase=single_phase,
+                channels_per_branch=channels_per_branch,
             ))
 
         # ── Export report ──────────────────────────────────────────────────
