@@ -35,21 +35,45 @@ st.set_page_config(
 # with what the user entered when they navigate back. Must run before any widget
 # is created.
 #
-# Action widgets (button / download_button / form_submit_button) forbid writing
-# their key via the Session State API — re-assigning one raises
-# StreamlitValueAssignmentNotAllowedError. They are transient anyway and need no
-# persistence, so skip any key whose name contains an action verb as a delimited
-# token. Add new verbs here if future action-widget keys don't match.
+# Write-disallowed widgets — button, download_button, form_submit_button,
+# file_uploader, camera_input, chat_input — forbid writing their key via the
+# Session State API; re-assigning one raises StreamlitValueAssignmentNotAllowed-
+# Error. They are transient and need no persistence, so they are skipped via:
+#   1. a verb regex covering action buttons (incl. dynamic keys like del_seg_3),
+#   2. an explicit set for write-disallowed widgets whose key has no action verb
+#      (currently only the session file_uploader), and
+#   3. an UploadedFile type guard so any future file_uploader is skipped too.
+# When adding a file_uploader/camera_input/chat_input with a verb-less key, add
+# its key to _NO_PERSIST_KEYS.
 import re as _re
 _ACTION_KEY_RE = _re.compile(
     r"(^|_)(run|goto|add|del|rem|fadd|frem|apply|gen|calc|btn|dl|"
-    r"download|save|load|submit|reset|clear|remove|export)(_|$)"
+    r"upload|download|save|load|submit|reset|clear|remove|export)(_|$)"
 )
+_NO_PERSIST_KEYS = {"session_uploader"}
+try:
+    from streamlit.runtime.uploaded_file_manager import UploadedFile as _UploadedFile
+except Exception:
+    _UploadedFile = ()
+
+
+def _skip_persist(key, val) -> bool:
+    if key in _NO_PERSIST_KEYS or _ACTION_KEY_RE.search(key):
+        return True
+    if _UploadedFile and isinstance(val, _UploadedFile):
+        return True
+    if isinstance(val, list) and val and _UploadedFile \
+            and all(isinstance(v, _UploadedFile) for v in val):
+        return True
+    return False
+
+
 for _persist_k in list(st.session_state.keys()):
-    if _ACTION_KEY_RE.search(_persist_k):
+    _persist_v = st.session_state[_persist_k]
+    if _skip_persist(_persist_k, _persist_v):
         continue
     try:
-        st.session_state[_persist_k] = st.session_state[_persist_k]
+        st.session_state[_persist_k] = _persist_v
     except Exception:
         # Any widget that disallows Session State writes — leave it untouched.
         pass
