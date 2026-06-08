@@ -6,6 +6,7 @@ from io import BytesIO
 from datetime import datetime
 import atexit
 import threading
+import time
 
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
@@ -18,62 +19,126 @@ _HDR_BG = "2563EB"
 _HDR_FG = RGBColor(0xFF, 0xFF, 0xFF)
 _ALT_BG = "F1F5F9"
 
-_IMG_TIMEOUT = 60  # seconds per render attempt before declaring kaleido hung
-_png_cache: dict = {}  # (id(fig), width, height, scale) → PNG bytes or None
+_IMG_TIMEOUT = 45   # seconds per render before the renderer is declared hung
+_REARM_AFTER = 12.0     # seconds of quiet after a trip before the breaker re-arms
+_png_cache: dict = {}   # (id(fig), width, height, scale) → PNG bytes or None
+_render_ok = True       # circuit breaker — see _fig_to_png / reset_render_state
+_render_tripped_at = 0.0  # monotonic time the breaker last tripped
 
 
-def _kill_kaleido_proc():
-    """Kill the current kaleido subprocess so the next call spawns a fresh one."""
+def _ensure_browser_path():
+    """Point kaleido 1.x (via choreographer) at a system Chrome/Chromium when
+    one is installed but not auto-discovered — chiefly Streamlit Cloud, where
+    `packages.txt` installs /usr/bin/chromium. Local machines that already
+    resolve Chrome are left untouched. Best effort, never raises.
+    """
+    import os
+    if os.environ.get("BROWSER_PATH"):
+        return
+    for _cand in ("/usr/bin/chromium", "/usr/bin/chromium-browser",
+                  "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable"):
+        if os.path.exists(_cand):
+            os.environ["BROWSER_PATH"] = _cand
+            return
+
+
+_ensure_browser_path()
+
+
+def reset_render_state():
+    """Re-arm the chart-render circuit breaker immediately.
+
+    The breaker also re-arms on its own once `_REARM_AFTER` seconds have passed
+    since it tripped, so each new report retries the renderer; call this to
+    force an immediate retry.
+    """
+    global _render_ok, _render_tripped_at
+    _render_ok = True
+    _render_tripped_at = 0.0
+
+
+def _shutdown_kaleido():
+    """Best-effort release of the static-image renderer so a hung render is
+    freed and no Chrome/Node subprocess is orphaned. Handles both the kaleido
+    0.x Node subprocess (pio.kaleido.scope._proc) and the kaleido 1.x engine.
+    """
     try:
         import plotly.io as pio
         scope = getattr(getattr(pio, "kaleido", None), "scope", None)
-        if scope is not None:
-            proc = getattr(scope, "_proc", None)
-            if proc is not None and proc.poll() is None:
-                proc.kill()
+        proc = getattr(scope, "_proc", None)          # kaleido 0.x only
+        if proc is not None and proc.poll() is None:
+            proc.kill()
             scope._proc = None
+    except Exception:
+        pass
+    try:
+        import plotly.io as pio
+        # kaleido 1.x / plotly 6.x: shut down the shared engine if exposed.
+        for _obj in (getattr(pio, "_kaleido", None), getattr(pio, "kaleido", None)):
+            _fn = getattr(_obj, "shutdown_kaleido", None)
+            if callable(_fn):
+                _fn()
     except Exception:
         pass
 
 
+# Backwards-compatible alias for existing callers.
+_kill_kaleido_proc = _shutdown_kaleido
+
+
 def _cleanup_kaleido():
-    """Kill the kaleido subprocess on process exit.
-    Prevents orphaned kaleido Node.js processes after Streamlit shuts down.
-    """
-    _kill_kaleido_proc()
+    """Release the renderer on process exit so no Chrome/Node process is left
+    orphaned after Streamlit shuts down."""
+    _shutdown_kaleido()
 
 
 atexit.register(_cleanup_kaleido)
 
 
 def _fig_to_png(fig, width=900, height=400, scale=2):
-    """Render a Plotly figure to PNG bytes with a hard timeout.
+    """Render a Plotly figure to PNG bytes with a hard timeout and a circuit
+    breaker.
 
-    Tries twice: if the first attempt times out (kaleido deadlock), the hung
-    subprocess is killed and a fresh one is used for the retry.
-    Returns bytes on success, None if both attempts fail.
-    Uses daemon threads so a hung render never blocks process exit.
+    Returns bytes on success, or None on timeout/failure (the caller then emits
+    a text placeholder). A render runs in a daemon thread so a hung renderer
+    never blocks process exit. The first timeout or error trips a breaker so the
+    remaining charts in the report fail fast instead of each waiting out the
+    full timeout — turning a multi-minute stall into a quick, degraded report.
+    The breaker re-arms automatically after `_REARM_AFTER` seconds of quiet, so
+    each new report retries the renderer.
     """
+    global _render_ok, _render_tripped_at
+    if fig is None:
+        return None
+    if not _render_ok:
+        if (time.monotonic() - _render_tripped_at) > _REARM_AFTER:
+            _render_ok = True          # new report session — give it another go
+        else:
+            return None                # still in the same failed report — skip
+
     import plotly.io as pio
     _key = (id(fig), width, height, scale)
     if _key in _png_cache:
         return _png_cache[_key]
 
-    for _attempt in range(2):
-        _result = [None]
-        def _render():
-            try:
-                _result[0] = pio.to_image(
-                    fig, format="png", width=width, height=height, scale=scale)
-            except Exception:
-                pass
-        _t = threading.Thread(target=_render, daemon=True)
-        _t.start()
-        _t.join(timeout=_IMG_TIMEOUT)
-        if _result[0] is not None:
-            break
-        # Timed out — kill the hung kaleido process; retry will spawn a fresh one
-        _kill_kaleido_proc()
+    _result = [None]
+    def _render():
+        try:
+            _result[0] = pio.to_image(
+                fig, format="png", width=width, height=height, scale=scale)
+        except Exception:
+            pass
+    _t = threading.Thread(target=_render, daemon=True)
+    _t.start()
+    _t.join(timeout=_IMG_TIMEOUT)
+
+    if _result[0] is None:
+        # Systemic failure (renderer missing or hung) — trip the breaker so the
+        # rest of this report's charts are skipped immediately, and release any
+        # hung renderer process.
+        _render_ok = False
+        _render_tripped_at = time.monotonic()
+        _shutdown_kaleido()
 
     _png_cache[_key] = _result[0]
     return _result[0]

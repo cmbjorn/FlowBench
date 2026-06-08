@@ -907,26 +907,27 @@ def _generate_harp_report(
             row.cells[ci].width = Inches(w)
 
     # ── Network diagram ────────────────────────────────────────────────────────
-    import plotly.io as pio
+    # Render via report_generator._fig_to_png so the same hard timeout + circuit
+    # breaker protect these charts; a hung/missing renderer degrades to a text
+    # placeholder instead of blocking the whole report.
+    from report_generator import _fig_to_png
     _section_rule("Network diagram")
-    try:
-        _diag_h = int(getattr(fig_diagram.layout, "height", None) or (680 if series else 380))
-        buf_diag = BytesIO(pio.to_image(fig_diagram, format="png",
-                                        width=880, height=_diag_h, scale=2))
-        doc.add_picture(buf_diag, width=Inches(6.5))
-    except Exception:
-        p = doc.add_paragraph("[Diagram unavailable — install kaleido]")
+    _diag_h = int(getattr(fig_diagram.layout, "height", None) or (680 if series else 380))
+    _png_diag = _fig_to_png(fig_diagram, width=880, height=_diag_h, scale=2)
+    if _png_diag:
+        doc.add_picture(BytesIO(_png_diag), width=Inches(6.5))
+    else:
+        p = doc.add_paragraph("[Diagram unavailable — chart rendering timed out]")
         p.runs[0].font.size = Pt(9)
         p.runs[0].font.color.rgb = _GREY
 
     # ── Flow distribution ──────────────────────────────────────────────────────
     _section_rule("Flow distribution")
-    try:
-        buf_bar = BytesIO(pio.to_image(fig_bar, format="png",
-                                       width=880, height=230, scale=2))
-        doc.add_picture(buf_bar, width=Inches(6.5))
-    except Exception:
-        p = doc.add_paragraph("[Chart unavailable]")
+    _png_bar = _fig_to_png(fig_bar, width=880, height=230, scale=2)
+    if _png_bar:
+        doc.add_picture(BytesIO(_png_bar), width=Inches(6.5))
+    else:
+        p = doc.add_paragraph("[Chart unavailable — chart rendering timed out]")
         p.runs[0].font.size = Pt(9)
         p.runs[0].font.color.rgb = _GREY
 

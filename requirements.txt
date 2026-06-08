@@ -2,7 +2,8 @@
 streamlit>=1.42.0
 pandas>=2.0.0
 numpy>=1.24.0
-plotly>=5.18.0
+# plotly 6.1+ is required for the kaleido 1.x static-image (to_image) API.
+plotly>=6.1.0
 
 # Engineering / thermodynamics
 # CoolProp: prebuilt wheels for Python 3.8–3.12 on Windows x64.
@@ -18,6 +19,9 @@ thermo>=0.4.0
 # Report export
 python-docx>=1.0.0
 openpyxl>=3.1.0
-# kaleido 1.x: pure-Python chart renderer, no Node.js subprocess.
-# Much more reliable on Windows than the 0.x series — do not downgrade.
+# kaleido 1.x renders Plotly charts via headless Chrome/Chromium (it does NOT
+# bundle a renderer). It avoids the 0.x hang on Apple Silicon, but needs a
+# Chrome binary: locally it finds the system Chrome; on Streamlit Cloud the
+# chromium package in packages.txt provides /usr/bin/chromium, which
+# report_generator points kaleido at via the BROWSER_PATH env var.
 kaleido>=1.0.0
