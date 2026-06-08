@@ -411,38 +411,55 @@ with st.sidebar:
                     st.error(f"Validation run failed: {_sb_err_ex}")
 
     st.divider()
-    st.header("Session")
+    st.header("Pipeline Cases session")
+    st.caption(
+        "Save or restore the **Pipeline Cases** workspace — Cases "
+        f"{st.session_state.get('label_a','A')} & {st.session_state.get('label_b','B')} "
+        "and both Headers (inlet conditions, segments, fittings, fluids). "
+        "Engineering Tools and Network Solver are **not** included."
+    )
 
     # ── Save ──────────────────────────────────────────────────────────────────
     _save_json = json.dumps(_collect_save_state(), indent=2, ensure_ascii=False)
     st.download_button(
-        "Save session (.json)",
+        "💾  Save Pipeline Cases (.json)",
         data=_save_json,
-        file_name="hydraulic_session.json",
+        file_name="flowbench_pipeline_cases.json",
         mime="application/json",
         width='stretch',
-        help="Download all current inputs as a JSON file you can reload later.",
+        help="Download all Pipeline Cases inputs as a JSON file you can reload later.",
     )
 
     # ── Load ──────────────────────────────────────────────────────────────────
     _uploaded = st.file_uploader(
-        "Load session (.json)",
+        "Load Pipeline Cases (.json)",
         type="json",
-        label_visibility="collapsed",
-        help="Upload a previously saved session JSON to restore all inputs.",
+        help="Upload a previously saved Pipeline Cases JSON to restore its inputs.",
         key="session_uploader",
     )
     if _uploaded is not None:
-        try:
-            _loaded = json.loads(_uploaded.read())
-            if _loaded.get("version") != 1:
-                st.warning("Unrecognised file format — not loaded.")
-            else:
-                _apply_save_state(_loaded)
-                st.success("Session loaded.")
-                st.rerun()
-        except Exception as _e:
-            st.error(f"Could not load session: {_e}")
+        # Apply each distinct file only once. file_uploader keeps returning the
+        # same file on every rerun, so without this guard the load would re-apply
+        # and st.rerun() endlessly and the app would never settle.
+        _raw = _uploaded.getvalue()
+        _sig = hashlib.md5(_raw).hexdigest()
+        if st.session_state.get("_loaded_session_sig") != _sig:
+            try:
+                _loaded = json.loads(_raw)
+                if _loaded.get("version") != 1:
+                    st.warning("Unrecognised file format — not loaded.")
+                else:
+                    _apply_save_state(_loaded)
+                    st.session_state["_loaded_session_sig"] = _sig
+                    st.success("Session loaded.")
+                    st.rerun()
+            except Exception as _e:
+                st.error(f"Could not load session: {_e}")
+        else:
+            st.caption("✓ Loaded. Upload a different file to replace these inputs.")
+    else:
+        # File cleared via the × — forget it so the same file can be re-loaded.
+        st.session_state.pop("_loaded_session_sig", None)
 
     st.divider()
     st.caption(
