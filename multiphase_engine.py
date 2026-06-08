@@ -1263,8 +1263,14 @@ def calculate_segment_pressure_drop(
             # Friction residual: total minus the external gravity term.
             # B&B computes gravity with its own holdup, so this residual absorbs
             # any holdup-model difference — an accepted decomposition approximation.
-            # Clamp to zero so the display column is never negative.
+            # Clamp to zero so friction is never negative: outside its validity
+            # window (e.g. near/above sonic gas velocity) B&B can return a total
+            # below the gravity head, which would imply negative friction and an
+            # unphysical pressure *rise* in horizontal/upflow pipes. Rebuild the
+            # total from the clamped components so the ΔP decomposition always
+            # reconciles (total = friction + gravity).
             dP_fric_Pa  = max(0.0, dP_total - dP_grav_Pa)
+            dP_total    = dP_fric_Pa + dP_grav_Pa
             dP_accel_Pa = 0.0
         else:
             # Other correlations: two_phase_dP is friction-only by design.

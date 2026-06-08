@@ -31,11 +31,28 @@ st.set_page_config(
 # Streamlit drops a keyed widget's value from session_state on any rerun where
 # that widget is not instantiated — which happens whenever another workspace
 # (Pipeline Cases / Engineering Tools / Network Solver) is showing. Re-assigning
-# every key at the top of each run keeps the values alive, so fields repopulate
+# every key at the top of each run keeps input values alive, so fields repopulate
 # with what the user entered when they navigate back. Must run before any widget
 # is created.
+#
+# Action widgets (button / download_button / form_submit_button) forbid writing
+# their key via the Session State API — re-assigning one raises
+# StreamlitValueAssignmentNotAllowedError. They are transient anyway and need no
+# persistence, so skip any key whose name contains an action verb as a delimited
+# token. Add new verbs here if future action-widget keys don't match.
+import re as _re
+_ACTION_KEY_RE = _re.compile(
+    r"(^|_)(run|goto|add|del|rem|fadd|frem|apply|gen|calc|btn|dl|"
+    r"download|save|load|submit|reset|clear|remove|export)(_|$)"
+)
 for _persist_k in list(st.session_state.keys()):
-    st.session_state[_persist_k] = st.session_state[_persist_k]
+    if _ACTION_KEY_RE.search(_persist_k):
+        continue
+    try:
+        st.session_state[_persist_k] = st.session_state[_persist_k]
+    except Exception:
+        # Any widget that disallows Session State writes — leave it untouched.
+        pass
 
 st.markdown("""
 <style>
