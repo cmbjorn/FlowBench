@@ -27,6 +27,16 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ── Persist field values across workspace switches ───────────────────────────
+# Streamlit drops a keyed widget's value from session_state on any rerun where
+# that widget is not instantiated — which happens whenever another workspace
+# (Pipeline Cases / Engineering Tools / Network Solver) is showing. Re-assigning
+# every key at the top of each run keeps the values alive, so fields repopulate
+# with what the user entered when they navigate back. Must run before any widget
+# is created.
+for _persist_k in list(st.session_state.keys()):
+    st.session_state[_persist_k] = st.session_state[_persist_k]
+
 st.markdown("""
 <style>
 /* ── Metric cards ─────────────────────────────────────────── */
@@ -2887,12 +2897,25 @@ def _goal_seek_stack(res_line, res_hdr, P_target_sep, tol=0.0005, max_iter=30):
 # ============================================================================
 # HEADER PIPING SCHEMATIC
 # ============================================================================
+def _short_regime(regime: str) -> str:
+    """Compact a '<T-D> / <MGA>' regime string for inline schematic labels."""
+    if not regime:
+        return ""
+    primary = regime.split(" / ")[0].strip()
+    return primary[:1].upper() + primary[1:]
+
+
 def _make_header_schematic(
         left_positions, right_positions, t_seg_spec,
         P_inlet_bara, worst_arm,
         dp_l_kpa, dp_r_kpa,
-        P_T_l_bara, P_T_r_bara, P_sep_bara):
-    """Return a Plotly figure showing the physical header piping layout."""
+        P_T_l_bara, P_T_r_bara, P_sep_bara,
+        rec_l=None, rec_r=None):
+    """Return a Plotly figure showing the physical header piping layout.
+
+    rec_l / rec_r : per-segment marching records (one per inter-tie-in segment)
+                    used to label the flow regime along each header arm.
+    """
 
     PIPE_Y  = 1.8   # header pipe y-level
     TAP_TOP = 3.1   # top of tap risers (flow enters from branch above)
@@ -3044,6 +3067,24 @@ def _make_header_schematic(
             font=dict(size=9, color=RIGHT_C),
             xref="x", yref="y",
         ))
+
+    # Flow regime along each arm — one label per inter-tie-in segment,
+    # placed at the segment midpoint between the two bounding tap risers.
+    def _regime_labels(records, sign, color):
+        for r in (records or []):
+            reg = _short_regime(r.get("Regime", ""))
+            if not reg:
+                continue
+            mid = (r.get("From T (m)", 0.0) + r.get("To T (m)", 0.0)) / 2.0
+            anns.append(dict(
+                x=sign * mid, y=PIPE_Y + 0.72,
+                text=reg,
+                showarrow=False, xanchor="center", textangle=-90,
+                font=dict(size=8, color=color),
+                xref="x", yref="y",
+            ))
+    _regime_labels(rec_l, -1, LEFT_C)
+    _regime_labels(rec_r,  1, RIGHT_C)
 
     # T-segment: pressure at T and flow arrow down
     anns.append(dict(
@@ -3404,7 +3445,8 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
             left_positions, right_positions, t_seg_spec,
             P_inlet_bara, worst_arm,
             dp_l_kpa, dp_r_kpa,
-            P_T_l_bara, P_T_r_bara, P_sep_bara)
+            P_T_l_bara, P_T_r_bara, P_sep_bara,
+            rec_l=rec_l, rec_r=rec_r)
         st.plotly_chart(fig_sch_hdr, width='stretch',
                         key=f"{cid}_hdr_schematic")
 
@@ -3489,8 +3531,8 @@ def run_header_case(cid: str = "c", accent: str = "#059669",
 
     _all_recs  = ([dict(r, Seg=f"L{r['Seg']}") for r in rec_l] +
                   [dict(r, Seg=f"R{r['Seg']}") for r in rec_r])
-    _pipe_len  = (max(left_positions,  default=[0.0]) +
-                  max(right_positions, default=[0.0]))
+    _pipe_len  = (max(left_positions,  default=0.0) +
+                  max(right_positions, default=0.0))
     _total_dp_fric = (fric_l + fric_r) / 1000.0
     _total_dp_grav = (grav_l + grav_r) / 1000.0
 
