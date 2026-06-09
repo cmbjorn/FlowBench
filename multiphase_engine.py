@@ -1253,6 +1253,7 @@ def calculate_segment_pressure_drop(
         ) * L_eff
 
         # ── Frictional component + total ─────────────────────────────────────
+        _bb_clamped = False
         if correlation == "Beggs-Brill":
             # Beggs-Brill returns total dP (friction + gravity internally).
             dP_total = Beggs_Brill(
@@ -1268,7 +1269,9 @@ def calculate_segment_pressure_drop(
             # below the gravity head, which would imply negative friction and an
             # unphysical pressure *rise* in horizontal/upflow pipes. Rebuild the
             # total from the clamped components so the ΔP decomposition always
-            # reconciles (total = friction + gravity).
+            # reconciles (total = friction + gravity). A negative residual here
+            # means B&B is out of its validity window (flagged below).
+            _bb_clamped = (dP_total - dP_grav_Pa) < -1e-6
             dP_fric_Pa  = max(0.0, dP_total - dP_grav_Pa)
             dP_total    = dP_fric_Pa + dP_grav_Pa
             dP_accel_Pa = 0.0
@@ -1296,6 +1299,18 @@ def calculate_segment_pressure_drop(
         if "slug" in regime or "intermittent" in regime:
             _slug_info = slug_dynamics(Vsl, Vsg, D_inner, rhol, angle_rad, P_pa=props.get("P_pa"))
 
+        # Validity guard: the incompressible two-phase correlations are only
+        # meaningful below ~Mach 0.3 in the gas phase. Past that — or when B&B
+        # had to clamp a negative friction residual — the ΔP is unreliable
+        # (a too-small pipe choking). Flag it so callers can mark the result
+        # out of range instead of trusting a near-zero or garbage ΔP.
+        try:
+            _a_gas  = (1.3 * P_pa / rhog) ** 0.5 if (rhog > 0 and P_pa > 0) else float("inf")
+            _mach_g = Vsg / _a_gas if _a_gas > 0 else 0.0
+        except Exception:
+            _mach_g = 0.0
+        _out_of_range = bool(_bb_clamped or _mach_g > 0.3)
+
         return {
             "dP_Pa":       dP_total,
             "dP_fric_Pa":  dP_fric_Pa,
@@ -1307,12 +1322,16 @@ def calculate_segment_pressure_drop(
             "Vsl":         Vsl,
             "alpha":       alpha,
             "slug_info":   _slug_info,
+            "out_of_range": _out_of_range,
+            "mach_gas":    _mach_g,
         }
 
     except Exception as e:
         import warnings as _w
         _w.warn(f"Pressure drop error ({correlation}): {str(e)[:80]}")
-        return _err_result(f"Error ({correlation[:12]}): {str(e)[:30]}")
+        _er = _err_result(f"Error ({correlation[:12]}): {str(e)[:30]}")
+        _er["out_of_range"] = True
+        return _er
 
 
 # ============================================================================

@@ -4815,7 +4815,7 @@ elif _group != "Engineering Tools":
                                         })
                                     _rm_groups.append({"dn": _dn_lbl,
                                                        "branches": _branches})
-                                _dn_buf = report_generator.generate_dn_study_report(
+                                _rpt_kw = dict(
                                     dn_primary=_dn_p_lbl,
                                     dn_alt=_dn_a_lbl,
                                     label_a=_la, label_b=_lb,
@@ -4837,6 +4837,21 @@ elif _group != "Engineering Tools":
                                     p_sep_o2=_p_sep_o2_dn,
                                     regime_maps=_rm_groups,
                                 )
+                                try:
+                                    _dn_buf = report_generator.generate_dn_study_report(**_rpt_kw)
+                                except TypeError as _te:
+                                    # Older/stale report_generator (e.g. a cloud
+                                    # module not yet reloaded) lacks regime_maps —
+                                    # generate the report without the appendix.
+                                    if "regime_maps" in str(_te):
+                                        _rpt_kw.pop("regime_maps", None)
+                                        _dn_buf = report_generator.generate_dn_study_report(**_rpt_kw)
+                                        st.warning(
+                                            "Report generated without the flow-regime-map "
+                                            "appendix — the server is running an older build. "
+                                            "Reboot the app (Manage app → Reboot) to include it.")
+                                    else:
+                                        raise
                                 st.session_state["dn_study_rpt_bytes"] = _dn_buf.getvalue()
                             except Exception as _re:
                                 st.error(f"Report failed: {_re}")
