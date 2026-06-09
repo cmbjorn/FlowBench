@@ -2473,8 +2473,10 @@ def generate_dn_study_report(
     dp_gen_primary_mbar, dp_gen_alt_mbar,
     vel_data,
     p_sep_h2, p_sep_o2,
+    regime_maps=None,   # list of {"dn": str, "branches": [{"label","fig_h","fig_v"}]}
 ):
     """Word report comparing two branch DN sizes across the full system."""
+    reset_render_state()
     doc = Document()
 
     sec = doc.sections[0]
@@ -2674,6 +2676,56 @@ def generate_dn_study_report(
     if note.runs:
         note.runs[0].font.size      = Pt(8)
         note.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+
+    # ── Appendix A — Flow regime maps for both DN cases ──────────────────────
+    if regime_maps:
+        doc.add_page_break()
+        doc.add_heading("Appendix A — Flow Regime Maps", level=1)
+        _intro = doc.add_paragraph(
+            "For completeness, the flow regime maps below are reproduced for both "
+            "DN cases and both branches. Each map plots superficial gas velocity "
+            "(V_sg) against superficial liquid velocity (V_sl) on a log-log scale: "
+            "background zones show the predicted regime across the operating "
+            "envelope and coloured markers show each pipe segment's operating "
+            "point. Operating points are recomputed at each case's goal-seek line "
+            "inlet pressure and, for the alternative DN, with every pipe segment "
+            "resized. Horizontal maps use Taitel-Dukler (1976) + Mandhane-Gregory-"
+            "Aziz (1974); vertical maps use the Wallis annular criterion + "
+            "void-fraction thresholds."
+        )
+        if _intro.runs:
+            _intro.runs[0].font.size = Pt(9)
+
+        for _grp in regime_maps:
+            doc.add_heading(f"DN case: {_grp.get('dn', '—')}", level=2)
+            for _br in _grp.get("branches", []):
+                doc.add_heading(f"{_br.get('label', 'Branch')} branch", level=3)
+                _fh, _fv = _br.get("fig_h"), _br.get("fig_v")
+                if _fh is None and _fv is None:
+                    _na = doc.add_paragraph(
+                        "Flow regime map not applicable — single-phase or "
+                        "saturated-VLE flow for this branch.")
+                    if _na.runs:
+                        _na.runs[0].font.size      = Pt(9)
+                        _na.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+                    continue
+                for _cap, _fig in (("Horizontal flow regime map", _fh),
+                                   ("Vertical flow regime map",   _fv)):
+                    if _fig is None:
+                        continue
+                    _ch = doc.add_paragraph(_cap)
+                    if _ch.runs:
+                        _ch.runs[0].font.bold = True
+                        _ch.runs[0].font.size = Pt(9)
+                    _img = _fig_to_png(_fig, width=800, height=600, scale=2)
+                    if _img:
+                        doc.add_picture(BytesIO(_img), width=Inches(5.5))
+                    else:
+                        _pl = doc.add_paragraph(
+                            "(chart rendering timed out — map omitted)")
+                        if _pl.runs:
+                            _pl.runs[0].font.size = Pt(8)
+                    doc.add_paragraph()
 
     buf = BytesIO()
     doc.save(buf)

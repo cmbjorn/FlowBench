@@ -746,6 +746,77 @@ def _build_regime_fig(
     return fig
 
 
+def _regime_map_figs_for_branch(res, dn_override, inlet_P_bara,
+                                dn_label, branch_label):
+    """Build (fig_h, fig_v) flow-regime maps for one branch at a given DN.
+
+    Segment velocities are recomputed at ``inlet_P_bara`` (and, when
+    ``dn_override`` is given, with every pipe segment resized to that DN) so the
+    operating points match the studied DN. Returns (None, None) for single-phase
+    or VLE cases, where a gas/liquid regime map has no meaning.
+    """
+    import copy
+    segs = copy.deepcopy(res.get("segments", []) or [])
+    if dn_override:
+        for _s in segs:
+            if _s.get("kind", "pipe") == "pipe":
+                _s["dn"] = dn_override
+
+    gas    = res.get("gas_flows_kgh") or {}
+    qlye   = res.get("q_lye") or 0.0
+    lflows = res.get("liquid_flows_kgh")
+    is_vle = res.get("flow_mode") == "vle"
+    has_gas = any(v > 0 for v in gas.values())
+    has_liq = qlye > 0 or bool(lflows and any(v > 0 for v in lflows.values()))
+    if is_vle or not (has_gas and has_liq):
+        return None, None
+
+    T_C  = res.get("T_C", 25.0)
+    cgas = res.get("custom_gas")
+    cliq = res.get("custom_liquid")
+    ucp  = res.get("use_coolprop", False)
+    try:
+        props_in = engine.calculate_two_phase_properties(
+            inlet_P_bara, T_C, gas, res.get("liquid_type"), qlye,
+            custom_gas=cgas, custom_liquid=cliq, use_coolprop=ucp,
+            liquid_flows_kgh=lflows)
+        calc = compute_pipeline_case(
+            P_bara=inlet_P_bara, T_C=T_C, eff_gas_flows=gas,
+            eff_liq_type=res.get("liquid_type"), eff_q_lye=qlye,
+            eff_custom_liq=cliq, eff_liquid_flows=lflows, is_vle=False,
+            vle_fluid_id=None, vle_x=None, vle_m_kgs=None, vle_h_inlet=None,
+            segments=segs, correlation=res.get("correlation", "Beggs-Brill"),
+            voidage_method=res.get("voidage_method", "Homogeneous"),
+            custom_gas=cgas, use_coolprop=ucp, props=props_in)
+
+        recs = [r for r in calc["grid_records"]
+                if r.get("V_sg (m/s)", 0) > 0 or r.get("V_sl (m/s)", 0) > 0]
+        if not recs:
+            return None, None
+
+        D_repr = recs[0]["ID (mm)"] / 1000.0
+        ckw = dict(
+            rhol=float(props_in["rho_l"]), rhog=float(props_in["rho_g"]),
+            mul=float(props_in["mu_l"]),   mug=float(props_in["mu_g"]),
+            sigma=float(props_in.get("sigma") or 0.072),
+            D=float(D_repr), roughness=4.6e-5,
+        )
+        td_h, full_h, vsl_h, vsg_h = _compute_regime_grid(**ckw, use_horiz=True)
+        td_v, full_v, vsl_v, vsg_v = _compute_regime_grid(**ckw, use_horiz=False)
+        hrecs = [r for r in recs if r.get("Type", "Horizontal") == "Horizontal"]
+        vrecs = [r for r in recs if r.get("Type", "Horizontal") != "Horizontal"]
+        fig_h = _build_regime_fig(
+            td_h, full_h, vsl_h, vsg_h, hrecs,
+            f"{branch_label} · {dn_label} — Horizontal (Taitel-Dukler + MGA)")
+        fig_v = _build_regime_fig(
+            td_v, full_v, vsl_v, vsg_v, vrecs,
+            f"{branch_label} · {dn_label} — Vertical (Wallis / void-fraction)")
+        return fig_h, fig_v
+    except Exception:
+        # A regime-map computation hiccup must never block the DN study report.
+        return None, None
+
+
 # ============================================================================
 # CASE RUNNER  — renders one full case and returns results for Compare tab
 # ============================================================================
@@ -4722,6 +4793,28 @@ elif _group != "Engineering Tools":
                         if st.button("Generate DN Study Report", width='stretch',
                                      key="dn_study_gen_rpt"):
                             try:
+                                # Appendix: flow-regime maps for both DN cases,
+                                # both branches, with operating points recomputed
+                                # at each case's goal-seek line inlet pressure.
+                                _rm_groups = []
+                                for _dn_lbl, _dn_ovr, _gh, _go in (
+                                    (_dn_p_lbl, None,     _gsr_h2_p, _gsr_o2_p),
+                                    (_dn_a_lbl, _dn_a_lbl, _gsr_h2_a, _gsr_o2_a),
+                                ):
+                                    _branches = []
+                                    for _b_lbl, _b_res, _b_gsr in (
+                                        (_la, results_a, _gh),
+                                        (_lb, results_b, _go),
+                                    ):
+                                        _fh, _fv = _regime_map_figs_for_branch(
+                                            _b_res, _dn_ovr,
+                                            _b_gsr["P_line_in"], _dn_lbl, _b_lbl)
+                                        _branches.append({
+                                            "label": _b_lbl,
+                                            "fig_h": _fh, "fig_v": _fv,
+                                        })
+                                    _rm_groups.append({"dn": _dn_lbl,
+                                                       "branches": _branches})
                                 _dn_buf = report_generator.generate_dn_study_report(
                                     dn_primary=_dn_p_lbl,
                                     dn_alt=_dn_a_lbl,
@@ -4742,6 +4835,7 @@ elif _group != "Engineering Tools":
                                     },
                                     p_sep_h2=_p_sep_h2_dn,
                                     p_sep_o2=_p_sep_o2_dn,
+                                    regime_maps=_rm_groups,
                                 )
                                 st.session_state["dn_study_rpt_bytes"] = _dn_buf.getvalue()
                             except Exception as _re:
