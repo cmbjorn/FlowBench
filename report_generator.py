@@ -2498,6 +2498,34 @@ def generate_dn_study_report(
         sub.runs[0].font.size = Pt(10)
     doc.add_paragraph()
 
+    # ── Feasibility warning ───────────────────────────────────────────────────
+    _feas_rows = []
+    for _g, _gl, _gd in (
+        (gsr_h2_primary, label_a, dn_primary), (gsr_o2_primary, label_b, dn_primary),
+        (gsr_h2_alt, label_a, dn_alt),         (gsr_o2_alt, label_b, dn_alt),
+    ):
+        if isinstance(_g, dict) and not _g.get("feasible", True):
+            _feas_rows.append(f"{_gl} @ {_gd}: {_g.get('reason', 'infeasible')}")
+    if _feas_rows:
+        _wp = doc.add_paragraph()
+        _wr = _wp.add_run("⚠ Validity warning — results unreliable for some cases")
+        _wr.font.bold = True
+        _wr.font.color.rgb = RGBColor(0xB4, 0x53, 0x09)
+        _wr.font.size = Pt(11)
+        _wb = doc.add_paragraph(
+            "The following branch/DN cases ran outside the pressure-drop model's "
+            "valid range (gas velocity approaching sonic) or required more pressure "
+            "than available, so their pressures and ΔP in this report are not "
+            "trustworthy — treat the affected DN as too small for the flow:")
+        if _wb.runs:
+            _wb.runs[0].font.size = Pt(9)
+        for _r in _feas_rows:
+            _li = doc.add_paragraph(_r, style="List Bullet")
+            if _li.runs:
+                _li.runs[0].font.size = Pt(9)
+                _li.runs[0].font.color.rgb = RGBColor(0xB4, 0x53, 0x09)
+        doc.add_paragraph()
+
     # ── 0. Study objective ────────────────────────────────────────────────────
     doc.add_heading("Study Objective", level=1)
     _pobj = doc.add_paragraph(

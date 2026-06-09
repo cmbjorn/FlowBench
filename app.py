@@ -2617,9 +2617,11 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 # GOAL-SEEK HELPERS  — used by the Compare tab
 # ============================================================================
 
-def _calc_dp_at_p(res, P_bara_override):
+def _calc_dp_at_p(res, P_bara_override, diag=None):
     """
     Re-run the pipeline in res at a different inlet pressure.
+    diag: optional dict; "out_of_range"/"floored" set True if any segment is past
+          the correlation's valid range or the pressure hits the 0.1 bara floor.
     Returns (total_dp_kpa, outlet_bara).  Handles pipe, valve, and HX segments.
     """
     current_P   = P_bara_override * 1e5
@@ -2653,6 +2655,8 @@ def _calc_dp_at_p(res, P_bara_override):
                 seg.get("characteristic", "equal-percentage"))
             total_dp  += v_res["dP_Pa"]
             current_P -= v_res["dP_Pa"]
+            if diag is not None and current_P < 1e4:
+                diag["floored"] = True
             current_P  = max(1e4, current_P)
             continue
 
@@ -2687,6 +2691,11 @@ def _calc_dp_at_p(res, P_bara_override):
             correlation=corr, voidage_method=void)
         total_dp  += seg_res["dP_Pa"]
         current_P -= seg_res["dP_Pa"]
+        if diag is not None:
+            if seg_res.get("out_of_range"):
+                diag["out_of_range"] = True
+            if current_P < 1e4:
+                diag["floored"] = True
         current_P  = max(1e4, current_P)
 
     return total_dp / 1000.0, current_P / 1e5
@@ -2783,7 +2792,7 @@ def _calc_regimes_at_p(res, P_bara_override):
 
 def _march_header_simple(tap_dists, gas_per_tap, liq_per_tap,
                           hdr, P_start_Pa, T_C, liquid_type, corr, void,
-                          custom_liquid=None):
+                          custom_liquid=None, diag=None):
     """Pressure-march one header arm from farthest tap to T-junction.
 
     tap_dists    : list of distances from T (m) for each tap — sorted internally.
@@ -2792,6 +2801,9 @@ def _march_header_simple(tap_dists, gas_per_tap, liq_per_tap,
     hdr          : dict with dn, pn, material, lined, liner_material,
                    liner_thickness_mm, fittings_list.
     custom_liquid: optional {rho_kgm3, mu_mpas, sigma_mnm} for Custom liquid type.
+    diag         : optional dict; when given, "out_of_range"/"floored" are set
+                   True if any segment is past the correlation's valid range or
+                   the pressure hit the 0.1 bara floor (infeasible).
     Returns (total_dp_Pa, P_T_Pa, dp_fric_Pa, dp_grav_Pa, records).
     """
     if not tap_dists or not gas_per_tap or liq_per_tap <= 0:
@@ -2859,6 +2871,12 @@ def _march_header_simple(tap_dists, gas_per_tap, liq_per_tap,
             "ΔP_grav (kPa)": round(seg_res["dP_grav_Pa"] / 1000, 3),
         })
 
+        if diag is not None:
+            if seg_res.get("out_of_range"):
+                diag["out_of_range"] = True
+            if end_P < 1e4:
+                diag["floored"] = True
+
         total_dp  += dP_Pa
         dp_fric   += seg_res["dP_fric_Pa"]
         dp_grav   += seg_res["dP_grav_Pa"]
@@ -2868,8 +2886,9 @@ def _march_header_simple(tap_dists, gas_per_tap, liq_per_tap,
 
 
 def _march_single_seg(seg, P_in_Pa, T_C, gas_flows, liquid_type, q_lye, corr, void,
-                       custom_liquid=None):
+                       custom_liquid=None, diag=None):
     """ΔP for one horizontal pipe segment carrying combined flow.
+    diag: optional dict; "out_of_range"/"floored" set as in _march_header_simple.
     Returns (dp_Pa, P_out_Pa, dp_fric_Pa, dp_grav_Pa, record_dict).
     """
     D_nom = engine.PIPE_DATABASE[seg["dn"]][seg["pn"]]
@@ -2885,6 +2904,11 @@ def _march_single_seg(seg, P_in_Pa, T_C, gas_flows, liquid_type, q_lye, corr, vo
         correlation=corr, voidage_method=void)
 
     dp_Pa = seg_res["dP_Pa"]
+    if diag is not None:
+        if seg_res.get("out_of_range"):
+            diag["out_of_range"] = True
+        if P_in_Pa - dp_Pa < 1e4:
+            diag["floored"] = True
     P_out = max(1e4, P_in_Pa - dp_Pa)
     V_m   = seg_res["Vsg"] + seg_res["Vsl"]
     V_e, _ = engine.calculate_erosion_velocity(
@@ -2909,8 +2933,9 @@ def _march_single_seg(seg, P_in_Pa, T_C, gas_flows, liquid_type, q_lye, corr, vo
     return dp_Pa, P_out, seg_res["dP_fric_Pa"], seg_res["dP_grav_Pa"], record
 
 
-def _calc_header_dp_at_p(res_hdr, P_in_bara):
+def _calc_header_dp_at_p(res_hdr, P_in_bara, diag=None):
     """Re-run header (both arms) + T-segment at an overridden tap inlet pressure.
+    diag: optional dict; "out_of_range"/"floored" set as in _march_header_simple.
     Returns (total_dp_kpa, P_separator_bara).
     """
     P_start = P_in_bara * 1e5
@@ -2925,10 +2950,10 @@ def _calc_header_dp_at_p(res_hdr, P_in_bara):
 
     dp_l, P_T_l, *_ = _march_header_simple(
         res_hdr["left_taps"],  gpt, lpt, hdr, P_start, T_C, liq, corr, void,
-        custom_liquid=cliq)
+        custom_liquid=cliq, diag=diag)
     dp_r, P_T_r, *_ = _march_header_simple(
         res_hdr["right_taps"], gpt, lpt, hdr, P_start, T_C, liq, corr, void,
-        custom_liquid=cliq)
+        custom_liquid=cliq, diag=diag)
 
     dp_worst = max(dp_l, dp_r)
     P_T      = min(P_T_l, P_T_r)      # worst-arm pressure arriving at T
@@ -2937,7 +2962,7 @@ def _calc_header_dp_at_p(res_hdr, P_in_bara):
     if t_seg and t_seg.get("length", 0) > 0:
         dp_t, P_sep, *_ = _march_single_seg(
             t_seg, P_T, T_C, res_hdr["gas_flows_kgh"], liq,
-            res_hdr["q_lye"], corr, void, custom_liquid=cliq)
+            res_hdr["q_lye"], corr, void, custom_liquid=cliq, diag=diag)
         return (dp_worst + dp_t) / 1000.0, P_sep / 1e5
 
     return dp_worst / 1000.0, P_T / 1e5
@@ -2970,13 +2995,34 @@ def _goal_seek_header(res_hdr, P_target_sep, tol=0.0005, max_iter=25):
             "iterations": max_iter, "converged": abs(P_sep - P_target_sep) < tol * 20}
 
 
+def _stack_feasibility(line_diag, hdr_diag, converged):
+    """Combine per-march diagnostics + convergence into (feasible, reason).
+
+    A stack result is infeasible when any segment ran past the pressure-drop
+    correlation's valid range (out_of_range), the pressure hit the 0.1 bara
+    floor (ΔP exceeds available driving pressure), or the goal-seek did not
+    converge — in all of which the reported pressures are unreliable.
+    """
+    if line_diag.get("out_of_range") or hdr_diag.get("out_of_range"):
+        return False, ("flow exceeds the pressure-drop correlation's valid range "
+                       "(very high gas velocity) — pressures are unreliable")
+    if line_diag.get("floored") or hdr_diag.get("floored"):
+        return False, ("pressure drop exceeds the available driving pressure "
+                       "(pressure reached the 0.1 bara floor) — DN likely too small")
+    if not converged:
+        return False, "goal-seek did not converge"
+    return True, ""
+
+
 def _forward_stack(res_line, res_hdr, P_source_bara):
     """Forward march from a fixed inlet pressure to the separator.
     No iteration — deterministic in one pass.
     Returns a result dict compatible with _goal_seek_stack output.
     """
-    dp_line, P_line_out = _calc_dp_at_p(res_line, P_source_bara)
-    dp_hdr,  P_sep      = _calc_header_dp_at_p(res_hdr, P_line_out)
+    line_diag, hdr_diag = {}, {}
+    dp_line, P_line_out = _calc_dp_at_p(res_line, P_source_bara, diag=line_diag)
+    dp_hdr,  P_sep      = _calc_header_dp_at_p(res_hdr, P_line_out, diag=hdr_diag)
+    _feasible, _reason  = _stack_feasibility(line_diag, hdr_diag, True)
     return {
         "P_line_in":  P_source_bara,
         "P_line_out": P_line_out,
@@ -2985,6 +3031,8 @@ def _forward_stack(res_line, res_hdr, P_source_bara):
         "dp_hdr":     dp_hdr,
         "converged":  True,
         "iterations": 1,
+        "feasible":   _feasible,
+        "reason":     _reason,
     }
 
 
@@ -2999,27 +3047,34 @@ def _goal_seek_stack(res_line, res_hdr, P_target_sep, tol=0.0005, max_iter=30):
 
     dp_line = dp_hdr = 0.0
     P_line_out = P_sep = 0.0
+    line_diag = hdr_diag = {}
 
     for i in range(max_iter):
-        dp_line, P_line_out = _calc_dp_at_p(res_line, P_line_in)
-        dp_hdr,  P_sep      = _calc_header_dp_at_p(res_hdr, P_line_out)
+        line_diag, hdr_diag = {}, {}
+        dp_line, P_line_out = _calc_dp_at_p(res_line, P_line_in, diag=line_diag)
+        dp_hdr,  P_sep      = _calc_header_dp_at_p(res_hdr, P_line_out, diag=hdr_diag)
         error = P_sep - P_target_sep
         if abs(error) < tol:
+            _feasible, _reason = _stack_feasibility(line_diag, hdr_diag, True)
             return {
                 "P_line_in":  P_line_in,  "P_line_out": P_line_out,
                 "P_sep":      P_sep,
                 "dp_line":    dp_line,    "dp_hdr":     dp_hdr,
                 "iterations": i + 1,      "converged":  True,
+                "feasible":   _feasible,  "reason":     _reason,
             }
         P_line_in -= error
         P_line_in = max(0.1, P_line_in)  # prevent runaway below hard vacuum
 
+    _converged = abs(P_sep - P_target_sep) < tol * 20
+    _feasible, _reason = _stack_feasibility(line_diag, hdr_diag, _converged)
     return {
         "P_line_in":  P_line_in,  "P_line_out": P_line_out,
         "P_sep":      P_sep,
         "dp_line":    dp_line,    "dp_hdr":     dp_hdr,
         "iterations": max_iter,
-        "converged":  abs(P_sep - P_target_sep) < tol * 20,
+        "converged":  _converged,
+        "feasible":   _feasible,  "reason":     _reason,
     }
 
 
@@ -4639,6 +4694,27 @@ elif _group != "Engineering Tools":
 
             if _gsr_h2_a and _gsr_o2_a and _dn_a_lbl:
                 with _res_col:
+                    # ── Feasibility check ─────────────────────────────────────────
+                    # Flag any branch/DN whose goal-seek ran past the correlation's
+                    # valid range or exceeded the available driving pressure, so the
+                    # user does not trust the (then meaningless) pressures below.
+                    _feas_issues = []
+                    for _g, _gb_lbl, _gdn in (
+                        (_gsr_h2_p, _la, _dn_p_lbl), (_gsr_o2_p, _lb, _dn_p_lbl),
+                        (_gsr_h2_a, _la, _dn_a_lbl), (_gsr_o2_a, _lb, _dn_a_lbl),
+                    ):
+                        if _g and not _g.get("feasible", True):
+                            _feas_issues.append(
+                                f"**{_gb_lbl} @ {_gdn}** — {_g.get('reason','infeasible')}")
+                    if _feas_issues:
+                        st.warning(
+                            "⚠ Some cases are outside the model's valid range — "
+                            "their pressures and ΔP below are unreliable:\n\n"
+                            + "\n\n".join(f"- {m}" for m in _feas_issues)
+                            + "\n\nThis usually means the DN is too small for the "
+                            "flow (gas velocity approaches sonic). Use a larger DN "
+                            "or split the flow.")
+
                     # ── Generator ΔP ──────────────────────────────────────────────
                     _dp_gen_p_mbar = (_gsr_h2_p["P_line_in"] - _gsr_o2_p["P_line_in"]) * 1000.0
                     _dp_gen_a_mbar = (_gsr_h2_a["P_line_in"] - _gsr_o2_a["P_line_in"]) * 1000.0
