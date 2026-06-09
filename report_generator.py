@@ -2473,7 +2473,8 @@ def generate_dn_study_report(
     dp_gen_primary_mbar, dp_gen_alt_mbar,
     vel_data,
     p_sep_h2, p_sep_o2,
-    regime_maps=None,   # list of {"dn": str, "branches": [{"label","fig_h","fig_v"}]}
+    regime_maps=None,     # list of {"dn": str, "branches": [{"label","fig_h","fig_v"}]}
+    segment_tables=None,  # list of {"dn": str, "branches": [{"label","rows":[grid_record,...]}]}
 ):
     """Word report comparing two branch DN sizes across the full system."""
     reset_render_state()
@@ -2557,6 +2558,45 @@ def generate_dn_study_report(
         ("O₂ separator target (bara)",   f"{p_sep_o2:.3f}"),
         ("Correlation / voidage",        "As set in primary case"),
     ])
+    doc.add_paragraph()
+
+    # ── 1b. Method, assumptions & validity ────────────────────────────────────
+    doc.add_heading("Method, Assumptions & Validity", level=1)
+    _mav = doc.add_paragraph(
+        "Each branch is solved by marching the flow segment by segment from the "
+        "line inlet to the separator. Fluid properties — density, viscosity, "
+        "surface tension, void fraction and phase velocities — are recomputed at "
+        "every segment's local pressure, so compressible expansion of the gas "
+        "along the line is captured between segments. The two branch inlet "
+        "pressures are found by goal-seeking each system to its fixed separator "
+        "target; the Generator ΔP is their difference.")
+    if _mav.runs:
+        _mav.runs[0].font.size = Pt(9)
+    _mav.paragraph_format.space_after = Pt(4)
+    for _b in (
+        "Two-phase ΔP correlation: as selected in the primary case (default "
+        "Beggs-Brill). These are steady, incompressible-flow correlations; their "
+        "absolute accuracy is typically ±20–30 % for gas–liquid mixtures.",
+        "Validity envelope: the correlations are reliable while gas-phase "
+        "velocity stays below ~Mach 0.3. Any segment past that is flagged "
+        "“out of range” (see the validity warning, when present) and a "
+        "compressible/choked-flow method should be used instead.",
+        "Beggs-Brill fallback: where Beggs-Brill runs outside its validity "
+        "window (high gas velocity in a small bore) it can return a non-physical "
+        "negative friction; in that case the friction term falls back to the "
+        "Friedel correlation so the reported ΔP is a real, positive number "
+        "rather than zero.",
+        "Resolution: within a single segment properties are evaluated at that "
+        "segment's inlet pressure. For a long run with a large pressure drop, "
+        "split it into more segments to improve accuracy (each slice then uses "
+        "its local density).",
+        "Erosion: mixture velocity is checked against the API RP 14E limit "
+        "(C = 100); alternative-DN velocities in the summary are ID-ratio "
+        "estimates, while the per-segment tables are rigorously recomputed.",
+    ):
+        _li = doc.add_paragraph(_b, style="List Bullet")
+        if _li.runs:
+            _li.runs[0].font.size = Pt(9)
     doc.add_paragraph()
 
     # ── 2. Generator ΔP comparison ───────────────────────────────────────────
@@ -2666,6 +2706,38 @@ def generate_dn_study_report(
     _fig_caption(doc,
         "Velocity estimated via ID-ratio scaling: V_m(alt) = V_m(primary) × (ID_primary/ID_alt)². "
         "Erosion velocity V_e from primary case (API RP 14E, C = 100). Not recalculated for alt DN.")
+
+    # ── 4b. Per-segment pressure drop ─────────────────────────────────────────
+    if segment_tables:
+        doc.add_heading("Per-Segment Pressure Drop", level=1)
+        _ps = doc.add_paragraph(
+            "Rigorously recomputed segment-by-segment for each DN case and branch "
+            "at the goal-seek line inlet pressure (alternative-DN segments are "
+            "resized and re-solved, not scaled). ΔP is split into friction and "
+            "gravity; V_m/V_e is the API RP 14E erosion ratio.")
+        if _ps.runs:
+            _ps.runs[0].font.size = Pt(9)
+        _seg_cols = ["Seg", "Pipe", "L (m)", "Regime",
+                     "V_m (m/s)", "V_m/V_e", "ΔP_fric (kPa)",
+                     "ΔP_grav (kPa)", "ΔP (kPa)", "P_out (bara)"]
+        for _grp in segment_tables:
+            doc.add_heading(f"DN case: {_grp.get('dn', '—')}", level=2)
+            for _br in _grp.get("branches", []):
+                doc.add_heading(f"{_br.get('label', 'Branch')} branch", level=3)
+                _rows = _br.get("rows") or []
+                if not _rows:
+                    _na = doc.add_paragraph(
+                        "Per-segment detail not available for this branch "
+                        "(single-phase or VLE flow).")
+                    if _na.runs:
+                        _na.runs[0].font.size      = Pt(9)
+                        _na.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+                    continue
+                _data = [[str(_r.get(_c, "—")) for _c in _seg_cols] for _r in _rows]
+                _kv_n_table(doc, _seg_cols, _data,
+                            col_widths=(0.5, 0.9, 0.55, 1.4,
+                                        0.7, 0.6, 0.75, 0.75, 0.7, 0.75))
+                doc.add_paragraph()
 
     # ── 5. Recommendation ─────────────────────────────────────────────────────
     doc.add_heading("Recommendation", level=1)
