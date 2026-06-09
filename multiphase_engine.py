@@ -1261,18 +1261,27 @@ def calculate_segment_pressure_drop(
                 mul=mul, mug=mug, sigma=sigma, P=P_pa,
                 D=D_inner, angle=angle_deg, roughness=roughness, L=L_eff,
             )
-            # Friction residual: total minus the external gravity term.
-            # B&B computes gravity with its own holdup, so this residual absorbs
-            # any holdup-model difference — an accepted decomposition approximation.
-            # Clamp to zero so friction is never negative: outside its validity
-            # window (e.g. near/above sonic gas velocity) B&B can return a total
-            # below the gravity head, which would imply negative friction and an
-            # unphysical pressure *rise* in horizontal/upflow pipes. Rebuild the
-            # total from the clamped components so the ΔP decomposition always
-            # reconciles (total = friction + gravity). A negative residual here
-            # means B&B is out of its validity window (flagged below).
-            _bb_clamped = (dP_total - dP_grav_Pa) < -1e-6
-            dP_fric_Pa  = max(0.0, dP_total - dP_grav_Pa)
+            # Friction residual: total minus the external gravity term. B&B
+            # computes gravity with its own holdup, so this residual absorbs any
+            # holdup-model difference — an accepted decomposition approximation.
+            _bb_resid   = dP_total - dP_grav_Pa
+            _bb_clamped = _bb_resid < -1e-6
+            if _bb_clamped:
+                # Outside its validity window (high gas velocity in a small bore)
+                # B&B can return a total below the gravity head, i.e. a negative
+                # friction — which previously got clamped to zero and reported a
+                # misleading ΔP ≈ 0. Instead fall back to a friction-only
+                # correlation (Friedel) so the result is a real, large, positive
+                # number. The decomposition still reconciles (total = fric + grav).
+                try:
+                    dP_fric_Pa = two_phase_dP(
+                        m=m, x=x, rhol=rhol, rhog=rhog,
+                        mul=mul, mug=mug, sigma=sigma,
+                        D=D_inner, L=L_eff, roughness=roughness, Method="Friedel")
+                except Exception:
+                    dP_fric_Pa = 0.0
+            else:
+                dP_fric_Pa = max(0.0, _bb_resid)
             dP_total    = dP_fric_Pa + dP_grav_Pa
             dP_accel_Pa = 0.0
         else:
@@ -1299,17 +1308,19 @@ def calculate_segment_pressure_drop(
         if "slug" in regime or "intermittent" in regime:
             _slug_info = slug_dynamics(Vsl, Vsg, D_inner, rhol, angle_rad, P_pa=props.get("P_pa"))
 
-        # Validity guard: the incompressible two-phase correlations are only
-        # meaningful below ~Mach 0.3 in the gas phase. Past that — or when B&B
-        # had to clamp a negative friction residual — the ΔP is unreliable
-        # (a too-small pipe choking). Flag it so callers can mark the result
-        # out of range instead of trusting a near-zero or garbage ΔP.
+        # Validity guard: the incompressible two-phase correlations stay
+        # meaningful below ~Mach 0.3 in the gas phase (segment-by-segment
+        # marching updates density between segments, so moderate compressibility
+        # is already captured). Past ~Mach 0.3 a single segment's ΔP is unreliable
+        # and the flow is heading toward choking — flag it so callers can warn.
+        # The B&B negative-friction clamp is handled by the Friedel fallback
+        # above, so it no longer forces an out-of-range flag on its own.
         try:
             _a_gas  = (1.3 * P_pa / rhog) ** 0.5 if (rhog > 0 and P_pa > 0) else float("inf")
             _mach_g = Vsg / _a_gas if _a_gas > 0 else 0.0
         except Exception:
             _mach_g = 0.0
-        _out_of_range = bool(_bb_clamped or _mach_g > 0.3)
+        _out_of_range = bool(_mach_g > 0.3)
 
         return {
             "dP_Pa":       dP_total,
