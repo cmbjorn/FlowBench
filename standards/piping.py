@@ -7,39 +7,38 @@ Sources:
     ASME B16.5-2017         — pressure-temperature class ratings
 """
 
-# ── Pipe bore database (ANSI B36.10 / B36.19) ───────────────────────────────
+# ── Pipe bore database (ANSI B36.10 / B36.19 + EN 10216/10220) ──────────────
 # Inner diameters in metres.
+#   PN10 / PN16  per EN 10216/10220 (DIN 2448) seamless carbon steel std series
 #   PN20 / PN25  ≈  Schedule 40  (material-independent at the same schedule)
 #   PN40         ≈  Schedule 80
 PIPE_DATABASE: dict[str, dict[str, float]] = {
-    "DN20":  {"PN20": 0.0209, "PN25": 0.0209, "PN40": 0.0189},
-    "DN25":  {"PN20": 0.0266, "PN25": 0.0266, "PN40": 0.0243},
-    "DN40":  {"PN20": 0.0409, "PN25": 0.0409, "PN40": 0.0381},
-    "DN50":  {"PN20": 0.0525, "PN25": 0.0525, "PN40": 0.0493},
-    "DN65":  {"PN20": 0.0627, "PN25": 0.0627, "PN40": 0.0590},
-    "DN80":  {"PN20": 0.0779, "PN25": 0.0779, "PN40": 0.0737},
-    "DN100": {"PN20": 0.1023, "PN25": 0.1023, "PN40": 0.0972},
-    "DN150": {"PN20": 0.1541, "PN25": 0.1541, "PN40": 0.1463},
-    "DN200": {"PN20": 0.2027, "PN25": 0.2027, "PN40": 0.1937},
-    "DN250": {"PN20": 0.2545, "PN25": 0.2545, "PN40": 0.2429},
+    "DN20":  {"PN10": 0.0229, "PN16": 0.0217, "PN20": 0.0209, "PN25": 0.0209, "PN40": 0.0189},
+    "DN25":  {"PN10": 0.0291, "PN16": 0.0273, "PN20": 0.0266, "PN25": 0.0266, "PN40": 0.0243},
+    "DN40":  {"PN10": 0.0431, "PN16": 0.0419, "PN20": 0.0409, "PN25": 0.0409, "PN40": 0.0381},
+    "DN50":  {"PN10": 0.0545, "PN16": 0.0531, "PN20": 0.0525, "PN25": 0.0525, "PN40": 0.0493},
+    "DN65":  {"PN10": 0.0703, "PN16": 0.0689, "PN20": 0.0627, "PN25": 0.0627, "PN40": 0.0590},
+    "DN80":  {"PN10": 0.0825, "PN16": 0.0809, "PN20": 0.0779, "PN25": 0.0779, "PN40": 0.0737},
+    "DN100": {"PN10": 0.1071, "PN16": 0.1053, "PN20": 0.1023, "PN25": 0.1023, "PN40": 0.0972},
+    "DN150": {"PN10": 0.1603, "PN16": 0.1593, "PN20": 0.1541, "PN25": 0.1541, "PN40": 0.1463},
+    "DN200": {"PN10": 0.2101, "PN16": 0.2065, "PN20": 0.2027, "PN25": 0.2027, "PN40": 0.1937},
+    "DN250": {"PN10": 0.2630, "PN16": 0.2604, "PN20": 0.2545, "PN25": 0.2545, "PN40": 0.2429},
 }
 
 # ── Swagelok metric SS tubing (316/316L seamless, OD × wall → ID) ────────────
-# Inner diameters in metres.  Wall thicknesses per Swagelok catalog MS-01-140.
-# Sizes T18 and above are typical connector / inter-harp tubing.
+# Inner diameters in metres.  Source: Swagelok catalog MS-01-181 (metric sizes).
+# Ordering number pattern: SS-T{OD}M-S-{wall}M-6ME  (e.g. SS-T12M-S-2,0M-6ME)
 TUBING_DATABASE: dict[str, dict[str, float]] = {
-    "T6":  {"1.0 mm wall": 0.004},
-    "T8":  {"1.0 mm wall": 0.006},
-    "T10": {"1.0 mm wall": 0.008},
-    "T12": {"1.0 mm wall": 0.010},
-    "T14": {"1.5 mm wall": 0.011, "2.0 mm wall": 0.010},
-    "T16": {"1.5 mm wall": 0.013, "2.0 mm wall": 0.012},
-    "T18": {"1.5 mm wall": 0.015, "2.0 mm wall": 0.014},
-    "T20": {"1.5 mm wall": 0.017, "2.0 mm wall": 0.016},
-    "T25": {"1.5 mm wall": 0.022, "2.0 mm wall": 0.021},
-    "T28": {"1.5 mm wall": 0.025, "2.0 mm wall": 0.024},
-    "T32": {"2.0 mm wall": 0.028, "3.0 mm wall": 0.026},
-    "T38": {"2.0 mm wall": 0.034, "3.0 mm wall": 0.032},
+    "T3":  {"0.5 mm wall": 0.0020, "0.7 mm wall": 0.0016},
+    "T6":  {"1.0 mm wall": 0.0040, "1.5 mm wall": 0.0030},
+    "T8":  {"1.0 mm wall": 0.0060, "1.5 mm wall": 0.0050},
+    "T10": {"1.0 mm wall": 0.0080, "1.5 mm wall": 0.0070},
+    "T12": {"1.0 mm wall": 0.0100, "1.5 mm wall": 0.0090, "2.0 mm wall": 0.0080},
+    "T16": {"1.0 mm wall": 0.0140, "1.5 mm wall": 0.0130, "2.0 mm wall": 0.0120},
+    "T18": {"1.0 mm wall": 0.0160, "1.5 mm wall": 0.0150, "2.0 mm wall": 0.0140},
+    "T20": {"2.0 mm wall": 0.0160},
+    "T22": {"2.0 mm wall": 0.0180},
+    "T25": {"2.0 mm wall": 0.0210, "2.5 mm wall": 0.0200},
 }
 
 # Absolute roughness (m) for seamless drawn SS instrument tubing.
