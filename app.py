@@ -16,6 +16,7 @@ from physics.friction import churchill_f
 from workflows.pipeline_case import compute_pipeline_case
 from workflows.pump_case import compute_pump_case
 from standards.piping import sum_le_fit
+import copy
 import json
 from fluids.two_phase import (Taitel_Dukler_regime as _TD_regime,
                                Mandhane_Gregory_Aziz_regime as _MGA_regime)
@@ -190,7 +191,6 @@ def _collect_save_state() -> dict:
 
 
 def _apply_save_state(data: dict) -> None:
-    import copy
     s = st.session_state
     s["label_a"] = data.get("label_a", "Case A")
     s["label_b"] = data.get("label_b", "Case B")
@@ -755,7 +755,6 @@ def _dn_branch_detail(res, dn_override, inlet_P_bara, dn_label, branch_label):
     DN. fig_h/fig_v are None for single-phase or VLE branches (no gas/liquid
     regime map); rows is the per-segment grid (empty if it could not be built).
     """
-    import copy
     segs = copy.deepcopy(res.get("segments", []) or [])
     if dn_override:
         for _s in segs:
@@ -839,7 +838,6 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 
     # ── Session state init ────────────────────────────────────────────────────
     if k("segments") not in st.session_state:
-        import copy
         _init = default_segments if default_segments is not None else _DEFAULT_SEGMENTS
         st.session_state[k("segments")] = copy.deepcopy(_init)
     if k("gas_species_widget") not in st.session_state:
@@ -2623,6 +2621,15 @@ def run_case(cid: str, accent: str, default_segments=None) -> dict:
 # GOAL-SEEK HELPERS  — used by the Compare tab
 # ============================================================================
 
+def _update_diag(diag, seg_res, P_after_Pa):
+    if diag is None:
+        return
+    if seg_res.get("out_of_range"):
+        diag["out_of_range"] = True
+    if P_after_Pa < 1e4:
+        diag["floored"] = True
+
+
 def _calc_dp_at_p(res, P_bara_override, diag=None):
     """
     Re-run the pipeline in res at a different inlet pressure.
@@ -2697,11 +2704,7 @@ def _calc_dp_at_p(res, P_bara_override, diag=None):
             correlation=corr, voidage_method=void)
         total_dp  += seg_res["dP_Pa"]
         current_P -= seg_res["dP_Pa"]
-        if diag is not None:
-            if seg_res.get("out_of_range"):
-                diag["out_of_range"] = True
-            if current_P < 1e4:
-                diag["floored"] = True
+        _update_diag(diag, seg_res, current_P)
         current_P  = max(1e4, current_P)
 
     return total_dp / 1000.0, current_P / 1e5
@@ -2877,11 +2880,7 @@ def _march_header_simple(tap_dists, gas_per_tap, liq_per_tap,
             "ΔP_grav (kPa)": round(seg_res["dP_grav_Pa"] / 1000, 3),
         })
 
-        if diag is not None:
-            if seg_res.get("out_of_range"):
-                diag["out_of_range"] = True
-            if end_P < 1e4:
-                diag["floored"] = True
+        _update_diag(diag, seg_res, end_P)
 
         total_dp  += dP_Pa
         dp_fric   += seg_res["dP_fric_Pa"]
@@ -2910,11 +2909,7 @@ def _march_single_seg(seg, P_in_Pa, T_C, gas_flows, liquid_type, q_lye, corr, vo
         correlation=corr, voidage_method=void)
 
     dp_Pa = seg_res["dP_Pa"]
-    if diag is not None:
-        if seg_res.get("out_of_range"):
-            diag["out_of_range"] = True
-        if P_in_Pa - dp_Pa < 1e4:
-            diag["floored"] = True
+    _update_diag(diag, seg_res, P_in_Pa - dp_Pa)
     P_out = max(1e4, P_in_Pa - dp_Pa)
     V_m   = seg_res["Vsg"] + seg_res["Vsl"]
     V_e, _ = engine.calculate_erosion_velocity(
@@ -2977,7 +2972,6 @@ def _calc_header_dp_at_p(res_hdr, P_in_bara, diag=None):
 def _apply_dn_override(res, dn_alt):
     """Return a deep copy of a branch result dict with dn replaced in all segments.
     Header pipe and T-segment are not modified."""
-    import copy
     r = copy.deepcopy(res)
     for seg in r.get("segments", []):
         seg["dn"] = dn_alt
@@ -3053,7 +3047,7 @@ def _goal_seek_stack(res_line, res_hdr, P_target_sep, tol=0.0005, max_iter=30):
 
     dp_line = dp_hdr = 0.0
     P_line_out = P_sep = 0.0
-    line_diag = hdr_diag = {}
+    line_diag, hdr_diag = {}, {}
 
     for i in range(max_iter):
         line_diag, hdr_diag = {}, {}
@@ -5699,12 +5693,12 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                 )
 
     # =============================================================================
-    # Tab: PSV — API 520 Part I / API 526
+    # Tab: PSV — API 520 Part I / API 521 / API 526
     # =============================================================================
     with tab_psv:
         st.markdown(
-            "Pressure Safety Valve sizing per **API 520 Part I** (SI). "
-            "Standard orifice selection per **API 526**."
+            "Pressure Safety Valve sizing per **API 520 Part I** (SI, 10th Ed.)  ·  "
+            "Relief scenarios per **API 521**  ·  Orifice selection per **API 526**."
         )
 
         _psv_c1, _psv_c2 = st.columns([1, 2], gap="large")
@@ -5712,7 +5706,9 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
         with _psv_c1:
             st.markdown("**SERVICE**")
             _psv_service = st.selectbox(
-                "Service type", ["Gas / Vapour", "Steam", "Liquid"], key="psv_service"
+                "Service type",
+                ["Gas / Vapour", "Steam", "Liquid", "Two-phase / Flashing"],
+                key="psv_service",
             )
             _psv_type = st.selectbox(
                 "PSV type",
@@ -5727,7 +5723,7 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
             _psv_op_pct = st.number_input(
                 "Allowable overpressure (%)", value=10.0, min_value=1.0, max_value=21.0,
                 step=1.0, key="psv_op_pct",
-                help="10 % normal fire case; 21 % for fire + ASME Sec VIII.",
+                help="10 % normal; 21 % for fire case (ASME Sec VIII-1 UG-125).",
             )
             _psv_Patm_bara = st.number_input(
                 "Atmospheric pressure (bara)", value=1.01325, step=0.005, key="psv_Patm",
@@ -5750,18 +5746,131 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                 f"Relieving pressure P₁ = {_psv_P1_bara:.3f} bara = {_psv_P1_kPa:.1f} kPa abs"
             )
 
+            # ── Relief load ─────────────────────────────────────────────────────
             st.markdown("**REQUIRED RELIEF RATE**")
-            if _psv_service != "Liquid":
-                _psv_W_kgh = st.number_input(
-                    "Mass flow (kg/h)", value=1000.0, min_value=0.1, step=100.0, key="psv_W"
-                )
-                _psv_Q_m3h = None
-            else:
-                _psv_Q_m3h = st.number_input(
-                    "Volumetric flow (m³/h)", value=10.0, min_value=0.001, step=1.0, key="psv_Q"
-                )
-                _psv_W_kgh = None
+            _psv_load_mode = st.radio(
+                "Relief rate mode",
+                ["Specify directly", "Calculate from scenario (API 521)"],
+                key="psv_load_mode", horizontal=False, label_visibility="collapsed",
+            )
+            _psv_W_kgh, _psv_Q_m3h = None, None
 
+            if _psv_load_mode == "Specify directly":
+                if _psv_service != "Liquid":
+                    _psv_W_kgh = st.number_input(
+                        "Mass flow (kg/h)", value=1000.0, min_value=0.1,
+                        step=100.0, key="psv_W",
+                    )
+                else:
+                    _psv_Q_m3h = st.number_input(
+                        "Volumetric flow (m³/h)", value=10.0, min_value=0.001,
+                        step=1.0, key="psv_Q",
+                    )
+            else:
+                # Scenario calculator (API 521)
+                _psv_scenario = st.selectbox(
+                    "Scenario",
+                    ["Fire case (API 521 §5.15)", "Loss of cooling",
+                     "Blocked discharge", "Thermal expansion"],
+                    key="psv_scenario",
+                )
+                _scen_fluid_opts = list(engine.LIQUID_COOLPROP_ID.keys())
+                _scen_kwargs: dict = {}
+                _scen_scenario_key = "blocked_discharge"
+
+                if _psv_scenario == "Fire case (API 521 §5.15)":
+                    _sc_fl  = st.selectbox("Process fluid", _scen_fluid_opts,
+                                           key="psv_scen_fl")
+                    _sc_vt  = st.selectbox("Vessel type",
+                                           ["Vertical", "Horizontal", "Sphere"],
+                                           key="psv_scen_vt")
+                    _sc_D   = st.number_input("Vessel OD (m)", value=2.0,
+                                              min_value=0.1, step=0.5, key="psv_scen_D")
+                    _sc_H   = st.number_input("Liquid height / shell length (m)",
+                                              value=4.0, min_value=0.1, step=0.5,
+                                              key="psv_scen_H")
+                    _sc_F   = st.selectbox(
+                        "Environmental factor F",
+                        ["1.0 — no drainage / firefighting",
+                         "0.5 — adequate drainage + remote spray",
+                         "0.3 — drainage + on-site firefighting"],
+                        key="psv_scen_F",
+                    )
+                    _sc_F_val = float(_sc_F.split("—")[0].strip())
+                    _scen_scenario_key = "fire"
+                    _scen_kwargs = dict(
+                        fluid=engine.LIQUID_COOLPROP_ID[_sc_fl],
+                        vessel_type=_sc_vt.lower(), D_m=_sc_D, H_or_L_m=_sc_H,
+                        F_env=_sc_F_val,
+                    )
+
+                elif _psv_scenario == "Loss of cooling":
+                    _sc_fl2  = st.selectbox("Process fluid", _scen_fluid_opts,
+                                            key="psv_scen_fl2")
+                    _sc_duty = st.number_input(
+                        "Cooler / condenser duty (kW)",
+                        value=500.0, min_value=0.1, step=50.0, key="psv_scen_duty",
+                    )
+                    _scen_scenario_key = "loss_of_cooling"
+                    _scen_kwargs = dict(
+                        fluid=engine.LIQUID_COOLPROP_ID[_sc_fl2], Q_duty_kW=_sc_duty,
+                    )
+
+                elif _psv_scenario == "Blocked discharge":
+                    st.caption("Enter the normal process flow rate directly.")
+                    if _psv_service == "Liquid":
+                        _psv_Q_m3h = st.number_input(
+                            "Normal process flow (m³/h)", value=10.0,
+                            min_value=0.001, step=1.0, key="psv_Q_bd",
+                        )
+                    else:
+                        _psv_W_kgh = st.number_input(
+                            "Normal process flow (kg/h)", value=1000.0,
+                            min_value=0.1, step=100.0, key="psv_W_bd",
+                        )
+                    _scen_scenario_key = "blocked_discharge"
+                    _scen_kwargs = dict(
+                        fluid="Water",
+                        W_direct_kgh=_psv_W_kgh or 0.0,
+                        Q_direct_m3h=_psv_Q_m3h or 0.0,
+                    )
+
+                elif _psv_scenario == "Thermal expansion":
+                    _sc_fl3  = st.selectbox("Liquid fluid", _scen_fluid_opts,
+                                            key="psv_scen_fl3")
+                    _sc_Qht  = st.number_input(
+                        "External heat input (kW)", value=100.0,
+                        min_value=0.1, step=10.0, key="psv_scen_Qheat",
+                    )
+                    _scen_scenario_key = "thermal_expansion"
+                    _scen_kwargs = dict(
+                        fluid=engine.LIQUID_COOLPROP_ID[_sc_fl3], Q_heat_kW=_sc_Qht,
+                    )
+
+                # Compute scenario relief load (live — shown before Calculate)
+                if _psv_scenario != "Blocked discharge":
+                    try:
+                        _scen = psv.scenario_relief_load(
+                            _scen_scenario_key,
+                            P1_kPa=_psv_P1_kPa, T_K=_psv_T1_K,
+                            **_scen_kwargs,
+                        )
+                        if _scen["mode"] == "gas":
+                            _psv_W_kgh = _scen["W_kgh"]
+                            st.caption(
+                                f"Computed relief load: **{_psv_W_kgh:.1f} kg/h** (vapor)"
+                            )
+                        else:
+                            _psv_Q_m3h = _scen["Q_m3h"]
+                            st.caption(
+                                f"Computed relief load: **{_psv_Q_m3h:.5f} m³/h** (liquid)"
+                            )
+                        for _sn in _scen["notes"]:
+                            st.caption(_sn)
+                    except Exception as _scen_err:
+                        st.error(f"Scenario calculation error: {_scen_err}")
+
+            # ── Corrections ─────────────────────────────────────────────────────
             st.markdown("**CORRECTIONS**")
             _psv_rupture_disc = st.checkbox(
                 "Rupture disc in series upstream",
@@ -5770,27 +5879,38 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
             )
             _psv_Kc = psv.KC_DISC if _psv_rupture_disc else psv.KC_NONE
 
-            _psv_btn = st.button("Calculate", key="psv_run", type="primary", use_container_width=True)
+            _psv_btn = st.button(
+                "Calculate", key="psv_run", type="primary", use_container_width=True
+            )
             if _psv_btn:
                 st.session_state["psv_show"] = True
 
-        # ── Fluid properties (right side top) ──────────────────────────────────
+        # ── Right panel ─────────────────────────────────────────────────────────
         with _psv_c2:
             _psv_show = st.session_state.get("psv_show", False)
             if not _psv_show:
                 st.info("Set inputs and press **Calculate**.")
             else:
+                _psv_res    = None
+                _psv_gamma  = None
+                _psv_MW     = None
+                _psv_Z      = 1.0
+                _psv_Kb     = 1.0
+                _psv_omega  = None
+                _psv_rho    = 1000.0
+                _psv_mu_cP  = 1.0
+                _psv_Kw     = 1.0
+
                 if _psv_service == "Gas / Vapour":
                     st.markdown("**GAS PROPERTIES**")
-                    _psv_species = st.selectbox(
+                    _psv_species   = st.selectbox(
                         "Species", list(fanno.GASES.keys()), key="psv_species"
                     )
-                    _psv_cp_name   = fanno.GASES[_psv_species][2]   # CoolProp ID or None
-                    _psv_MW_kgmol  = fanno.GASES[_psv_species][0]   # kg/mol or None
-                    _psv_gam_table = fanno.GASES[_psv_species][1]   # table γ or None
+                    _psv_cp_name   = fanno.GASES[_psv_species][2]
+                    _psv_MW_kgmol  = fanno.GASES[_psv_species][0]
+                    _psv_gam_table = fanno.GASES[_psv_species][1]
 
                     if _psv_cp_name is not None:
-                        # Known species: fetch γ and Z from CoolProp at relieving conditions
                         _psv_MW    = (_psv_MW_kgmol * 1000.0) if _psv_MW_kgmol else 28.97
                         _psv_gamma = _psv_gam_table or 1.40
                         _psv_Z     = 1.0
@@ -5804,8 +5924,10 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                             _rho_v = CP.PropsSI("D", "T", _psv_T1_K, "P", _P_Pa_psv, _psv_cp_name)
                             _psv_Z = _P_Pa_psv * _psv_MW / (_rho_v * 8314.46 * _psv_T1_K)
                             st.caption(
-                                f"CoolProp at {_psv_T1_K-273.15:.0f} °C, {_psv_P1_kPa/100:.3f} bara — "
-                                f"γ = {_psv_gamma:.4f}  |  Z = {_psv_Z:.4f}  |  MW = {_psv_MW:.3f} kg/kmol"
+                                f"CoolProp at {_psv_T1_K-273.15:.0f} °C, "
+                                f"{_psv_P1_kPa/100:.3f} bara — "
+                                f"γ = {_psv_gamma:.4f}  |  Z = {_psv_Z:.4f}  |  "
+                                f"MW = {_psv_MW:.3f} kg/kmol"
                             )
                         except Exception as _cp_err:
                             st.caption(
@@ -5813,40 +5935,62 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                                 f"γ = {_psv_gamma:.4f}, Z = 1.0"
                             )
                     else:
-                        # Custom gas: manual inputs
                         _cg1, _cg2, _cg3 = st.columns(3)
-                        _psv_MW    = _cg1.number_input("MW (kg/kmol)", value=28.97, min_value=1.0, step=0.5, key="psv_MW")
-                        _psv_gamma = _cg2.number_input("γ (Cp/Cv)", value=1.40, min_value=1.01, max_value=2.0, step=0.01, key="psv_gamma")
-                        _psv_Z     = _cg3.number_input("Z", value=1.0, min_value=0.1, max_value=2.0, step=0.01, key="psv_Z")
+                        _psv_MW    = _cg1.number_input(
+                            "MW (kg/kmol)", value=28.97, min_value=1.0,
+                            step=0.5, key="psv_MW",
+                        )
+                        _psv_gamma = _cg2.number_input(
+                            "γ (Cp/Cv)", value=1.40, min_value=1.01,
+                            max_value=2.0, step=0.01, key="psv_gamma",
+                        )
+                        _psv_Z = _cg3.number_input(
+                            "Z", value=1.0, min_value=0.1,
+                            max_value=2.0, step=0.01, key="psv_Z",
+                        )
 
-                    # Backpressure correction
                     if "Conventional" in _psv_type:
                         _psv_Kb = psv.kb_conventional(_psv_Pback_kPa, _psv_P1_kPa)
                     elif "Balanced" in _psv_type:
-                        _psv_Kb = psv.kb_balanced_bellows(_psv_Pback_kPa, _psv_P1_kPa, _psv_gamma)
+                        _psv_Kb = psv.kb_balanced_bellows(
+                            _psv_Pback_kPa, _psv_P1_kPa, _psv_gamma
+                        )
                     else:
                         _psv_Kb = psv.kb_pilot(_psv_Pback_kPa, _psv_P1_kPa)
 
+                    _psv_W_safe = _psv_W_kgh or 0.001
                     _psv_res = psv.psv_gas_size(
-                        _psv_W_kgh, _psv_P1_kPa, _psv_T1_K, _psv_MW, _psv_gamma,
+                        _psv_W_safe, _psv_P1_kPa, _psv_T1_K,
+                        _psv_MW, _psv_gamma,
                         Kb=_psv_Kb, Kc=_psv_Kc, Z=_psv_Z,
+                        P_back_Pa=_psv_Pback_kPa * 1000.0,
                     )
+                    if _psv_res.get("subcritical"):
+                        st.info(
+                            f"Back pressure ratio {_psv_Pback_kPa/_psv_P1_kPa:.3f} > "
+                            f"critical ratio {_psv_res['critical_pressure_ratio']:.4f} — "
+                            "subcritical flow. Area computed via isentropic nozzle formula "
+                            "(API 520 §3.4)."
+                        )
 
                 elif _psv_service == "Steam":
                     st.markdown("**STEAM PROPERTIES** — via CoolProp")
-                    st.caption("γ and Z are computed from CoolProp at the relieving conditions.")
-                    _psv_Z = 1.0
+                    st.caption("γ and Z are computed from CoolProp at relieving conditions.")
 
                     if "Conventional" in _psv_type:
                         _psv_Kb = psv.kb_conventional(_psv_Pback_kPa, _psv_P1_kPa)
                     elif "Balanced" in _psv_type:
-                        _psv_Kb = psv.kb_balanced_bellows(_psv_Pback_kPa, _psv_P1_kPa, 1.33)
+                        _psv_Kb = psv.kb_balanced_bellows(
+                            _psv_Pback_kPa, _psv_P1_kPa, 1.33
+                        )
                     else:
                         _psv_Kb = psv.kb_pilot(_psv_Pback_kPa, _psv_P1_kPa)
 
+                    _psv_W_safe = _psv_W_kgh or 0.001
                     _psv_res = psv.psv_steam_size(
-                        _psv_W_kgh, _psv_P1_kPa, _psv_T1_K,
+                        _psv_W_safe, _psv_P1_kPa, _psv_T1_K,
                         Kb=_psv_Kb, Kc=_psv_Kc,
+                        P_back_Pa=_psv_Pback_kPa * 1000.0,
                     )
                     for _note in _psv_res.get("notes", []):
                         if _note.startswith("UNPHYSICAL"):
@@ -5855,28 +5999,40 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                             st.caption(_note)
                     _psv_gamma = _psv_res.get("gamma", 1.33)
                     _psv_MW    = _psv_res.get("MW", 18.015)
+                    if _psv_res.get("subcritical"):
+                        st.info(
+                            f"Subcritical steam flow (P_back/P₁ = "
+                            f"{_psv_Pback_kPa/_psv_P1_kPa:.3f}) — "
+                            "area via API 520 §3.4 isentropic nozzle."
+                        )
 
-                else:  # Liquid
+                elif _psv_service == "Liquid":
                     st.markdown("**LIQUID PROPERTIES**")
-                    _liq_opts = list(engine.LIQUID_COOLPROP_ID.keys()) + ["KOH solution"] + ["Custom"]
+                    _liq_opts = (
+                        list(engine.LIQUID_COOLPROP_ID.keys())
+                        + ["KOH solution", "Custom"]
+                    )
                     _liq_pick = st.selectbox("Fluid", _liq_opts, key="psv_liq_fluid")
 
-                    _ll1, _ll2, _ll3 = st.columns(3)
+                    _ll1, _ll2 = st.columns(2)
                     if _liq_pick == "KOH solution":
-                        _psv_koh_conc = st.slider("Concentration (wt%)", min_value=5, max_value=40,
-                                                   value=30, step=5, key="psv_koh_conc",
-                                                   help="Valid 0–40 wt%, 10–90 °C (Gilliam et al. 2007)")
+                        _psv_koh_conc = st.slider(
+                            "Concentration (wt%)", min_value=5, max_value=40,
+                            value=30, step=5, key="psv_koh_conc",
+                            help="Valid 0–40 wt%, 10–90 °C (Gilliam et al. 2007)",
+                        )
                         _liq_props = ro.koh_liquid_properties(_psv_T_C, float(_psv_koh_conc))
                         _rho_def   = _liq_props["rho_kgm3"]
                         _mu_cP_def = _liq_props["mu_pas"] * 1e3
                         st.caption(
-                            f"ρ = {_rho_def:.1f} kg/m³  |  μ = {_mu_cP_def:.3f} cP  |  "
-                            f"Pᵥ = {_liq_props['Pv_Pa']/1e5:.5f} bara"
+                            f"ρ = {_rho_def:.1f} kg/m³  |  μ = {_mu_cP_def:.3f} cP"
                         )
                     elif _liq_pick != "Custom":
                         _liq_cp_id = engine.LIQUID_COOLPROP_ID[_liq_pick]
                         try:
-                            _liq_props = ro.liquid_properties(_liq_cp_id, _psv_T_C, _psv_P1_bara * 1e5)
+                            _liq_props = ro.liquid_properties(
+                                _liq_cp_id, _psv_T_C, _psv_P1_bara * 1e5
+                            )
                             _rho_def   = _liq_props["rho_kgm3"]
                             _mu_cP_def = _liq_props["mu_pas"] * 1e3
                         except Exception:
@@ -5884,68 +6040,103 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                     else:
                         _rho_def, _mu_cP_def = 1000.0, 1.0
 
-                    with _ll1:
-                        _psv_rho = st.number_input(
-                            "Density (kg/m³)", value=round(_rho_def, 2), min_value=1.0,
-                            step=10.0, key="psv_rho"
-                        )
-                    with _ll2:
-                        _psv_mu_cP = st.number_input(
-                            "Viscosity (cP)", value=round(_mu_cP_def, 3), min_value=0.001,
-                            step=0.1, key="psv_mu"
-                        )
-                    with _ll3:
-                        _psv_Kw = 1.0 if "Conventional" in _psv_type else st.number_input(
-                            "Kw (back-pressure)", value=1.0, min_value=0.5, max_value=1.0,
-                            step=0.01, key="psv_Kw"
-                        )
+                    _psv_rho   = _ll1.number_input(
+                        "Density (kg/m³)", value=round(_rho_def, 2),
+                        min_value=1.0, step=10.0, key="psv_rho",
+                    )
+                    _psv_mu_cP = _ll2.number_input(
+                        "Viscosity (cP)", value=round(_mu_cP_def, 3),
+                        min_value=0.001, step=0.1, key="psv_mu",
+                    )
 
-                    _psv_P2_liq_kPa = _psv_Pback_kPa
+                    # Auto-compute Kw (API 520 Fig. 14) for balanced bellows
+                    if "Balanced" in _psv_type:
+                        _psv_Kw = psv.kw_balanced_bellows_liquid(
+                            _psv_Pback_kPa * 1000.0, _psv_P1_kPa * 1000.0
+                        )
+                        st.caption(
+                            f"Kw = {_psv_Kw:.3f} (API 520 Fig. 14, auto-computed, "
+                            f"P_back/P₁ = {_psv_Pback_kPa/_psv_P1_kPa:.3f})"
+                        )
+                    else:
+                        _psv_Kw = 1.0
 
+                    _psv_Q_safe = _psv_Q_m3h or 0.001
                     _psv_res = psv.psv_liquid_size(
-                        _psv_Q_m3h, _psv_P1_kPa, _psv_P2_liq_kPa,
+                        _psv_Q_safe, _psv_P1_kPa, _psv_Pback_kPa,
                         _psv_rho, _psv_mu_cP, Kw=_psv_Kw, Kc=_psv_Kc,
                     )
-                    _psv_gamma = None
-                    _psv_MW    = None
-                    _psv_Kb    = _psv_Kw
+                    _psv_Kb = _psv_Kw
 
-                # ── Warnings ────────────────────────────────────────────────────────
+                else:  # Two-phase / Flashing
+                    st.markdown(
+                        "**TWO-PHASE FLUID — Omega method (API 520 Appendix D)**"
+                    )
+                    _tp_opts    = list(engine.LIQUID_COOLPROP_ID.keys())
+                    _tp_pick    = st.selectbox(
+                        "Process fluid", _tp_opts, key="psv_tp_fluid"
+                    )
+                    _tp_cp_name = engine.LIQUID_COOLPROP_ID[_tp_pick]
+                    _tp_x0      = st.number_input(
+                        "Inlet quality x₀  (0 = subcooled / bubble-point)",
+                        value=0.0, min_value=0.0, max_value=0.99,
+                        step=0.05, key="psv_tp_x0",
+                        help=(
+                            "0 = saturated liquid or subcooled inlet; "
+                            ">0 = two-phase (vapour + liquid) at the PSV inlet."
+                        ),
+                    )
+
+                    _psv_omega, _psv_v0, _tp_notes = psv.omega_parameter(
+                        _tp_cp_name, _psv_P1_kPa * 1000.0, _psv_T1_K, x0=_tp_x0
+                    )
+                    for _tn in _tp_notes:
+                        st.caption(_tn)
+
+                    _psv_W_safe = _psv_W_kgh or 0.001
+                    _psv_res = psv.psv_twophase_size(
+                        _psv_W_safe, _psv_P1_kPa, _psv_Pback_kPa,
+                        _psv_omega, _psv_v0, Kc=_psv_Kc,
+                    )
+                    if _psv_res.get("subcritical"):
+                        st.info(
+                            f"P_back/P₀ = {_psv_Pback_kPa/_psv_P1_kPa:.3f} > "
+                            f"η_c = {_psv_res['eta_c']:.4f} — subcritical two-phase flow; "
+                            "area computed at back-pressure conditions."
+                        )
+
+                # ── Warnings ────────────────────────────────────────────────────
                 _bp_pct = psv.backpressure_pct(_psv_Pback_kPa, _psv_P1_kPa)
                 if "Conventional" in _psv_type and _bp_pct > 10.0:
                     st.warning(
-                        f"Back pressure = {_bp_pct:.1f}% of relieving pressure P₁. "
-                        "API 520 recommends consulting the valve vendor above 10% for conventional valves."
+                        f"Back pressure = {_bp_pct:.1f}% of P₁. "
+                        "API 520 Part II recommends consulting the valve vendor above 10% "
+                        "for conventional spring-loaded valves."
                     )
                 if "Balanced" in _psv_type and _bp_pct > 30.0:
                     st.warning(
-                        f"Back pressure = {_bp_pct:.1f}% of P₁. Kb correction applied. "
-                        "Verify with valve vendor for back pressure > 30%."
+                        f"Back pressure = {_bp_pct:.1f}% of P₁. Kb / Kw correction applied. "
+                        "Verify with valve vendor above 30%."
                     )
                 if _psv_res["orifice_letter"] == "T+":
+                    _n_par = math.ceil(
+                        _psv_res["A_req_mm2"] / psv.API526_ORIFICES["T"]
+                    )
                     st.error(
-                        "Required area exceeds the largest API 526 standard orifice (T = 16 774 mm²). "
-                        "Consider multiple PSVs in parallel or a non-standard design."
+                        f"Required area {_psv_res['A_req_mm2']:.0f} mm² exceeds the largest "
+                        f"API 526 orifice T = {psv.API526_ORIFICES['T']:.0f} mm². "
+                        f"Use **{_n_par} × T-orifice PSVs in parallel** or a non-standard design."
                     )
 
-                # Back-pressure subcritical warning for gas/steam
-                if _psv_service in ("Gas / Vapour", "Steam") and _psv_gamma:
-                    _r_c = (2.0 / (_psv_gamma + 1.0)) ** (_psv_gamma / (_psv_gamma - 1.0))
-                    if _psv_Pback_kPa / _psv_P1_kPa > _r_c:
-                        st.warning(
-                            f"Back pressure ratio {_psv_Pback_kPa/_psv_P1_kPa:.3f} > critical ratio "
-                            f"{_r_c:.4f} — flow may be subcritical at the nozzle. "
-                            "Contact valve vendor for subcritical-flow rated capacity."
-                        )
-
-                # ── Results ─────────────────────────────────────────────────────────
+                # ── Sizing results ───────────────────────────────────────────────
                 st.divider()
                 st.subheader("Sizing Results")
 
                 _rc1, _rc2, _rc3, _rc4 = st.columns(4)
-                _rc1.metric("Required area", f"{_psv_res['A_req_mm2']:.1f} mm²")
+                _rc1.metric("Required area",  f"{_psv_res['A_req_mm2']:.1f} mm²")
                 _rc2.metric("API 526 orifice", _psv_res["orifice_letter"])
-                _rc3.metric("Orifice area", f"{_psv_res['orifice_area_mm2']:.1f} mm²"
+                _rc3.metric("Orifice area",
+                            f"{_psv_res['orifice_area_mm2']:.1f} mm²"
                             if _psv_res["orifice_area_mm2"] < math.inf else "N/A")
                 _area_margin = (
                     (_psv_res["orifice_area_mm2"] / _psv_res["A_req_mm2"] - 1.0) * 100.0
@@ -5954,66 +6145,85 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                 )
                 _rc4.metric("Area margin", f"+{_area_margin:.1f}%")
 
-                # ── Flange row ───────────────────────────────────────────────────────
+                # Two-phase specific metrics
+                if _psv_service == "Two-phase / Flashing":
+                    _tp1, _tp2, _tp3 = st.columns(3)
+                    _tp1.metric("Omega (ω)", f"{_psv_res['omega']:.4f}")
+                    _tp2.metric("Critical η_c", f"{_psv_res['eta_c']:.4f}")
+                    _tp3.metric("G_c (kg/m²·s)", f"{_psv_res['G_c_kgm2s']:.1f}")
+
+                # Flange row
                 _flange = psv.flange_nps(_psv_res["orifice_letter"])
                 if _flange:
                     _in_nps, _out_nps = _flange
                     _in_dn,  _out_dn  = psv.nps_to_dn(_in_nps), psv.nps_to_dn(_out_nps)
                     _fl_class = psv.min_flange_class(_psv_P1_bara)
                     _rfl1, _rfl2, _rfl3, _rfl4 = st.columns(4)
-                    _rfl1.metric("Inlet flange",
-                                 f"NPS {_in_nps:g}\" / DN {_in_dn}")
-                    _rfl2.metric("Outlet flange",
-                                 f"NPS {_out_nps:g}\" / DN {_out_dn}")
-                    _rfl3.metric("Min. flange class",
-                                 f"ASME {_fl_class} lb",
+                    _rfl1.metric("Inlet flange",   f"NPS {_in_nps:g}\" / DN {_in_dn}")
+                    _rfl2.metric("Outlet flange",  f"NPS {_out_nps:g}\" / DN {_out_dn}")
+                    _rfl3.metric("Min. flange class", f"ASME {_fl_class} lb",
                                  help="ASME B16.5 Group 1.1 CS at 38 °C. Class 300 is the "
                                       "industry minimum for PSV inlets per API 526.")
-                    _rfl4.metric("Orifice designation",
+                    _rfl4.metric("Designation",
                                  f"{_in_nps:g}\" × {_out_nps:g}\" – {_psv_res['orifice_letter']}")
 
-                # Rated capacity row
-                if _psv_service in ("Gas / Vapour", "Steam") and "capacity_selected_kgh" in _psv_res:
+                # Capacity row
+                if _psv_service in ("Gas / Vapour", "Steam", "Two-phase / Flashing") and \
+                        "capacity_selected_kgh" in _psv_res:
                     _rcap1, _rcap2, _rcap3, _rcap4 = st.columns(4)
-                    _rcap1.metric("Rated capacity", f"{_psv_res['capacity_selected_kgh']:.0f} kg/h")
-                    _rcap2.metric("Required flow",  f"{_psv_W_kgh:.0f} kg/h")
-                    _rcap3.metric("C coefficient",  f"{_psv_res['C_coeff']:.5f}")
-                    _rcap4.metric("Kb",             f"{_psv_res['Kb']:.3f}")
+                    _rcap1.metric("Rated capacity",
+                                  f"{_psv_res['capacity_selected_kgh']:.0f} kg/h")
+                    _rcap2.metric("Required flow", f"{(_psv_W_kgh or 0):.0f} kg/h")
+                    if _psv_service != "Two-phase / Flashing":
+                        _rcap3.metric("C coefficient",
+                                      f"{_psv_res.get('C_coeff', 0):.5f}")
+                        _rcap4.metric("Kb", f"{_psv_res.get('Kb', 1.0):.3f}")
+                    else:
+                        _rcap3.metric("Kd (two-phase)",
+                                      f"{_psv_res['Kd']:.3f}")
+                        _rcap4.metric("Kc", f"{_psv_res['Kc']:.3f}")
                 elif _psv_service == "Liquid" and "capacity_selected_m3h" in _psv_res:
                     _rcap1, _rcap2, _rcap3, _rcap4 = st.columns(4)
-                    _rcap1.metric("Rated capacity", f"{_psv_res['capacity_selected_m3h']:.2f} m³/h")
-                    _rcap2.metric("Required flow",  f"{_psv_Q_m3h:.2f} m³/h")
+                    _rcap1.metric("Rated capacity",
+                                  f"{_psv_res['capacity_selected_m3h']:.2f} m³/h")
+                    _rcap2.metric("Required flow",
+                                  f"{(_psv_Q_m3h or 0):.2f} m³/h")
                     _rcap3.metric("Kv (viscosity)", f"{_psv_res['Kv']:.4f}")
                     _rcap4.metric("Re_v",           f"{_psv_res['Re_v']:.0f}")
 
                 # Correction factors table
                 st.markdown("**Correction factors applied**")
-                _kfactors = {
-                    "Factor": ["Kd (discharge)", "Kb (back pressure)", "Kc (comb. disc)"],
-                    "Value":  [
-                        f"{_psv_res['Kd']:.3f}",
-                        f"{_psv_res.get('Kb', _psv_res.get('Kw', 1.0)):.3f}",
-                        f"{_psv_res['Kc']:.3f}",
-                    ],
-                    "Source": [
-                        "API 520 Table 5",
-                        "API 520 §3.3 / PSV type",
-                        "API 520 §4.7",
-                    ],
+                _kfactors: dict = {
+                    "Factor": ["Kd (discharge)", "Kc (comb. disc)"],
+                    "Value":  [f"{_psv_res['Kd']:.3f}", f"{_psv_res['Kc']:.3f}"],
+                    "Source": ["API 520 Table 5", "API 520 §4.7"],
                 }
-                if _psv_service == "Liquid":
-                    _kfactors["Factor"].append("Kw (back pressure)")
-                    _kfactors["Value"].append(f"{_psv_res['Kw']:.3f}")
-                    _kfactors["Source"].append("API 520 §3.5")
-                st.dataframe(pd.DataFrame(_kfactors), width='stretch', hide_index=True)
+                if _psv_service in ("Gas / Vapour", "Steam"):
+                    _kfactors["Factor"].insert(1, "Kb (back pressure)")
+                    _kfactors["Value"].insert(1, f"{_psv_res.get('Kb', 1.0):.3f}")
+                    _kfactors["Source"].insert(1, "API 520 §3.3 / PSV type")
+                    if _psv_res.get("F2") is not None:
+                        _kfactors["Factor"].append("F₂ (subcritical nozzle)")
+                        _kfactors["Value"].append(f"{_psv_res['F2']:.5f}")
+                        _kfactors["Source"].append("API 520 §3.4")
+                elif _psv_service == "Liquid":
+                    _kfactors["Factor"].insert(1, "Kw (back pressure)")
+                    _kfactors["Value"].insert(1, f"{_psv_res.get('Kw', _psv_Kw):.3f}")
+                    _kfactors["Source"].insert(1, "API 520 Fig. 14")
+                    _kfactors["Factor"].append("Kv (viscosity)")
+                    _kfactors["Value"].append(f"{_psv_res.get('Kv', 1.0):.4f}")
+                    _kfactors["Source"].append("API 520 Fig. 13")
+                st.dataframe(pd.DataFrame(_kfactors), width="stretch", hide_index=True)
 
-                # Standard orifice table with flange sizes
+                # Standard orifice table
                 st.markdown("**API 526 standard orifice and flange sizes**")
                 _orifice_rows = []
                 for _letter, _area in psv.API526_ORIFICES.items():
                     _fn = psv.flange_nps(_letter)
-                    _in_str  = f"NPS {_fn[0]:g}\" (DN {psv.nps_to_dn(_fn[0])})" if _fn else "—"
-                    _out_str = f"NPS {_fn[1]:g}\" (DN {psv.nps_to_dn(_fn[1])})" if _fn else "—"
+                    _in_str  = (f"NPS {_fn[0]:g}\" (DN {psv.nps_to_dn(_fn[0])})"
+                                if _fn else "—")
+                    _out_str = (f"NPS {_fn[1]:g}\" (DN {psv.nps_to_dn(_fn[1])})"
+                                if _fn else "—")
                     _orifice_rows.append({
                         "Letter": _letter,
                         "Eff. area (mm²)": f"{_area:.1f}",
@@ -6021,49 +6231,139 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                         "Outlet flange": _out_str,
                         "": "✓" if _letter == _psv_res["orifice_letter"] else "",
                     })
-                st.dataframe(pd.DataFrame(_orifice_rows), width='stretch', hide_index=True)
+                st.dataframe(pd.DataFrame(_orifice_rows), width="stretch", hide_index=True)
+
+                # ── API 520 Part II — inlet piping ΔP check ─────────────────────
+                with st.expander("API 520 Part II — Inlet Piping ΔP Check"):
+                    st.markdown(
+                        "Checks that the inlet pipe pressure drop at **rated PSV capacity** "
+                        "does not exceed **3% of set pressure** (API 520 Part II §5.1)."
+                    )
+                    _dn_opts = list(engine.PIPE_DATABASE.keys())
+                    _pn_opts = ["PN10", "PN16", "PN20", "PN25", "PN40"]
+                    _p2c1, _p2c2, _p2c3 = st.columns(3)
+                    _p2_dn = _p2c1.selectbox("Inlet pipe DN", _dn_opts,
+                                              index=min(3, len(_dn_opts) - 1),
+                                              key="psv_p2_dn")
+                    _p2_pn = _p2c2.selectbox("Pressure rating", _pn_opts,
+                                              index=2, key="psv_p2_pn")
+                    _p2_L  = _p2c3.number_input("Pipe length (m)", value=3.0,
+                                                  min_value=0.1, step=0.5,
+                                                  key="psv_p2_L")
+                    _p2_Le = st.number_input(
+                        "Fittings equivalent length (m)",
+                        value=1.0, min_value=0.0, step=0.5, key="psv_p2_Le",
+                        help=(
+                            "Add the equivalent pipe length for elbows, tees, reducers "
+                            "using L/D × pipe ID from GPSA or vendor data."
+                        ),
+                    )
+                    _p2_D     = engine.PIPE_DATABASE.get(_p2_dn, {}).get(_p2_pn, 0.05)
+                    _p2_A     = math.pi * _p2_D ** 2 / 4.0
+                    _p2_rough = engine.MATERIAL_ROUGHNESS.get("CS", 0.046e-3)
+                    _p2_Wcap  = _psv_res.get("capacity_selected_kgh", 0)
+
+                    if _psv_service in ("Gas / Vapour", "Steam") and \
+                            _psv_MW and _p2_Wcap > 0 and _p2_A > 0:
+                        _rho_p2 = (_psv_P1_kPa * 1000.0 * (_psv_MW or 28.97)
+                                   / (8314.46 * (_psv_Z or 1.0) * _psv_T1_K))
+                        _V_p2   = (_p2_Wcap / 3600.0) / (_rho_p2 * _p2_A)
+                        _Re_p2  = _rho_p2 * _V_p2 * _p2_D / 1.5e-5
+                        _f_p2   = churchill_f(_Re_p2, _p2_rough / _p2_D)
+                        _dP_p2  = (
+                            _f_p2 * (_p2_L + _p2_Le) / _p2_D
+                            * _rho_p2 * _V_p2 ** 2 / 2.0
+                        )
+                        _pct_p2 = _dP_p2 / (_psv_Pset_barg * 1e5) * 100.0
+                        _p2a, _p2b, _p2c = st.columns(3)
+                        _p2a.metric(
+                            "Inlet ΔP",
+                            f"{_dP_p2/1e3:.2f} kPa = {_pct_p2:.2f}%",
+                            help=f"Rated cap {_p2_Wcap:.0f} kg/h, "
+                                 f"V = {_V_p2:.1f} m/s, ρ = {_rho_p2:.2f} kg/m³",
+                        )
+                        _p2b.metric("Limit (3% of Pset)",
+                                    f"{_psv_Pset_barg * 1e5 * 0.03 / 1e3:.2f} kPa")
+                        if _pct_p2 <= 3.0:
+                            _p2c.success(f"PASS ({_pct_p2:.2f}% ≤ 3%)")
+                        else:
+                            _p2c.error(
+                                f"FAIL ({_pct_p2:.2f}% > 3%) — increase pipe bore"
+                            )
+                    elif _psv_service == "Liquid" and _p2_Wcap > 0 and _p2_A > 0:
+                        _cap_m3s = _psv_res.get("capacity_selected_m3h", 0) / 3600.0
+                        _V_p2    = _cap_m3s / _p2_A
+                        _Re_p2   = _psv_rho * _V_p2 * _p2_D / (_psv_mu_cP * 1e-3)
+                        _f_p2    = churchill_f(_Re_p2, _p2_rough / _p2_D)
+                        _dP_p2   = (
+                            _f_p2 * (_p2_L + _p2_Le) / _p2_D
+                            * _psv_rho * _V_p2 ** 2 / 2.0
+                        )
+                        _pct_p2  = _dP_p2 / (_psv_Pset_barg * 1e5) * 100.0
+                        _p2a, _p2b, _p2c = st.columns(3)
+                        _p2a.metric(
+                            "Inlet ΔP",
+                            f"{_dP_p2/1e3:.2f} kPa = {_pct_p2:.2f}%",
+                            help=f"V = {_V_p2:.2f} m/s, ρ = {_psv_rho:.1f} kg/m³",
+                        )
+                        _p2b.metric("Limit (3% of Pset)",
+                                    f"{_psv_Pset_barg * 1e5 * 0.03 / 1e3:.2f} kPa")
+                        if _pct_p2 <= 3.0:
+                            _p2c.success(f"PASS ({_pct_p2:.2f}% ≤ 3%)")
+                        else:
+                            _p2c.error(
+                                f"FAIL ({_pct_p2:.2f}% > 3%) — increase pipe bore"
+                            )
+                    else:
+                        st.caption(
+                            "ΔP check available for Gas / Steam / Liquid after sizing "
+                            "is complete. Two-phase inlet piping requires manual verification."
+                        )
 
                 with st.expander("Assumptions and references"):
+                    _c_disp = psv.c_gas(_psv_gamma if _psv_gamma else 1.4)
                     st.markdown(f"""
-    **API 520 Part I** (SI, 10th Ed.) — PSV sizing for gas/vapour, steam, and liquid service.
+**API 520 Part I** (SI, 10th Ed.) — PSV sizing.
+**API 521** (7th Ed.) — relief loads (fire, loss of cooling, blocked discharge, thermal expansion).
+**API 526** (7th Ed.) — standard effective orifice areas (D through T).
 
-    **API 526** (7th Ed.) — standard effective orifice areas (D through T). Effective area is
-    derated from the curtain area; actual installed orifice will be larger.
+**Gas / vapour — critical flow** (API 520 Eq. 3):
+A = W / (C · Kd · P₁ · Kb · Kc) · √(T·Z/M),  C = **{_c_disp:.5f}** for selected gas.
 
-    **Gas / vapour formula** — API 520 Eq. (3):
-    A = W / (C · Kd · P₁ · Kb · Kc) · √(T·Z/M)
-    with C = 0.03948·√(γ·(2/(γ+1))^((γ+1)/(γ−1))) = **{psv.c_gas(_psv_gamma if _psv_gamma else 1.4):.5f}** for the selected gas.
+**Gas / vapour — subcritical flow** (API 520 §3.4):
+G = P₁ · √(2γ·M / ((γ−1)·Z·Ru·T) · (r^(2/γ) − r^((γ+1)/γ))),  r = P_back/P₁.
 
-    **Liquid formula** — derived from Bernoulli (API 520 Eq. (12)):
-    A = (Q/3600) / (Kd · Kw · Kc · Kv · √(2·ρ·ΔP))
+**Liquid** (API 520 Eq. 12):
+A = (Q/3600) / (Kd · Kw · Kc · Kv · √(2·ρ·ΔP)).
+Kv via API 520 Fig. 13; Kw auto-computed via API 520 Fig. 14 curve-fit.
 
-    **Viscosity correction Kv** — API 520 Figure 13:
-    Kv = 1/(0.9935 + 2.878/R^0.5 + 342.75/R^1.5), R = 17 900·W/(μ·√A).
-    Kv ≈ 1.0 for R ≥ 10 000 (typical light-to-medium liquids).
+**Two-phase Omega method** (API 520 Appendix D, Leung 1986):
+ω_s = C_pf·T₀·P₀·v_f / h_fg²;  G_c = η_c · √(P₀/v₀) / √ω.
 
-    **Backpressure Kb (conventional)** — Kb = 1.0 (nozzle remains choked).
-    Limit: back pressure ≤ 10% of set pressure before contacting vendor.
+**Fire case** (API 521 §5.15.1.1):  Q = 43 200 · F · A_wet^0.82 [W].
+F = 1.0 uninsulated; 0.5 drainage + spray; 0.3 on-site firefighting.
 
-    **Backpressure Kb (balanced bellows)** — API 520 Figure 31 conservative curve-fit.
-    Kb = 1.0 when back pressure ≤ critical ratio; linear decay above.
+**Inlet ΔP limit** (API 520 Part II §5.1):  ΔP ≤ 3% of set pressure at rated PSV capacity.
+""")
 
-    **Overpressure allowance** — 10% for non-fire; 21% for fire case (API 520 §3.1 / ASME Sec VIII-1).
-    """)
-
-                # ── Word export ───────────────────────────────────────────────────────
+                # ── Word export ───────────────────────────────────────────────────
                 st.divider()
-                _psv_flow_str = (f"{_psv_W_kgh:.1f} kg/h" if _psv_service != "Liquid"
-                                 else f"{_psv_Q_m3h:.3f} m³/h")
+                _psv_flow_str = (
+                    f"{_psv_W_kgh:.1f} kg/h"
+                    if _psv_service != "Liquid" and _psv_W_kgh
+                    else (f"{_psv_Q_m3h:.3f} m³/h" if _psv_Q_m3h else "—")
+                )
                 _psv_inp = [
-                    ("Service",              _psv_service),
-                    ("PSV type",             _psv_type),
-                    ("Set pressure",         f"{_psv_Pset_barg:.2f} barg"),
+                    ("Service",               _psv_service),
+                    ("PSV type",              _psv_type),
+                    ("Set pressure",          f"{_psv_Pset_barg:.2f} barg"),
                     ("Allowable overpressure", f"{_psv_op_pct:.1f} %"),
                     ("Relieving pressure P₁", f"{_psv_P1_bara:.3f} bara"),
-                    ("Back pressure",        f"{_psv_Pback_barg:.2f} barg"),
+                    ("Back pressure",         f"{_psv_Pback_barg:.2f} barg"),
                     ("Relieving temperature", f"{_psv_T_C:.1f} °C"),
-                    ("Relief flow",          _psv_flow_str),
-                    ("Rupture disc upstream", "Yes (Kc = 0.90)" if _psv_rupture_disc else "No (Kc = 1.00)"),
+                    ("Relief flow",           _psv_flow_str),
+                    ("Rupture disc upstream",
+                     "Yes (Kc = 0.90)" if _psv_rupture_disc else "No (Kc = 1.00)"),
                 ]
                 if _psv_service == "Gas / Vapour":
                     _psv_inp += [
@@ -6072,38 +6372,68 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                         ("γ (Cp/Cv)", f"{_psv_gamma:.4f}"),
                         ("Z",         f"{_psv_Z:.4f}"),
                     ]
+                    if _psv_res.get("subcritical"):
+                        _psv_inp.append(("Flow regime", "Subcritical (API 520 §3.4)"))
+                        if _psv_res.get("F2") is not None:
+                            _psv_inp.append(("F₂", f"{_psv_res['F2']:.5f}"))
                 elif _psv_service == "Liquid":
                     _psv_inp += [
                         ("Density ρ",   f"{_psv_rho:.2f} kg/m³"),
                         ("Viscosity μ", f"{_psv_mu_cP:.4f} cP"),
+                        ("Kw",          f"{_psv_Kw:.3f}"),
                     ]
+                elif _psv_service == "Two-phase / Flashing":
+                    _psv_inp += [
+                        ("Fluid",    _tp_pick),
+                        ("Inlet x₀", f"{_tp_x0:.3f}"),
+                        ("Omega ω",  f"{_psv_res['omega']:.5f}"),
+                        ("η_c",      f"{_psv_res['eta_c']:.5f}"),
+                    ]
+
                 _psv_flange = psv.flange_nps(_psv_res["orifice_letter"])
                 _psv_flange_str = (
                     f"NPS {_psv_flange[0]:g}\" × NPS {_psv_flange[1]:g}\""
                     if _psv_flange else "—"
                 )
                 _psv_res_rows = [
-                    ("Required area A_req",    f"{_psv_res['A_req_mm2']:.2f} mm²"),
+                    ("Required area A_req",     f"{_psv_res['A_req_mm2']:.2f} mm²"),
                     ("API 526 orifice letter",  _psv_res["orifice_letter"]),
-                    ("Orifice effective area",  f"{_psv_res['orifice_area_mm2']:.1f} mm²"
-                                                if _psv_res["orifice_area_mm2"] < math.inf else "Exceeds T"),
-                    ("Area margin",            f"+{_area_margin:.1f} %"),
+                    ("Orifice effective area",
+                     f"{_psv_res['orifice_area_mm2']:.1f} mm²"
+                     if _psv_res["orifice_area_mm2"] < math.inf else "Exceeds T"),
+                    ("Area margin",             f"+{_area_margin:.1f} %"),
                     ("Flange (inlet × outlet)", _psv_flange_str),
-                    ("Min. flange class (inlet)", f"ASME {psv.min_flange_class(_psv_P1_bara)} lb"),
-                    ("Kd (discharge)",         f"{_psv_res['Kd']:.3f}"),
-                    ("Kb / Kw (back pressure)", f"{_psv_res.get('Kb', _psv_res.get('Kw', 1.0)):.3f}"),
-                    ("Kc (rupture disc)",       f"{_psv_res['Kc']:.3f}"),
+                    ("Min. flange class",
+                     f"ASME {psv.min_flange_class(_psv_P1_bara)} lb"),
+                    ("Kd (discharge)",          f"{_psv_res['Kd']:.3f}"),
+                    ("Kc (rupture disc)",        f"{_psv_res['Kc']:.3f}"),
                 ]
-                if _psv_service != "Liquid" and "capacity_selected_kgh" in _psv_res:
+                if _psv_service in ("Gas / Vapour", "Steam"):
                     _psv_res_rows += [
-                        ("Rated capacity (selected orifice)", f"{_psv_res['capacity_selected_kgh']:.0f} kg/h"),
-                        ("C coefficient",                     f"{_psv_res['C_coeff']:.5f}"),
+                        ("Kb (back pressure)", f"{_psv_res.get('Kb', 1.0):.3f}"),
+                        ("Rated capacity",
+                         f"{_psv_res.get('capacity_selected_kgh', 0):.0f} kg/h"),
                     ]
-                elif _psv_service == "Liquid" and "capacity_selected_m3h" in _psv_res:
+                    if _psv_res.get("subcritical"):
+                        _psv_res_rows.append(
+                            ("F₂ (subcritical)", f"{_psv_res.get('F2', ''):.5f}")
+                        )
+                elif _psv_service == "Liquid":
                     _psv_res_rows += [
-                        ("Rated capacity (selected orifice)", f"{_psv_res['capacity_selected_m3h']:.3f} m³/h"),
-                        ("Kv (viscosity correction)",         f"{_psv_res['Kv']:.5f}"),
+                        ("Kw (back pressure)", f"{_psv_res.get('Kw', 1.0):.3f}"),
+                        ("Kv (viscosity)",     f"{_psv_res.get('Kv', 1.0):.5f}"),
+                        ("Rated capacity",
+                         f"{_psv_res.get('capacity_selected_m3h', 0):.3f} m³/h"),
                     ]
+                elif _psv_service == "Two-phase / Flashing":
+                    _psv_res_rows += [
+                        ("Omega ω",       f"{_psv_res['omega']:.5f}"),
+                        ("η_c",           f"{_psv_res['eta_c']:.5f}"),
+                        ("G_c",           f"{_psv_res['G_c_kgm2s']:.2f} kg/(m²·s)"),
+                        ("Rated capacity",
+                         f"{_psv_res.get('capacity_selected_kgh', 0):.0f} kg/h"),
+                    ]
+
                 _psv_orifice_data = []
                 for _let, _ar in psv.API526_ORIFICES.items():
                     _fn = psv.flange_nps(_let)
@@ -6114,23 +6444,48 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                         f"NPS {_fn[1]:g}\"" if _fn else "—",
                         "✓" if _let == _psv_res["orifice_letter"] else "",
                     ])
+
+                _meth_lines = [
+                    "API 520 Part I (SI, 10th Ed.) orifice area sizing. "
+                    "The required effective orifice area is calculated from the specified relief "
+                    "flow, relieving conditions, and correction factors (Kd, Kb/Kw, Kc). "
+                    "The smallest API 526 standard orifice meeting or exceeding the required "
+                    "area is selected.",
+                ]
+                if _psv_service in ("Gas / Vapour", "Steam"):
+                    _meth_lines.append(
+                        "Subcritical (P_back > r_c·P₁): area via F₂ isentropic nozzle "
+                        "(API 520 §3.4). Critical: A = W/(C·Kd·P₁·Kb·Kc)·√(T·Z/M)."
+                        if _psv_res.get("subcritical") else
+                        "Critical (choked) flow: A = W/(C·Kd·P₁·Kb·Kc)·√(T·Z/M)."
+                    )
+                elif _psv_service == "Liquid":
+                    _meth_lines.append(
+                        "Liquid: A = (Q/3600)/(Kd·Kw·Kc·Kv·√(2·ρ·ΔP)). "
+                        "Kv via API 520 Fig. 13; Kw via Fig. 14 curve-fit."
+                    )
+                elif _psv_service == "Two-phase / Flashing":
+                    _meth_lines.append(
+                        "Omega method (Leung 1986, API 520 App. D): "
+                        "ω_s = C_pf·T₀·P₀·v_f/h_fg²; η_c solved numerically; "
+                        "G_c = η_c·√(P₀/v₀)/√ω."
+                    )
+
                 _psv_rpt = report_generator.generate_calculator_report(
                     tool_name="Pressure Safety Valve",
-                    subtitle=f"{_psv_service}  ·  {_psv_type}  ·  {_psv_res['orifice_letter']} orifice",
-                    method_text=[
-                        "API 520 Part I (SI, 10th Ed.) orifice area sizing. "
-                        "The required effective orifice area is calculated from the specified relief "
-                        "flow, relieving conditions, and correction factors (Kd, Kb, Kc). "
-                        "The smallest API 526 standard orifice that meets or exceeds the required area "
-                        "is selected. The standard effective orifice areas are from API 526 Table 2.",
-                        f"Gas/steam: A = W/(C·Kd·P₁·Kb·Kc) · √(T·Z/M).  "
-                        f"Liquid: A = (Q/3600)/(Kd·Kw·Kc·Kv·√(2·ρ·ΔP)).",
-                    ],
+                    subtitle=(
+                        f"{_psv_service}  ·  {_psv_type}  ·  "
+                        f"{_psv_res['orifice_letter']} orifice"
+                    ),
+                    method_text=_meth_lines,
                     inputs_rows=_psv_inp,
                     results_rows=_psv_res_rows,
                     extra_tables=[{
                         "title": "API 526 Standard Orifice Table",
-                        "headers": ["Letter", "Eff. area (mm²)", "Inlet flange", "Outlet flange", "Selected"],
+                        "headers": [
+                            "Letter", "Eff. area (mm²)",
+                            "Inlet flange", "Outlet flange", "Selected",
+                        ],
                         "data": _psv_orifice_data,
                         "col_widths": [0.55, 1.0, 1.3, 1.3, 0.65],
                     }],
@@ -6138,8 +6493,14 @@ else:  # Engineering Tools (also contains Network Solver tab for discoverability
                 st.download_button(
                     "Export Word (.docx)",
                     _psv_rpt,
-                    file_name=f"psv_{_psv_service.replace(' / ','_').lower()}_{_psv_res['orifice_letter']}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    file_name=(
+                        f"psv_{_psv_service.replace(' / ', '_').lower()}_"
+                        f"{_psv_res['orifice_letter']}.docx"
+                    ),
+                    mime=(
+                        "application/vnd.openxmlformats-officedocument"
+                        ".wordprocessingml.document"
+                    ),
                     key="psv_dl",
                 )
 

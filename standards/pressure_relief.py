@@ -32,6 +32,8 @@ KD_LIQUID = 0.65    # liquid
 KC_DISC = 0.9
 KC_NONE = 1.0
 
+KD_TWOPHASE = 0.85  # API 520 Table 5, footnote b — two-phase homogeneous nozzle
+
 # ── API 526 standard inlet × outlet flange sizes (NPS, inches) ──────────────
 # Source: API 526, 7th Ed., Table 1.
 API526_FLANGE_NPS: dict[str, tuple[float, float]] = {
