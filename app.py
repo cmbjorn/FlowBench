@@ -4954,8 +4954,9 @@ elif _group != "Engineering Tools":
 
 
 else:  # Engineering Tools (also contains Network Solver tab for discoverability)
-    tab_fanno, tab_ro, tab_psv, tab_cv, tab_dg, tab_pump, tab_ls, tab_harp = st.tabs(
-        ["Fanno Flow", "RO", "PSV", "Control Valve", "Dissolved Gas Flash", "Pump", "Line Size", "Network Solver"]
+    tab_fanno, tab_ro, tab_psv, tab_o2, tab_cv, tab_dg, tab_pump, tab_ls, tab_harp = st.tabs(
+        ["Fanno Flow", "RO", "PSV", "O₂ Service", "Control Valve", "Dissolved Gas Flash",
+         "Pump", "Line Size", "Network Solver"]
     )
     import dissolution_engine as dg
 
@@ -6503,6 +6504,136 @@ F = 1.0 uninsulated; 0.5 drainage + spray; 0.3 on-site firefighting.
                     ),
                     key="psv_dl",
                 )
+
+    # =========================================================================
+    # Tab: O₂ Service — EIGA Doc 13/20
+    # =========================================================================
+    with tab_o2:
+        import oxygen_engine as ox
+        import pandas as _o2pd
+
+        st.markdown(
+            "Gaseous-oxygen velocity limits and ignition / AIV screening per "
+            "**EIGA Doc 13/20** (*Oxygen Pipeline and Piping Systems*) — sized for "
+            "vent lines and PSV tail-pipes."
+        )
+        _o2c1, _o2c2 = st.columns([1, 2], gap="large")
+
+        with _o2c1:
+            st.markdown("**SERVICE**")
+            _o2_svc = st.selectbox("Service", list(ox.OXYGEN_SERVICES), key="o2_svc")
+            st.caption(ox.OXYGEN_SERVICES[_o2_svc].note)
+
+            st.markdown("**FLOW & CONDITIONS**")
+            _o2_W = st.number_input("O₂ mass flow (kg/h)", value=2000.0,
+                                    min_value=0.1, step=100.0, key="o2_W")
+            _o2_dil = st.number_input(
+                "Diluent N₂ (kg/h)", value=0.0, min_value=0.0, step=10.0, key="o2_dil",
+                help="Add an inert to model reduced-purity O₂ — below 35 vol% O₂ the "
+                     "line is velocity-exempt (§4.3.2.2).")
+            _o2_P = st.number_input(
+                "Line pressure (bara)", value=2.0, min_value=0.1, step=0.5, key="o2_P",
+                help="The pipe (tail-pipe / vent) pressure — near atmospheric for a "
+                     "vent to atmosphere.")
+            _o2_T = st.number_input("Temperature (°C)", value=25.0, step=5.0, key="o2_T")
+            _o2_src = st.number_input(
+                "Source / set pressure (bara)", value=11.0, min_value=0.1, step=0.5,
+                key="o2_src",
+                help="Pressure upstream of the vent / relief valve — the noise let-down "
+                     "P₁ and the back-pressure reference. For a PSV tail-pipe enter the "
+                     "relief SET pressure.")
+            _o2_dp = st.number_input(
+                "Tail-pipe ΔP estimate (bar)", value=0.0, min_value=0.0, step=0.05,
+                key="o2_dp", help="Built-up back-pressure for the back-pressure check "
+                                  "(leave 0 to skip).")
+
+            st.markdown("**PIPE**")
+            _o2_mat = st.selectbox(
+                "Material", ox.MATERIAL_CHOICES, index=1, key="o2_mat",
+                help="Exempt alloys (Monel / Cu / Ni) are burn-resistant and lift the "
+                     "velocity limit below their exemption pressure (App. B).")
+            _o2_id = st.number_input("Pipe ID (mm)", value=50.0, min_value=1.0,
+                                     step=1.0, key="o2_id")
+            _o2_wall = st.number_input(
+                "Wall thickness (mm)", value=3.2, min_value=0.1, step=0.1, key="o2_wall",
+                help="Stainless needs ≥ 3.18 mm to keep its exemption (App. B).")
+            _o2_imp = st.checkbox(
+                "Impingement site (bend / tee / valve / ≤ 8 D after letdown)",
+                value=ox.OXYGEN_SERVICES[_o2_svc].impingement, key="o2_imp",
+                help="Vent piping uses the impingement curve (Fig 2, §5.2.3.4). Untick "
+                     "for a verified non-impingement straight run (§5.2.2).")
+
+        with _o2c2:
+            _o2_gas = {"O₂": _o2_W}
+            if _o2_dil > 0:
+                _o2_gas["N₂"] = _o2_dil
+            try:
+                _o2_props = engine.calculate_two_phase_properties(
+                    _o2_P, _o2_T, _o2_gas, "Water", 0.0, use_coolprop=True)
+            except Exception as _o2_err:
+                st.error(f"Property evaluation failed: {_o2_err}")
+                _o2_props = None
+
+            if _o2_props:
+                _o2_vloc = ox.insitu_velocity(_o2_props, _o2_id / 1000.0)
+                _o2a = ox.assess_oxygen_service(
+                    _o2_svc, _o2_props, _o2_vloc, P_bar_abs=_o2_P, T_C=_o2_T,
+                    material=_o2_mat, wall_mm=_o2_wall, ref_pressure_bar=_o2_src,
+                    id_mm=_o2_id, dp_total_bar=_o2_dp, impingement=_o2_imp)
+                _o2ve = _o2a.velocity
+
+                # ── overall roll-up ───────────────────────────────────────────
+                _o2_vsev = "ok" if (_o2ve.exempt or _o2ve.ok) else "alarm"
+                _o2_sevs = [_o2_vsev] + [c.severity for c in _o2a.checks]
+                _o2_nhi, _o2_nma = _o2_sevs.count("alarm"), _o2_sevs.count("warn")
+                if _o2_nhi:
+                    st.error(f"🛑 Screening: {_o2_nhi} high-risk, {_o2_nma} marginal — "
+                             f"action required")
+                elif _o2_nma:
+                    st.warning(f"⚠️ Screening: {_o2_nma} marginal — review before use")
+                else:
+                    st.success("✅ Screening: all checks acceptable")
+
+                # ── velocity verdict ──────────────────────────────────────────
+                if _o2ve.exempt:
+                    st.markdown(f"**Velocity** ✅ Not velocity-limited at "
+                                f"{_o2ve.v_actual:.1f} m/s")
+                elif _o2ve.ok:
+                    st.markdown(f"**Velocity** ✅ {_o2ve.v_actual:.1f} ≤ "
+                                f"{_o2ve.v_limit:.1f} m/s (×{_o2ve.margin:.2f} margin)")
+                elif _o2a.service.relief:
+                    st.markdown(f"**Velocity** ❌ {_o2ve.v_actual:.1f} > "
+                                f"{_o2ve.v_limit:.1f} m/s — tail-pipe needs exempt material "
+                                f"or a thicker wall at the rated relief flow (not a flow "
+                                f"to reduce — see notes)")
+                else:
+                    st.markdown(f"**Velocity** ❌ {_o2ve.v_actual:.1f} > "
+                                f"{_o2ve.v_limit:.1f} m/s — reduce velocity, thicken wall, "
+                                f"or use exempt material")
+                st.caption(_o2ve.basis)
+                for _o2_n in _o2ve.notes:
+                    st.caption("• " + _o2_n)
+
+                # ── compact check table + readable actions ────────────────────
+                _O2ICON = {"ok": "✅", "warn": "⚠️", "alarm": "🛑", "info": "ℹ️"}
+                _O2VRD = {"ok": "Acceptable", "warn": "Marginal — review",
+                          "alarm": "High — mitigate", "info": "—"}
+                _o2df = _o2pd.DataFrame([
+                    {"": _O2ICON.get(c.severity, ""), "Check": c.name,
+                     "Value": c.value, "Status": _O2VRD.get(c.severity, "—")}
+                    for c in _o2a.checks])
+                st.dataframe(_o2df, hide_index=True, use_container_width=True)
+
+                _o2_act = [c for c in _o2a.checks if c.severity in ("warn", "alarm")]
+                if _o2_act:
+                    st.markdown("**To address**")
+                    for c in _o2_act:
+                        st.markdown(f"- {_O2ICON[c.severity]} **{c.name}** "
+                                    f"({c.value}) — {c.note}")
+
+                st.caption("Velocity curves address particle-impact ignition only (§4.4.2); "
+                           "the checklist covers the other design factors. Not a substitute "
+                           "for a full oxygen hazard analysis (§4.2.3).")
 
     # =========================================================================
     # Tab: Control Valve — IEC 60534-2-1

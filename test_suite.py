@@ -521,6 +521,62 @@ def test_header_goal_seek():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 8. Oxygen service — EIGA Doc 13/20
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_oxygen_eiga():
+    print("\n── 8. Oxygen service (EIGA Doc 13/20) ──────────────────────────────")
+    import oxygen_engine as ox
+
+    def _ok(name, cond, detail=""):
+        _check(name + (f"  [{detail}]" if detail else ""), float(bool(cond)), 1.0,
+               tol_abs=1e-9)
+
+    # Velocity curves vs Figures 2 & 3 anchor points (P in MPa abs).
+    _ok("impingement 30 m/s @ 1 MPa", ox.impingement_velocity_limit(1.0) == 30.0)
+    _ok("impingement P·V=45 @ 5 MPa", abs(ox.impingement_velocity_limit(5.0) - 9.0) < 1e-9)
+    _ok("impingement 4.5 m/s @ 20 MPa", ox.impingement_velocity_limit(20.0) == 4.5)
+    _ok("non-impingement 60 m/s @ 1 MPa", ox.nonimpingement_velocity_limit(1.0) == 60.0)
+    _ok("non-impingement P·V=80 @ 5 MPa", abs(ox.nonimpingement_velocity_limit(5.0) - 16.0) < 1e-9)
+    # Exemption table (Appendix B) — incl. exempt-alloy labels.
+    _ok("SS exempt 1.38 MPa @ 3.18 mm", ox._exemption("Stainless 316/304", 3.18) == (1.38, "ok"))
+    _ok("SS thin wall loses exemption", ox._exemption("Stainless 316/304", 2.0) == (None, "thin"))
+    _ok("Carbon steel non-exempt", ox._exemption("Carbon steel", 5.0) == (None, "none"))
+    _ok("Monel 400 exempt to 20.68 MPa", ox._exemption("Monel 400", 1.0) == (20.68, "ok"))
+    # Noise: Carucci & Mueller sound power level.
+    _ok("big PSV letdown PWL ~172 dB", 170 < ox.carucci_mueller_pwl(10.0, 20.0, 1.0, 25.0, 32.0) < 174)
+    _ok("small vent PWL < 155 dB", ox.carucci_mueller_pwl(0.5, 1.2, 1.013, 25.0, 32.0) < 155)
+    # Choked exit velocity (Tier 1): sonic, never supersonic.
+    _ok("critical pressure ratio ≈ 0.528", abs(ox.critical_pressure_ratio() - 0.5283) < 1e-3)
+    ve, mach, choked, te = ox.vent_exit_velocity(10.0, 20.0, 25.0, 32.0, 0.10)
+    _ok("high-ratio vent chokes at Mach 1", choked and abs(mach - 1.0) < 1e-9)
+    _ok("choked exit ≈ 300 m/s sonic", 295 < ve < 305, f"{ve:.0f} m/s")
+
+    # End-to-end assessments via the FlowBench property engine.
+    p = engine.calculate_two_phase_properties(2.0, 25.0, {"O₂": 5000.0}, "Water", 0.0,
+                                              use_coolprop=True)
+    v = ox.insitu_velocity(p, 0.05)
+    # Thin-wall SS PSV tail-pipe → over curve, relief-framed (§4.4.1), choked.
+    a = ox.assess_oxygen_service("O₂ — PSV tail-pipe", p, v, P_bar_abs=2.0, T_C=25.0,
+            material="Stainless 316/304", wall_mm=2.0, ref_pressure_bar=11.0, id_mm=50.0)
+    _ok("thin-wall SS PSV over curve", a.velocity.ok is False)
+    _ok("PSV governing velocity is choked exit (~300)", a.velocity.v_actual > 250,
+        f"{a.velocity.v_actual:.0f} m/s")
+    _ok("PSV relief framed (§4.4.1)", any("§4.4.1" in n for n in a.velocity.notes))
+    # Switching to an exempt alloy resolves the line.
+    a2 = ox.assess_oxygen_service("O₂ — PSV tail-pipe", p, v, P_bar_abs=2.0, T_C=25.0,
+            material="Monel 400", wall_mm=2.0, ref_pressure_bar=11.0, id_mm=50.0)
+    _ok("Monel 400 lifts the velocity limit", a2.velocity.exempt)
+    # Reduced-purity O₂ (< 35 vol%) is exempt.
+    plp = engine.calculate_two_phase_properties(5.0, 25.0, {"O₂": 300.0, "N₂": 700.0},
+                                                "Water", 0.0, use_coolprop=True)
+    a3 = ox.assess_oxygen_service("O₂ — continuous vent", plp, 25.0, P_bar_abs=5.0,
+            T_C=25.0, material="Carbon steel", wall_mm=5.0, id_mm=50.0)
+    _ok("reduced-purity O₂ (<35 vol%) exempt", a3.velocity.exempt,
+        f"{ox.o2_vol_fraction(plp)*100:.0f} vol%")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -532,6 +588,7 @@ if __name__ == "__main__":
     test_sensitivity()
     test_header_goal_seek()
     test_report_generator()
+    test_oxygen_eiga()
 
     total = _results["pass"] + _results["fail"] + _results["warn"]
     print(f"\n{'─'*60}")
