@@ -1295,6 +1295,17 @@ def calculate_segment_pressure_drop(
             dP_total    = dP_fric_Pa + dP_grav_Pa
             dP_accel_Pa = 0.0  # negligible for subsonic adiabatic flow
 
+        # Far-out-of-range inputs (e.g. Mach ≫ 1 gas at sub-kPa pressure) can make
+        # the third-party two-phase correlations (here the Friedel fallback) return
+        # a complex or non-finite ΔP. Coerce to a real, finite, non-negative value
+        # so the pressure march and reports stay numeric — the segment is already
+        # flagged out_of_range, so this magnitude is indicative only.
+        if isinstance(dP_fric_Pa, complex):
+            dP_fric_Pa = abs(dP_fric_Pa)
+        if not math.isfinite(dP_fric_Pa):
+            dP_fric_Pa = 0.0
+        dP_total = dP_fric_Pa + dP_grav_Pa
+
         dP_per_dz = dP_total / L_eff if L_eff > 0 else 0.0
 
         # ── Flow regime — automatic method selection by orientation ──────────
