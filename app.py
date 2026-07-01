@@ -8047,17 +8047,66 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
             _ls_mat_opts = list(engine.MATERIAL_ROUGHNESS.keys())
             _ls_dn_opts  = list(engine.PIPE_DATABASE.keys())
 
+            _ls_custom = st.checkbox(
+                "Custom pipe — override OD / ID",
+                value=False, key="ls_custom",
+                help="Evaluate a single pipe using dimensions prefilled from the "
+                     "standard database for the chosen DN/PN. Edit the outer or "
+                     "inner diameter to override them. Hydraulics use the inner "
+                     "diameter; the outer diameter sets the wall thickness.",
+            )
+
             _lp1, _lp2 = st.columns(2)
-            _ls_pn  = _lp1.selectbox("PN rating", _ls_pn_opts, index=2, key="ls_pn")
             _ls_mat = _lp2.selectbox("Material", _ls_mat_opts, key="ls_mat")
 
-            _ls_dn_min = st.selectbox(
-                "Min DN", _ls_dn_opts, index=0, key="ls_dn_min",
-            )
-            _ls_dn_max = st.selectbox(
-                "Max DN", _ls_dn_opts,
-                index=len(_ls_dn_opts) - 1, key="ls_dn_max",
-            )
+            if _ls_custom:
+                _ls_pn = _lp1.selectbox("PN rating", _ls_pn_opts, index=2, key="ls_cust_pn")
+                _ls_ref_dn = st.selectbox(
+                    "Reference DN", _ls_dn_opts, key="ls_ref_dn",
+                    help="Prefills OD / ID from the standard database. "
+                         "Change either field below to override.",
+                )
+                # Database dimensions for the selected DN/PN.
+                _db_id_mm = engine.PIPE_DATABASE[_ls_ref_dn][_ls_pn] * 1000.0
+                _db_od_mm = engine.PIPE_OD[_ls_ref_dn] * 1000.0
+                # Reset the override fields whenever DN or PN changes so the
+                # database value is shown; the user may then edit it.
+                _ls_sig = (_ls_ref_dn, _ls_pn)
+                if st.session_state.get("_ls_cust_sig") != _ls_sig:
+                    st.session_state["_ls_cust_sig"] = _ls_sig
+                    st.session_state["ls_od_mm"] = round(_db_od_mm, 2)
+                    st.session_state["ls_id_mm"] = round(_db_id_mm, 2)
+
+                _co1, _co2 = st.columns(2)
+                _ls_od_mm = _co1.number_input(
+                    "Outer diameter (mm)", min_value=0.1,
+                    step=1.0, format="%.2f", key="ls_od_mm",
+                )
+                _ls_id_mm = _co2.number_input(
+                    "Inner diameter (mm)", min_value=0.1,
+                    step=1.0, format="%.2f", key="ls_id_mm",
+                )
+                _ls_overridden = (
+                    abs(_ls_od_mm - _db_od_mm) > 1e-6 or abs(_ls_id_mm - _db_id_mm) > 1e-6
+                )
+                if _ls_id_mm >= _ls_od_mm:
+                    st.warning("Inner diameter must be smaller than outer diameter.")
+                else:
+                    _wall = (_ls_od_mm - _ls_id_mm) / 2.0
+                    _tag = " · overridden" if _ls_overridden else " · from database"
+                    st.caption(
+                        f"Wall thickness = {_wall:.2f} mm  "
+                        f"(DB: OD {_db_od_mm:.2f} × ID {_db_id_mm:.2f} mm{_tag})"
+                    )
+            else:
+                _ls_pn = _lp1.selectbox("PN rating", _ls_pn_opts, index=2, key="ls_pn")
+                _ls_dn_min = st.selectbox(
+                    "Min DN", _ls_dn_opts, index=0, key="ls_dn_min",
+                )
+                _ls_dn_max = st.selectbox(
+                    "Max DN", _ls_dn_opts,
+                    index=len(_ls_dn_opts) - 1, key="ls_dn_max",
+                )
 
             st.divider()
 
@@ -8103,18 +8152,28 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
             else:
                 _ls_eps    = engine.MATERIAL_ROUGHNESS.get(_ls_mat, 1.5e-5)
                 _ls_Q_m3s  = _ls_Q_m3h / 3600.0
-                _ls_dn_i   = _ls_dn_opts.index(_ls_dn_min)
-                _ls_dn_j   = _ls_dn_opts.index(_ls_dn_max)
-                _ls_dns    = _ls_dn_opts[_ls_dn_i: _ls_dn_j + 1]
+
+                # Build the list of candidate pipes as (label, bore_m, od_mm) tuples.
+                # Custom mode → single user-defined pipe; otherwise sweep the DN range.
+                if _ls_custom:
+                    _ls_cust_lbl = f"{_ls_ref_dn}{' (override)' if _ls_overridden else ''}"
+                    _ls_candidates = (
+                        [(_ls_cust_lbl, _ls_id_mm / 1000.0, _ls_od_mm)]
+                        if _ls_id_mm < _ls_od_mm else []
+                    )
+                else:
+                    _ls_dn_i = _ls_dn_opts.index(_ls_dn_min)
+                    _ls_dn_j = _ls_dn_opts.index(_ls_dn_max)
+                    _ls_candidates = [
+                        (_dn, engine.PIPE_DATABASE[_dn][_ls_pn], None)
+                        for _dn in _ls_dn_opts[_ls_dn_i: _ls_dn_j + 1]
+                        if _ls_pn in engine.PIPE_DATABASE.get(_dn, {})
+                    ]
 
                 _ls_rows         = []
                 _ls_recommended  = None
 
-                for _dn in _ls_dns:
-                    _pndb = engine.PIPE_DATABASE.get(_dn, {})
-                    if _ls_pn not in _pndb:
-                        continue
-                    _D   = _pndb[_ls_pn]            # bore in metres
+                for _label, _D, _od_mm in _ls_candidates:
                     _A   = _ls_math.pi / 4.0 * _D ** 2
                     _v   = _ls_Q_m3s / _A
                     _Re  = _ls_rho * _v * _D / max(_ls_mu, 1e-12)
@@ -8130,10 +8189,10 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                     _ok    = _v_ok and _dp_ok
 
                     if _ok and _ls_recommended is None:
-                        _ls_recommended = _dn
+                        _ls_recommended = _label
 
-                    _ls_rows.append({
-                        "DN":               _dn,
+                    _row = {
+                        "DN":               _label,
                         "ID (mm)":          round(_D * 1000, 1),
                         "v (m/s)":          round(_v, 3),
                         "Re":               int(_Re),
@@ -8142,15 +8201,30 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                         "v ✓":              "✓" if _v_ok  else "✗",
                         "ΔP ✓":             "✓" if _dp_ok else "✗",
                         "Adequate":         "✓" if _ok    else "—",
-                    })
+                    }
+                    if _od_mm is not None:
+                        _row["OD (mm)"] = round(_od_mm, 1)
+                    _ls_rows.append(_row)
 
                 if not _ls_rows:
-                    st.warning("No DN entries found for the selected PN rating in this range.")
+                    if _ls_custom:
+                        st.warning("Enter a valid custom pipe (inner diameter smaller than outer diameter).")
+                    else:
+                        st.warning("No DN entries found for the selected PN rating in this range.")
                 else:
-                    if _ls_recommended:
+                    if _ls_recommended and _ls_custom:
+                        st.success(
+                            f"**{_ls_recommended} pipe meets both velocity and ΔP/100m criteria.**"
+                        )
+                    elif _ls_recommended:
                         st.success(
                             f"**Recommended: {_ls_recommended}** — "
                             f"smallest DN meeting both velocity and ΔP/100m criteria."
+                        )
+                    elif _ls_custom:
+                        st.warning(
+                            "The custom pipe does not meet all criteria. "
+                            "Adjust the diameters or relax the criteria."
                         )
                     else:
                         st.warning(
@@ -8253,9 +8327,15 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                         ("Viscosity μ",        f"{_ls_mu*1e6:.2f} μPa·s" if _ls_phase == "Gas"
                                                else f"{_ls_mu*1e3:.4f} mPa·s"),
                         ("Flow rate",          f"{_ls_m_kgh:.2f} kg/h  ({_ls_Q_m3h:.4f} m³/h)"),
-                        ("PN rating",          _ls_pn),
-                        ("Material",           _ls_mat),
-                        ("DN range",           f"{_ls_dn_min} – {_ls_dn_max}"),
+                        *([("Reference DN",    f"{_ls_ref_dn}  ({_ls_pn})"),
+                           ("Custom pipe",     f"OD {_ls_od_mm:.2f} mm × ID {_ls_id_mm:.2f} mm  "
+                                               f"(wall {(_ls_od_mm - _ls_id_mm) / 2.0:.2f} mm)"
+                                               f"{'  — overridden' if _ls_overridden else '  — from database'}"),
+                           ("Material",        _ls_mat)]
+                          if _ls_custom else
+                          [("PN rating",       _ls_pn),
+                           ("Material",        _ls_mat),
+                           ("DN range",        f"{_ls_dn_min} – {_ls_dn_max}")]),
                         ("Service preset",     _ls_preset),
                         ("Min velocity",       f"{_ls_v_min:.2f} m/s"),
                         ("Max velocity",       f"{_ls_v_max:.2f} m/s"),
@@ -8320,6 +8400,13 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                                 ["Flow rate",    f"{_ls_m_kgh:.2f} kg/h"],
                                 ["Flow rate",    f"{_ls_Q_m3h:.4f} m³/h"],
                                 ["PN rating",    _ls_pn],
+                                *([["Reference DN", _ls_ref_dn],
+                                   ["Outer diameter", f"{_ls_od_mm:.2f} mm"],
+                                   ["Inner diameter", f"{_ls_id_mm:.2f} mm"],
+                                   ["Wall thickness", f"{(_ls_od_mm - _ls_id_mm) / 2.0:.2f} mm"],
+                                   ["Dimensions", "Overridden" if _ls_overridden else "From database"]]
+                                  if _ls_custom else
+                                  [["DN range", f"{_ls_dn_min} – {_ls_dn_max}"]]),
                                 ["Material",     _ls_mat],
                                 ["Service",      _ls_preset],
                                 ["Min velocity", f"{_ls_v_min:.2f} m/s"],

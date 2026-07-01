@@ -53,7 +53,7 @@ _FLASH_CACHE: dict[tuple, object] = {}
 # 1. INDUSTRIAL STANDARDS DATABASE
 # ============================================================================
 from standards.piping import (
-    PIPE_DATABASE, MATERIAL_ROUGHNESS, LINER_ROUGHNESS, FITTING_Le_over_D
+    PIPE_DATABASE, PIPE_OD, MATERIAL_ROUGHNESS, LINER_ROUGHNESS, FITTING_Le_over_D
 )
 
 

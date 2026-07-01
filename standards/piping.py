@@ -25,6 +25,21 @@ PIPE_DATABASE: dict[str, dict[str, float]] = {
     "DN250": {"PN10": 0.2630, "PN16": 0.2604, "PN20": 0.2545, "PN25": 0.2545, "PN40": 0.2429},
 }
 
+# ── Nominal outer diameters (ASME B36.10M / ISO 6708) ────────────────────────
+# Outer diameter is schedule-independent for a given DN.  Values in metres.
+PIPE_OD: dict[str, float] = {
+    "DN20":  0.0267,   # NPS 3/4
+    "DN25":  0.0334,   # NPS 1
+    "DN40":  0.0483,   # NPS 1-1/2
+    "DN50":  0.0603,   # NPS 2
+    "DN65":  0.0730,   # NPS 2-1/2
+    "DN80":  0.0889,   # NPS 3
+    "DN100": 0.1143,   # NPS 4
+    "DN150": 0.1683,   # NPS 6
+    "DN200": 0.2191,   # NPS 8
+    "DN250": 0.2730,   # NPS 10
+}
+
 # ── Swagelok metric SS tubing (316/316L seamless, OD × wall → ID) ────────────
 # Inner diameters in metres.  Source: Swagelok catalog MS-01-181 (metric sizes).
 # Ordering number pattern: SS-T{OD}M-S-{wall}M-6ME  (e.g. SS-T12M-S-2,0M-6ME)
