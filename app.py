@@ -8063,40 +8063,43 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                 _ls_pn = _lp1.selectbox("PN rating", _ls_pn_opts, index=2, key="ls_cust_pn")
                 _ls_ref_dn = st.selectbox(
                     "Reference DN", _ls_dn_opts, key="ls_ref_dn",
-                    help="Prefills OD / ID from the standard database. "
-                         "Change either field below to override.",
+                    help="Prefills OD and wall thickness from the standard "
+                         "database. Change either field below to override.",
                 )
                 # Database dimensions for the selected DN/PN.
-                _db_id_mm = engine.PIPE_DATABASE[_ls_ref_dn][_ls_pn] * 1000.0
-                _db_od_mm = engine.PIPE_OD[_ls_ref_dn] * 1000.0
+                _db_id_mm   = engine.PIPE_DATABASE[_ls_ref_dn][_ls_pn] * 1000.0
+                _db_od_mm   = engine.PIPE_OD[_ls_ref_dn] * 1000.0
+                _db_wall_mm = (_db_od_mm - _db_id_mm) / 2.0
                 # Reset the override fields whenever DN or PN changes so the
                 # database value is shown; the user may then edit it.
                 _ls_sig = (_ls_ref_dn, _ls_pn)
                 if st.session_state.get("_ls_cust_sig") != _ls_sig:
                     st.session_state["_ls_cust_sig"] = _ls_sig
-                    st.session_state["ls_od_mm"] = round(_db_od_mm, 2)
-                    st.session_state["ls_id_mm"] = round(_db_id_mm, 2)
+                    st.session_state["ls_od_mm"]   = round(_db_od_mm, 2)
+                    st.session_state["ls_wall_mm"] = round(_db_wall_mm, 2)
 
                 _co1, _co2 = st.columns(2)
                 _ls_od_mm = _co1.number_input(
                     "Outer diameter (mm)", min_value=0.1,
                     step=1.0, format="%.2f", key="ls_od_mm",
                 )
-                _ls_id_mm = _co2.number_input(
-                    "Inner diameter (mm)", min_value=0.1,
-                    step=1.0, format="%.2f", key="ls_id_mm",
+                _ls_wall_mm = _co2.number_input(
+                    "Wall thickness (mm)", min_value=0.01,
+                    step=0.1, format="%.2f", key="ls_wall_mm",
+                    help="Inner diameter = OD − 2 × wall thickness.",
                 )
+                # Inner diameter is derived from OD and wall thickness.
+                _ls_id_mm = _ls_od_mm - 2.0 * _ls_wall_mm
                 _ls_overridden = (
-                    abs(_ls_od_mm - _db_od_mm) > 1e-6 or abs(_ls_id_mm - _db_id_mm) > 1e-6
+                    abs(_ls_od_mm - _db_od_mm) > 1e-6 or abs(_ls_wall_mm - _db_wall_mm) > 1e-6
                 )
-                if _ls_id_mm >= _ls_od_mm:
-                    st.warning("Inner diameter must be smaller than outer diameter.")
+                if _ls_id_mm <= 0:
+                    st.warning("Wall thickness is too large — inner diameter is not positive.")
                 else:
-                    _wall = (_ls_od_mm - _ls_id_mm) / 2.0
                     _tag = " · overridden" if _ls_overridden else " · from database"
                     st.caption(
-                        f"Wall thickness = {_wall:.2f} mm  "
-                        f"(DB: OD {_db_od_mm:.2f} × ID {_db_id_mm:.2f} mm{_tag})"
+                        f"Inner diameter = {_ls_id_mm:.2f} mm  "
+                        f"(DB: OD {_db_od_mm:.2f} × wall {_db_wall_mm:.2f} → ID {_db_id_mm:.2f} mm{_tag})"
                     )
             else:
                 _ls_pn = _lp1.selectbox("PN rating", _ls_pn_opts, index=2, key="ls_pn")
@@ -8159,7 +8162,7 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                     _ls_cust_lbl = f"{_ls_ref_dn}{' (override)' if _ls_overridden else ''}"
                     _ls_candidates = (
                         [(_ls_cust_lbl, _ls_id_mm / 1000.0, _ls_od_mm)]
-                        if _ls_id_mm < _ls_od_mm else []
+                        if _ls_id_mm > 0 else []
                     )
                 else:
                     _ls_dn_i = _ls_dn_opts.index(_ls_dn_min)
@@ -8203,12 +8206,13 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                         "Adequate":         "✓" if _ok    else "—",
                     }
                     if _od_mm is not None:
-                        _row["OD (mm)"] = round(_od_mm, 1)
+                        _row["OD (mm)"]   = round(_od_mm, 1)
+                        _row["Wall (mm)"] = round((_od_mm - _D * 1000) / 2.0, 2)
                     _ls_rows.append(_row)
 
                 if not _ls_rows:
                     if _ls_custom:
-                        st.warning("Enter a valid custom pipe (inner diameter smaller than outer diameter).")
+                        st.warning("Enter a valid custom pipe (wall thickness must leave a positive inner diameter).")
                     else:
                         st.warning("No DN entries found for the selected PN rating in this range.")
                 else:
@@ -8328,8 +8332,8 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                                                else f"{_ls_mu*1e3:.4f} mPa·s"),
                         ("Flow rate",          f"{_ls_m_kgh:.2f} kg/h  ({_ls_Q_m3h:.4f} m³/h)"),
                         *([("Reference DN",    f"{_ls_ref_dn}  ({_ls_pn})"),
-                           ("Custom pipe",     f"OD {_ls_od_mm:.2f} mm × ID {_ls_id_mm:.2f} mm  "
-                                               f"(wall {(_ls_od_mm - _ls_id_mm) / 2.0:.2f} mm)"
+                           ("Custom pipe",     f"OD {_ls_od_mm:.2f} mm × wall {_ls_wall_mm:.2f} mm  "
+                                               f"→ ID {_ls_id_mm:.2f} mm"
                                                f"{'  — overridden' if _ls_overridden else '  — from database'}"),
                            ("Material",        _ls_mat)]
                           if _ls_custom else
@@ -8402,8 +8406,8 @@ K_s has a mild temperature dependence approximated as K_s(T) ∝ (298.15/T)^0.3.
                                 ["PN rating",    _ls_pn],
                                 *([["Reference DN", _ls_ref_dn],
                                    ["Outer diameter", f"{_ls_od_mm:.2f} mm"],
+                                   ["Wall thickness", f"{_ls_wall_mm:.2f} mm"],
                                    ["Inner diameter", f"{_ls_id_mm:.2f} mm"],
-                                   ["Wall thickness", f"{(_ls_od_mm - _ls_id_mm) / 2.0:.2f} mm"],
                                    ["Dimensions", "Overridden" if _ls_overridden else "From database"]]
                                   if _ls_custom else
                                   [["DN range", f"{_ls_dn_min} – {_ls_dn_max}"]]),
